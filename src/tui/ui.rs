@@ -70,12 +70,26 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.show_top_files {
         draw_top_files(f, app, chunks[1]);
     } else if app.show_treemap {
+        app.set_body_area(chunks[1].x, chunks[1].width);
+        let treemap_pct = app.treemap_split;
         let body = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .constraints([
+                Constraint::Percentage(100 - treemap_pct),
+                Constraint::Percentage(treemap_pct),
+            ])
             .split(chunks[1]);
         draw_list(f, app, body[0]);
         draw_treemap(f, app, body[1]);
+        // A 1-column drag handle right on the shared border: press and
+        // drag to resize, like a normal GUI split pane.
+        app.click_zones.push(ClickZone {
+            x: body[1].x,
+            y: body[1].y,
+            w: 1,
+            h: body[1].height,
+            action: Action::StartResize,
+        });
     } else {
         draw_list(f, app, chunks[1]);
     }
@@ -382,7 +396,7 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
         .border_type(theme::border_type())
         .border_style(theme::panel_border(false))
         .title(Span::styled(
-            " treemap — click a tile to jump to it (t to hide) ",
+            " Treemap — click a tile to jump to it  ·  drag the left edge to resize ",
             Style::default()
                 .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
@@ -468,6 +482,12 @@ impl<'a> Widget for TreemapWidget<'a> {
                     }
                 }
             }
+
+            // Every tile gets a dark separator border so adjacent tiles of
+            // the same (or similar) color still read as distinct pieces —
+            // without this, same-category siblings visually merge into one
+            // shapeless blob.
+            draw_border(buf, area, item.x, item.y, item.w, item.h, theme::SHADOW);
 
             let is_selected = item.depth == 0
                 && item.index_path.len() == 1
@@ -760,13 +780,14 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 19] = [
+    let rows: [(&str, &str); 20] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
         ("s", "Cycle sort order (size, name, modified)"),
         ("m", "Show/hide file counts and modified dates"),
         ("t", "Toggle the treemap panel"),
+        ("[ / ]", "Resize the treemap panel (or drag its left edge)"),
         ("f", "Toggle the \"biggest files\" flat view"),
         ("/", "Search/filter the current view by name"),
         ("1-9", "Highlight a file-type category in the treemap"),

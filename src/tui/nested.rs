@@ -24,14 +24,18 @@ pub struct TreemapItem {
     pub index_path: Vec<usize>,
 }
 
-// Kept deliberately conservative: a treemap with too many tiny, truncated
-// tiles reads as visual noise rather than information. Fewer, larger
-// rectangles with legible labels are more useful than exhaustive nesting.
-const MAX_DEPTH: u16 = 3;
-const MIN_RECURSE_W: u16 = 12;
-const MIN_RECURSE_H: u16 = 6;
+// A directory tile that's large enough to subdivide keeps recursing into
+// its actual files — capping depth instead would leave big swaths of the
+// map as flat, undifferentiated directory-colored blocks even when there's
+// plenty of room to show what's really inside. MIN_RECURSE_W/H and
+// MAX_ITEMS are the real limits: recursion naturally stops once tiles get
+// too small to be legible, which also bounds the cost on a huge subtree.
+// MAX_DEPTH is just a sanity backstop against pathological nesting.
+const MAX_DEPTH: u16 = 24;
+const MIN_RECURSE_W: u16 = 10;
+const MIN_RECURSE_H: u16 = 5;
 const MAX_CHILDREN_PER_LEVEL: usize = 40;
-const MAX_ITEMS: usize = 600;
+const MAX_ITEMS: usize = 900;
 
 pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16) -> Vec<TreemapItem> {
     let mut out = Vec::new();

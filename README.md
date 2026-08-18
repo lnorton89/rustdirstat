@@ -43,6 +43,7 @@ rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels dee
 | `s` | Cycle sort order (size, name, modified — each ascending/descending) |
 | `m` | Show/hide file counts and modified dates in the list |
 | `t` | Toggle the treemap panel |
+| `[` / `]` | Resize the treemap panel (or drag its left edge with the mouse) |
 | `f` | Toggle the "biggest files in this subtree" flat view |
 | `/` | Search/filter the current view by name |
 | `1`-`9` | Highlight a file-type category in the treemap |
@@ -70,6 +71,8 @@ surface):
 - **Click the extension legend** to highlight that category in the treemap.
 - **Click the "Files" title bar** to cycle sort order, the **treemap title
   bar** to toggle the panel, and the **header** to go up a directory.
+- **Drag the border between the list and the treemap** to resize them,
+  like any GUI split pane.
 - **Click the footer buttons** (Open, Up, Delete, Quit, and "more
   shortcuts" for the rest), or the **Yes/No buttons** in the delete
   confirmation popup.
@@ -134,8 +137,12 @@ multi-million-file, multi-hundred-GB drives):
   (Bruls, Huizing, van Wijk), nesting a directory's own layout inside the
   rectangle it was allotted by its parent — so a folder that dominates its
   parent still shows real internal structure instead of one flat block.
-  Nesting depth and per-level item counts are capped so it stays fast even
-  on huge trees.
+  A directory keeps recursing into its actual files for as long as its
+  tile is large enough to subdivide legibly, rather than stopping at a
+  fixed depth, so most of the map resolves to real, distinctly-colored
+  files rather than flat directory-colored blocks. Every tile gets a
+  border so same-colored siblings stay visually separate, and directories
+  use a neutral tan rather than a file category's color.
 - **Deletes** move to the OS Recycle Bin/Trash by default (`trash` crate,
   cross-platform); permanent deletion is a separate, deliberately
   keyboard-only action. Either way, the in-memory tree's aggregate sizes,
@@ -147,6 +154,16 @@ multi-million-file, multi-hundred-GB drives):
   variant of an `Action` enum, and both a key press and a click on a
   registered screen region just produce an `Action` and hand it to the same
   handler — so there's no divergent mouse-only or keyboard-only behavior.
+- **Mouse tracking is click/scroll/drag only.** Enabling mouse support the
+  default way (crossterm's `EnableMouseCapture`) also turns on
+  report-every-motion tracking, so the terminal streams an event for every
+  pixel the pointer travels — including while the window is unfocused, for
+  as long as it happens to rest over it. Left idle for a long stretch, that
+  can queue an enormous backlog of stray events ahead of whatever's typed
+  next, which could make the app appear to stop responding to `q`. Mouse
+  capture is enabled with a narrower escape sequence instead, covering
+  everything the app actually uses (clicks, drag, scroll) without the
+  motion flood.
 
 ## License
 

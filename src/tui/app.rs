@@ -67,6 +67,9 @@ pub enum Action {
     ExportReport,
     StartSearch,
     ToggleDetails,
+    GrowTreemap,
+    ShrinkTreemap,
+    StartResize,
 }
 
 /// A screen region registered during the last draw that maps a mouse click
@@ -117,7 +120,19 @@ pub struct App {
     /// Show file/dir counts and modified dates in the list — off by
     /// default to keep each row to the essentials (bar, size, name).
     pub detailed: bool,
+    /// Width of the treemap panel as a percentage of the body area.
+    pub treemap_split: u16,
+    /// Set while the divider between the list and treemap panels is being
+    /// mouse-dragged; `body_x`/`body_width` (recorded each frame) let a
+    /// drag position translate into a split percentage.
+    pub resizing_treemap: bool,
+    body_x: u16,
+    body_width: u16,
 }
+
+const TREEMAP_SPLIT_MIN: u16 = 20;
+const TREEMAP_SPLIT_MAX: u16 = 75;
+const TREEMAP_SPLIT_STEP: u16 = 5;
 
 const TOP_FILES_LIMIT: usize = 500;
 
@@ -143,6 +158,10 @@ impl App {
             show_help: false,
             refresh_requested: false,
             detailed: false,
+            treemap_split: 45,
+            resizing_treemap: false,
+            body_x: 0,
+            body_width: 0,
         };
         app.refresh_ext_stats();
         app
@@ -300,6 +319,8 @@ impl App {
             KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => Action::Back,
             KeyCode::Char('s') => Action::CycleSort,
             KeyCode::Char('t') => Action::ToggleTreemap,
+            KeyCode::Char('[') => Action::ShrinkTreemap,
+            KeyCode::Char(']') => Action::GrowTreemap,
             KeyCode::Char('d') => Action::RequestDelete,
             KeyCode::Char('D') => Action::RequestDeletePermanent,
             KeyCode::Char('o') => Action::OpenInFileManager,
@@ -334,6 +355,28 @@ impl App {
             self.dispatch(action)?;
         }
         Ok(())
+    }
+
+    /// Recorded every frame by `ui::draw` so a mouse drag position can be
+    /// translated into a split percentage.
+    pub fn set_body_area(&mut self, x: u16, width: u16) {
+        self.body_x = x;
+        self.body_width = width;
+    }
+
+    /// Called on `MouseEventKind::Drag` while `resizing_treemap` is set.
+    pub fn handle_drag(&mut self, x: u16) {
+        if !self.resizing_treemap || self.body_width == 0 {
+            return;
+        }
+        let list_w = x.saturating_sub(self.body_x).min(self.body_width);
+        let list_pct = (u32::from(list_w) * 100 / u32::from(self.body_width)) as u16;
+        let treemap_pct = 100u16.saturating_sub(list_pct);
+        self.treemap_split = treemap_pct.clamp(TREEMAP_SPLIT_MIN, TREEMAP_SPLIT_MAX);
+    }
+
+    pub fn end_drag(&mut self) {
+        self.resizing_treemap = false;
     }
 
     fn request_delete(&mut self, permanent: bool) {
@@ -392,6 +435,17 @@ impl App {
             }
             Action::CycleSort => self.sort = self.sort.next(),
             Action::ToggleTreemap => self.show_treemap = !self.show_treemap,
+            Action::ShrinkTreemap => {
+                self.treemap_split = self
+                    .treemap_split
+                    .saturating_sub(TREEMAP_SPLIT_STEP)
+                    .max(TREEMAP_SPLIT_MIN);
+            }
+            Action::GrowTreemap => {
+                self.treemap_split =
+                    (self.treemap_split + TREEMAP_SPLIT_STEP).min(TREEMAP_SPLIT_MAX);
+            }
+            Action::StartResize => self.resizing_treemap = true,
             Action::RequestDelete => self.request_delete(false),
             Action::RequestDeletePermanent => self.request_delete(true),
             Action::OpenInFileManager => {

@@ -56,7 +56,7 @@ impl Category {
             Category::Images => Color::Rgb(46, 204, 113),
             Category::Video => Color::Rgb(155, 89, 182),
             Category::Audio => Color::Rgb(241, 196, 15),
-            Category::Documents => Color::Rgb(52, 152, 219),
+            Category::Documents => Color::Rgb(214, 93, 177),
             Category::Programs => Color::Rgb(231, 76, 60),
             Category::Source => Color::Rgb(26, 188, 156),
             Category::NoExtension => Color::Rgb(149, 165, 166),
@@ -87,6 +87,12 @@ pub fn category_for_ext(ext: &str) -> Category {
 
 /// Directories aren't a `Category` (they carry no extension statistics of
 /// their own), but they still need a consistent color in the list/treemap.
+/// Deliberately a warm, desaturated tan (folder-like) rather than a blue —
+/// every file `Category` above sits in the blue/green/cool range except
+/// Documents and Programs, so a blue directory color made the treemap read
+/// as "everything is blue" whenever directories dominated the view (which
+/// they usually do, since most of a tree's area is directories until the
+/// treemap recurses down into actual files).
 pub fn directory_color() -> Color {
-    Color::Rgb(97, 148, 224)
+    Color::Rgb(196, 164, 96)
 }
