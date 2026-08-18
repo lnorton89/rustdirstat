@@ -1,8 +1,9 @@
 use super::app::{Action, App, ClickZone};
 use super::nested::{self, TreemapItem};
-use crate::color;
+use super::theme;
+use crate::color::{self, Category};
 use crate::scanner::Progress;
-use crate::util::human_bytes;
+use crate::util::{format_modified, human_bytes};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -22,7 +23,9 @@ pub fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
     let text = vec![
         Line::from(Span::styled(
             "rustdirstat",
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(format!("Scanning... {elapsed:.1}s")),
@@ -33,12 +36,14 @@ pub fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
         Line::from(""),
         Line::from(Span::styled(
             "(press q to cancel)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::MUTED),
         )),
     ];
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(theme::panel_border(true))
         .title(" rustdirstat ");
     let p = Paragraph::new(text)
         .block(block)
@@ -53,16 +58,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header
+            Constraint::Length(3), // header / title bar
             Constraint::Min(6),    // body
             Constraint::Length(3), // extension breakdown
-            Constraint::Length(1), // footer
+            Constraint::Length(1), // footer / status bar
         ])
         .split(area);
 
     draw_header(f, app, chunks[0]);
 
-    if app.show_treemap {
+    if app.show_top_files {
+        draw_top_files(f, app, chunks[1]);
+    } else if app.show_treemap {
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
@@ -76,22 +83,45 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_ext_stats(f, app, chunks[2]);
     draw_footer(f, app, chunks[3]);
 
-    if let Some(path) = app.pending_delete.clone() {
-        draw_confirm_popup(f, app, &path);
+    if let Some(pending) = &app.pending_delete {
+        let name = pending.name.clone();
+        let permanent = pending.permanent;
+        draw_confirm_popup(f, app, &name, permanent);
+    }
+
+    if app.show_help {
+        draw_help_popup(f, app);
     }
 }
 
 fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     let node = app.current_node();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(theme::panel_border(true));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let filter_suffix = if app.filter_mode {
+        format!("  search: {}▌", app.filter)
+    } else if !app.filter.is_empty() {
+        format!("  (filtered: \"{}\")", app.filter)
+    } else {
+        String::new()
+    };
     let title = format!(
-        " {}  —  {} ({} files){}  [click to go up] ",
-        node.path.display(),
+        " {}  —  {} in {} files, {} dirs{}{}  [click: go up]",
+        app.current_path().display(),
         human_bytes(node.size),
         node.file_count,
-        if node.error { "  <access denied>" } else { "" }
+        node.dir_count,
+        if node.error { "  <access denied>" } else { "" },
+        filter_suffix,
     );
-    let block = Block::default().borders(Borders::ALL).title(title);
-    f.render_widget(block, area);
+    let p = Paragraph::new(Line::from(title)).style(theme::title_bar());
+    f.render_widget(p, inner);
+
     app.click_zones.push(ClickZone {
         x: area.x,
         y: area.y,
@@ -101,12 +131,39 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     });
 }
 
+fn category_of(node: &crate::model::Node) -> Option<Category> {
+    if node.is_dir {
+        None
+    } else {
+        node.category
+    }
+}
+
+fn category_color(cat: Option<Category>) -> Color {
+    match cat {
+        Some(c) => c.color(),
+        None => color::directory_color(),
+    }
+}
+
+fn dim_unless_matching(
+    c: Color,
+    highlighted: Option<Category>,
+    category: Option<Category>,
+) -> Color {
+    match highlighted {
+        Some(h) if Some(h) != category => Color::Rgb(70, 70, 70),
+        _ => c,
+    }
+}
+
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let disp = app.display_children();
     let disp_len = disp.len();
     let total = app.current_node().size.max(1);
     let max_sibling = disp.iter().map(|(_, n)| n.size).max().unwrap_or(1).max(1);
-    let bar_width: usize = 14;
+    let bar_width: usize = 12;
+    let show_modified = area.width > 100;
 
     let items: Vec<ListItem> = disp
         .iter()
@@ -116,19 +173,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ((node.size as f64 / max_sibling as f64) * bar_width as f64).round() as usize;
             let filled = filled.min(bar_width);
 
-            let cat_color = if node.is_dir {
-                color::category_color("Directory")
-            } else {
-                color::category_color(color::category_for_ext(node.extension()))
-            };
-            let bar_color =
-                dim_unless_matching(cat_color, &app.highlighted_category, &node_category(node));
+            let cat = category_of(node);
+            let bar_color = dim_unless_matching(category_color(cat), app.highlighted_category, cat);
 
             let name_style = if node.is_dir {
                 Style::default().fg(bar_color).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(bar_color)
             };
+            let icon = if node.is_dir { "▸ " } else { "  " };
             let suffix = if node.is_dir {
                 "/"
             } else if node.is_symlink {
@@ -138,16 +191,16 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             };
             let err = if node.error { " <access denied>" } else { "" };
             let count = if node.is_dir {
-                format!(" {}f", node.file_count)
+                format!(" {}f {}d", node.file_count, node.dir_count)
             } else {
                 String::new()
             };
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
                 Span::styled(
                     "░".repeat(bar_width - filled),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::MUTED),
                 ),
                 Span::raw(" "),
                 Span::styled(
@@ -155,21 +208,39 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::Gray),
                 ),
                 Span::raw(format!(" {:>5.1}% ", pct)),
+                Span::styled(icon, Style::default().fg(bar_color)),
                 Span::styled(format!("{}{}", node.name, suffix), name_style),
-                Span::styled(count, Style::default().fg(Color::DarkGray)),
-                Span::styled(err, Style::default().fg(Color::Red)),
-            ]);
-            ListItem::new(line)
+                Span::styled(count, Style::default().fg(theme::MUTED)),
+                Span::styled(err, Style::default().fg(theme::DANGER)),
+            ];
+            if show_modified {
+                spans.push(Span::styled(
+                    format!("  {}", format_modified(node.modified)),
+                    Style::default().fg(theme::MUTED),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
     let title = format!(
-        " files — sort: {} (click title or press s to cycle) ",
+        " files — sort: {} (click title or press s) ",
         app.sort.label()
     );
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(theme::border_type())
+                .border_style(theme::panel_border(false))
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        )
+        .highlight_style(theme::selection());
 
     let mut state = ListState::default();
     if disp_len > 0 {
@@ -177,7 +248,6 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_stateful_widget(list, area, &mut state);
 
-    // Title bar: click to cycle sort.
     app.click_zones.push(ClickZone {
         x: area.x,
         y: area.y,
@@ -186,7 +256,6 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         action: Action::CycleSort,
     });
 
-    // One click zone per visible row, honoring the list's scroll offset.
     let inner_y = area.y + 1;
     let inner_h = area.height.saturating_sub(2) as usize;
     let offset = state.offset();
@@ -202,25 +271,112 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn node_category(node: &crate::model::Node) -> String {
-    if node.is_dir {
-        "Directory".to_string()
-    } else {
-        color::category_for_ext(node.extension()).to_string()
-    }
-}
+/// The "biggest files anywhere in this subtree" flat view — independent of
+/// the normal directory-by-directory browser, for spotting what's actually
+/// worth deleting without navigating.
+fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
+    let base = app.path_indices.clone();
+    let base_path = app.current_path();
+    let max_size = app
+        .top_files_cache
+        .first()
+        .map(|t| t.size)
+        .unwrap_or(1)
+        .max(1);
+    let bar_width: usize = 12;
+    let show_modified = area.width > 110;
 
-fn dim_unless_matching(c: Color, highlighted: &Option<String>, category: &str) -> Color {
-    match highlighted {
-        Some(h) if h != category => Color::Rgb(70, 70, 70),
-        _ => c,
+    let items: Vec<ListItem> = app
+        .top_files_cache
+        .iter()
+        .map(|tf| {
+            let filled = ((tf.size as f64 / max_size as f64) * bar_width as f64).round() as usize;
+            let filled = filled.min(bar_width);
+            let color = dim_unless_matching(
+                category_color(tf.category),
+                app.highlighted_category,
+                tf.category,
+            );
+
+            let mut full_idx = base.clone();
+            full_idx.extend(&tf.index_path);
+            let full_path = app.tree.path_for(&full_idx);
+            let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
+
+            let mut spans = vec![
+                Span::styled("█".repeat(filled), Style::default().fg(color)),
+                Span::styled(
+                    "░".repeat(bar_width - filled),
+                    Style::default().fg(theme::MUTED),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{:>10}", human_bytes(tf.size)),
+                    Style::default().fg(Color::Gray),
+                ),
+                Span::raw("  "),
+                Span::styled(rel.display().to_string(), Style::default().fg(color)),
+            ];
+            if show_modified {
+                spans.push(Span::styled(
+                    format!("  {}", format_modified(tf.modified)),
+                    Style::default().fg(theme::MUTED),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let count = app.top_files_cache.len();
+    let title =
+        format!(" biggest files in this subtree (top {count}) — click to jump to one, f to close ");
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(theme::border_type())
+                .border_style(theme::panel_border(true))
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        )
+        .highlight_style(theme::selection());
+
+    let mut state = ListState::default();
+    if count > 0 {
+        state.select(Some(app.selected.min(count - 1)));
+    }
+    f.render_stateful_widget(list, area, &mut state);
+
+    let inner_y = area.y + 1;
+    let inner_h = area.height.saturating_sub(2) as usize;
+    let offset = state.offset();
+    for row in offset..(offset + inner_h).min(count) {
+        let y = inner_y + (row - offset) as u16;
+        app.click_zones.push(ClickZone {
+            x: area.x + 1,
+            y,
+            w: area.width.saturating_sub(2),
+            h: 1,
+            action: Action::SelectRow(row),
+        });
     }
 }
 
 fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" treemap — click a tile to jump to it (t to hide) ");
+        .border_type(theme::border_type())
+        .border_style(theme::panel_border(false))
+        .title(Span::styled(
+            " treemap — click a tile to jump to it (t to hide) ",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.click_zones.push(ClickZone {
@@ -250,7 +406,7 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
     let widget = TreemapWidget {
         items: &items,
         selected_orig,
-        highlighted: app.highlighted_category.clone(),
+        highlighted: app.highlighted_category,
     };
     f.render_widget(widget, inner);
 
@@ -268,7 +424,7 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
 struct TreemapWidget<'a> {
     items: &'a [TreemapItem],
     selected_orig: Option<usize>,
-    highlighted: Option<String>,
+    highlighted: Option<Category>,
 }
 
 impl<'a> Widget for TreemapWidget<'a> {
@@ -277,14 +433,14 @@ impl<'a> Widget for TreemapWidget<'a> {
             if item.w == 0 || item.h == 0 {
                 continue;
             }
-            let base = color::category_color(&item.category);
+            let base = category_color(item.category);
             // Cushion-style shading: darker with depth, alternated by
             // sibling index, so nested rectangles read as distinct tiles.
             let depth_factor = 1.0 - (item.depth as f32 * 0.09).min(0.55);
             let parity = if i % 2 == 0 { 1.0 } else { 0.88 };
             let mut bg = lighten(base, depth_factor * parity);
-            if let Some(h) = &self.highlighted {
-                if h != &item.category {
+            if let Some(h) = self.highlighted {
+                if Some(h) != item.category {
                     bg = Color::Rgb(50, 50, 50);
                 }
             }
@@ -393,14 +549,14 @@ fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
     for (i, stat) in app.ext_stats.iter().take(9).enumerate() {
         let pct = stat.size as f64 / total as f64 * 100.0;
         let color = dim_unless_matching(
-            color::category_color(&stat.category),
-            &app.highlighted_category,
-            &stat.category,
+            stat.category.color(),
+            app.highlighted_category,
+            Some(stat.category),
         );
         let text = format!(
             "{} ■ {} {} ({:.0}%)  ",
             i + 1,
-            stat.category,
+            stat.category.label(),
             human_bytes(stat.size),
             pct
         );
@@ -411,7 +567,7 @@ fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
             y: area.y + 1,
             w,
             h: 1,
-            action: Action::ToggleHighlight(stat.category.clone()),
+            action: Action::ToggleHighlight(stat.category),
         });
         x += w;
     }
@@ -420,7 +576,11 @@ fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         " extensions (current view) — click a category to highlight it in the treemap "
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(theme::panel_border(false))
+        .title(title);
     let p = Paragraph::new(Line::from(spans))
         .block(block)
         .wrap(Wrap { trim: true });
@@ -429,36 +589,41 @@ fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(msg) = app.message.clone() {
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                msg,
-                Style::default().fg(Color::Yellow),
-            ))),
-            area,
-        );
+        let p = Paragraph::new(Line::from(Span::styled(
+            format!(" {msg}"),
+            Style::default().fg(Color::Black),
+        )))
+        .style(Style::default().bg(theme::ACCENT_TEXT));
+        f.render_widget(p, area);
         return;
     }
 
-    let buttons: [(&str, Action); 8] = [
-        ("↑↓ nav", Action::Down),
-        ("→ open", Action::OpenSelected),
-        ("← back", Action::Back),
-        ("s sort", Action::CycleSort),
-        ("t treemap", Action::ToggleTreemap),
-        ("o file-mgr", Action::OpenInFileManager),
-        ("d delete", Action::RequestDelete),
-        ("q quit", Action::Quit),
+    let buttons: [(&str, Action); 11] = [
+        (" ↑↓ nav ", Action::Down),
+        (" → open ", Action::OpenSelected),
+        (" ← back ", Action::Back),
+        (" s sort ", Action::CycleSort),
+        (" t treemap ", Action::ToggleTreemap),
+        (" f biggest ", Action::ToggleTopFiles),
+        (" / search ", Action::StartSearch),
+        (" o file-mgr ", Action::OpenInFileManager),
+        (" r refresh ", Action::Refresh),
+        (" e export ", Action::ExportReport),
+        (" d delete ", Action::RequestDelete),
     ];
 
     let mut spans = Vec::new();
     let mut x = area.x;
-    for (i, (label, action)) in buttons.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("  "));
-            x += 2;
-        }
+    // Fill the whole row with the status-bar background first.
+    let base = Paragraph::new("").style(theme::status_bar());
+    f.render_widget(base, area);
+
+    for (label, action) in buttons.iter() {
         let w = label.chars().count() as u16;
-        spans.push(Span::styled(*label, Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled(*label, theme::button()));
+        spans.push(Span::raw(" "));
+        // The "/ search" button is display-only here (typing starts search
+        // directly via the '/' key); give it its own zone separately below.
         app.click_zones.push(ClickZone {
             x,
             y: area.y,
@@ -466,50 +631,101 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
             h: 1,
             action: action.clone(),
         });
-        x += w;
+        x += w + 1;
     }
+    let quit_label = " q quit ";
+    spans.push(Span::styled(
+        quit_label,
+        Style::default().bg(theme::DANGER_BG).fg(theme::DANGER),
+    ));
+    app.click_zones.push(ClickZone {
+        x,
+        y: area.y,
+        w: quit_label.chars().count() as u16,
+        h: 1,
+        action: Action::Quit,
+    });
+    let help_label = "  ? help ";
+    spans.push(Span::styled(help_label, theme::button()));
+    app.click_zones.push(ClickZone {
+        x: x + quit_label.chars().count() as u16,
+        y: area.y,
+        w: help_label.chars().count() as u16,
+        h: 1,
+        action: Action::ToggleHelp,
+    });
+
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_confirm_popup(f: &mut Frame, app: &mut App, path: &std::path::Path) {
-    let area = centered_rect(60, 20, f.area());
+fn shadow(f: &mut Frame, area: Rect) {
+    let shadow_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width,
+        height: area.height,
+    };
+    let full = f.area();
+    if shadow_area.x + shadow_area.width <= full.width
+        && shadow_area.y + shadow_area.height <= full.height
+    {
+        f.render_widget(
+            Paragraph::new("").style(Style::default().bg(theme::SHADOW)),
+            shadow_area,
+        );
+    }
+}
+
+fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool) {
+    let area = centered_rect(60, 24, f.area());
+    shadow(f, area);
     f.render_widget(Clear, area);
+    let title = if permanent {
+        " permanently delete "
+    } else {
+        " move to trash "
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" confirm delete ")
-        .border_style(Style::default().fg(Color::Red));
+        .border_type(theme::border_type())
+        .title(title)
+        .border_style(Style::default().fg(theme::DANGER));
     let inner = block.inner(area);
-    let text = vec![
-        Line::from(format!("Permanently delete '{}'?", path.display())),
-        Line::from(""),
-        Line::from(Span::styled(
-            "This cannot be undone.",
-            Style::default().fg(Color::Red),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                " [ Y ]es ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                " [ N ]o ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Gray)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ];
-    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
-    f.render_widget(p, area);
+    f.render_widget(block, area);
 
-    // Pushed first (and so checked last, since hit-testing favors the most
-    // recently pushed zone) so the buttons below take priority over it.
+    let action_desc = if permanent {
+        vec![Line::from(Span::styled(
+            "This bypasses the Recycle Bin/Trash and cannot be undone.",
+            Style::default().fg(theme::DANGER),
+        ))]
+    } else {
+        vec![Line::from(
+            "This can be undone from your OS Recycle Bin/Trash.",
+        )]
+    };
+    let mut text = vec![Line::from(format!("Delete '{name}'?")), Line::from("")];
+    text.extend(action_desc);
+    text.push(Line::from(""));
+    text.push(Line::from(vec![
+        Span::styled(
+            " [ Y ]es ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(theme::DANGER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("   "),
+        Span::styled(
+            " [ N ]o ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    let p = Paragraph::new(text).wrap(Wrap { trim: true });
+    f.render_widget(p, inner);
+
     app.click_zones.push(ClickZone {
         x: area.x,
         y: area.y,
@@ -531,6 +747,71 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, path: &std::path::Path) {
         w: 8,
         h: 1,
         action: Action::CancelDelete,
+    });
+}
+
+fn draw_help_popup(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(70, 80, f.area());
+    shadow(f, area);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(Span::styled(
+            " rustdirstat — help (press any key to close) ",
+            theme::title_bar(),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let rows: [(&str, &str); 18] = [
+        ("↑/↓, k/j", "Move selection"),
+        ("→/l/Enter", "Open the selected directory"),
+        ("←/h/Backspace", "Go up a directory"),
+        ("s", "Cycle sort order (size, name, modified)"),
+        ("t", "Toggle the treemap panel"),
+        ("f", "Toggle the \"biggest files\" flat view"),
+        ("/", "Search/filter the current view by name"),
+        ("1-9", "Highlight a file-type category in the treemap"),
+        ("0", "Clear the highlight"),
+        ("o", "Open the selected item in the OS file manager"),
+        ("r", "Rescan from the root (keeps your current location)"),
+        ("e", "Export a text report of the current view to a file"),
+        ("d", "Delete the selected item (moves to Recycle Bin/Trash)"),
+        ("D", "Delete PERMANENTLY (bypasses Recycle Bin/Trash)"),
+        ("?", "Toggle this help"),
+        ("q, Esc", "Quit"),
+        ("", ""),
+        ("Mouse", "Every action above also works by clicking — treemap tiles, list rows, title bars, the header, and the footer buttons are all clickable."),
+    ];
+    let lines: Vec<Line> = rows
+        .iter()
+        .map(|(key, desc)| {
+            if key.is_empty() {
+                Line::from("")
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<16}", key),
+                        Style::default()
+                            .fg(theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(*desc),
+                ])
+            }
+        })
+        .collect();
+    let p = Paragraph::new(lines).wrap(Wrap { trim: true });
+    f.render_widget(p, inner);
+
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::ToggleHelp,
     });
 }
 

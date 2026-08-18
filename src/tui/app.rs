@@ -1,4 +1,6 @@
-use crate::model::Node;
+use super::top_files::{self, TopFile};
+use crate::color::Category;
+use crate::model::{Node, Tree};
 use crate::stats::{self, ExtStat};
 use anyhow::Result;
 use crossterm::event::KeyCode;
@@ -11,6 +13,8 @@ pub enum SortMode {
     SizeAsc,
     NameAsc,
     NameDesc,
+    ModifiedDesc,
+    ModifiedAsc,
 }
 
 impl SortMode {
@@ -19,7 +23,9 @@ impl SortMode {
             SortMode::SizeDesc => SortMode::SizeAsc,
             SortMode::SizeAsc => SortMode::NameAsc,
             SortMode::NameAsc => SortMode::NameDesc,
-            SortMode::NameDesc => SortMode::SizeDesc,
+            SortMode::NameDesc => SortMode::ModifiedDesc,
+            SortMode::ModifiedDesc => SortMode::ModifiedAsc,
+            SortMode::ModifiedAsc => SortMode::SizeDesc,
         }
     }
 
@@ -29,6 +35,8 @@ impl SortMode {
             SortMode::SizeAsc => "size asc",
             SortMode::NameAsc => "name asc",
             SortMode::NameDesc => "name desc",
+            SortMode::ModifiedDesc => "newest first",
+            SortMode::ModifiedAsc => "oldest first",
         }
     }
 }
@@ -44,14 +52,20 @@ pub enum Action {
     CycleSort,
     ToggleTreemap,
     RequestDelete,
+    RequestDeletePermanent,
     OpenInFileManager,
     Quit,
-    ToggleHighlight(String),
+    ToggleHighlight(Category),
     ClearHighlight,
     SelectRow(usize),
     NavigateTo(Vec<usize>),
     ConfirmDelete,
     CancelDelete,
+    Refresh,
+    ToggleTopFiles,
+    ToggleHelp,
+    ExportReport,
+    StartSearch,
 }
 
 /// A screen region registered during the last draw that maps a mouse click
@@ -71,28 +85,42 @@ impl ClickZone {
     }
 }
 
+pub struct PendingDelete {
+    pub orig_idx: usize,
+    pub name: String,
+    pub permanent: bool,
+}
+
 pub struct App {
-    pub root: Node,
+    pub tree: Tree,
     /// Indices (into each level's original, unsorted `children` vec) from
     /// the root down to the directory currently being browsed.
     pub path_indices: Vec<usize>,
     pub selected: usize,
     pub sort: SortMode,
     pub show_treemap: bool,
-    pub pending_delete: Option<PathBuf>,
+    pub pending_delete: Option<PendingDelete>,
     pub message: Option<String>,
     pub ext_stats: Vec<ExtStat>,
     pub should_quit: bool,
-    pub highlighted_category: Option<String>,
+    pub highlighted_category: Option<Category>,
     /// Clickable regions from the most recent frame; consumed by mouse clicks.
     pub click_zones: Vec<ClickZone>,
     last_click: Option<(usize, Instant)>,
+    pub filter: String,
+    pub filter_mode: bool,
+    pub show_top_files: bool,
+    pub top_files_cache: Vec<TopFile>,
+    pub show_help: bool,
+    pub refresh_requested: bool,
 }
 
+const TOP_FILES_LIMIT: usize = 500;
+
 impl App {
-    pub fn new(root: Node) -> Self {
+    pub fn new(tree: Tree) -> Self {
         let mut app = Self {
-            root,
+            tree,
             path_indices: vec![],
             selected: 0,
             sort: SortMode::SizeDesc,
@@ -104,25 +132,76 @@ impl App {
             highlighted_category: None,
             click_zones: vec![],
             last_click: None,
+            filter: String::new(),
+            filter_mode: false,
+            show_top_files: false,
+            top_files_cache: vec![],
+            show_help: false,
+            refresh_requested: false,
         };
         app.refresh_ext_stats();
         app
     }
 
-    pub fn current_node(&self) -> &Node {
-        let mut node = &self.root;
-        for &idx in &self.path_indices {
-            node = &node.children[idx];
+    /// Restore browsing to whatever directory `target` was pointing at
+    /// before a rescan, matching by path since node indices aren't stable
+    /// across scans. Falls back to the root if it can't be found (e.g. the
+    /// directory was deleted).
+    pub fn restore_path(&mut self, target: &std::path::Path) {
+        let mut node = &self.tree.root;
+        let mut indices = Vec::new();
+        let mut current = self.tree.root_path.clone();
+        if current == target {
+            self.path_indices = indices;
+            self.selected = 0;
+            self.refresh_ext_stats();
+            return;
         }
-        node
+        loop {
+            let mut found = None;
+            for (i, c) in node.children.iter().enumerate() {
+                let candidate = current.join(&c.name);
+                if target == candidate || target.starts_with(&candidate) {
+                    found = Some((i, c, candidate));
+                    break;
+                }
+            }
+            match found {
+                Some((i, c, candidate)) => {
+                    indices.push(i);
+                    node = c;
+                    current = candidate;
+                    if current == target {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        self.path_indices = indices;
+        self.selected = 0;
+        self.refresh_ext_stats();
     }
 
-    /// Children of the current directory, sorted for display, paired with
-    /// their index in the original (unsorted) `children` vec so navigation
-    /// and deletion stay stable regardless of sort order.
+    pub fn current_node(&self) -> &Node {
+        self.tree.node_for(&self.path_indices)
+    }
+
+    pub fn current_path(&self) -> PathBuf {
+        self.tree.path_for(&self.path_indices)
+    }
+
+    /// Children of the current directory, filtered by the active search
+    /// term and sorted for display, paired with their index in the
+    /// original (unsorted) `children` vec so navigation and deletion stay
+    /// stable regardless of sort/filter.
     pub fn display_children(&self) -> Vec<(usize, &Node)> {
         let node = self.current_node();
         let mut v: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
+        if !self.filter.is_empty() {
+            let f = self.filter.to_lowercase();
+            v.retain(|(_, n)| n.name.to_lowercase().contains(&f));
+        }
         match self.sort {
             SortMode::SizeDesc => v.sort_by(|a, b| b.1.size.cmp(&a.1.size)),
             SortMode::SizeAsc => v.sort_by(|a, b| a.1.size.cmp(&b.1.size)),
@@ -132,6 +211,8 @@ impl App {
             SortMode::NameDesc => {
                 v.sort_by(|a, b| b.1.name.to_lowercase().cmp(&a.1.name.to_lowercase()))
             }
+            SortMode::ModifiedDesc => v.sort_by(|a, b| b.1.modified.cmp(&a.1.modified)),
+            SortMode::ModifiedAsc => v.sort_by(|a, b| a.1.modified.cmp(&b.1.modified)),
         }
         v
     }
@@ -140,7 +221,43 @@ impl App {
         self.ext_stats = stats::extension_stats(self.current_node());
     }
 
+    fn refresh_top_files(&mut self) {
+        let mut out = top_files::top_k(self.current_node(), TOP_FILES_LIMIT);
+        if !self.filter.is_empty() {
+            let f = self.filter.to_lowercase();
+            out.retain(|t| t.name.to_lowercase().contains(&f));
+        }
+        self.top_files_cache = out;
+    }
+
+    fn on_filter_changed(&mut self) {
+        self.selected = 0;
+        if self.show_top_files {
+            self.refresh_top_files();
+        }
+    }
+
+    /// If the "biggest files" flat view is active, jump browsing to the
+    /// currently selected file's actual parent directory (and select it
+    /// there), then leave the flat view — so every action that operates on
+    /// "the selected row" (delete, open, Enter) works the same regardless
+    /// of which view found that row.
+    fn exit_top_files_if_needed(&mut self) {
+        if !self.show_top_files {
+            return;
+        }
+        if let Some(tf) = self.top_files_cache.get(self.selected) {
+            let idx_path = tf.index_path.clone();
+            self.navigate_to(idx_path);
+        }
+        self.show_top_files = false;
+    }
+
     pub fn handle_key(&mut self, code: KeyCode) -> Result<()> {
+        if self.show_help {
+            self.show_help = false;
+            return Ok(());
+        }
         if self.pending_delete.is_some() {
             let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                 Action::ConfirmDelete
@@ -148,6 +265,26 @@ impl App {
                 Action::CancelDelete
             };
             return self.dispatch(action);
+        }
+        if self.filter_mode {
+            match code {
+                KeyCode::Esc => {
+                    self.filter.clear();
+                    self.filter_mode = false;
+                    self.on_filter_changed();
+                }
+                KeyCode::Enter => self.filter_mode = false,
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                    self.on_filter_changed();
+                }
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.on_filter_changed();
+                }
+                _ => {}
+            }
+            return Ok(());
         }
 
         let action = match code {
@@ -159,12 +296,18 @@ impl App {
             KeyCode::Char('s') => Action::CycleSort,
             KeyCode::Char('t') => Action::ToggleTreemap,
             KeyCode::Char('d') => Action::RequestDelete,
+            KeyCode::Char('D') => Action::RequestDeletePermanent,
             KeyCode::Char('o') => Action::OpenInFileManager,
+            KeyCode::Char('r') => Action::Refresh,
+            KeyCode::Char('f') => Action::ToggleTopFiles,
+            KeyCode::Char('e') => Action::ExportReport,
+            KeyCode::Char('?') => Action::ToggleHelp,
+            KeyCode::Char('/') => Action::StartSearch,
             KeyCode::Char('0') => Action::ClearHighlight,
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = c.to_digit(10).unwrap() as usize - 1;
                 match self.ext_stats.get(idx) {
-                    Some(stat) => Action::ToggleHighlight(stat.category.clone()),
+                    Some(stat) => Action::ToggleHighlight(stat.category),
                     None => return Ok(()),
                 }
             }
@@ -176,11 +319,26 @@ impl App {
     /// Look up whatever click zone (if any) contains `(x, y)` — the most
     /// recently drawn zone wins, so popups drawn last take priority.
     pub fn handle_click(&mut self, x: u16, y: u16) -> Result<()> {
+        if self.show_help {
+            self.show_help = false;
+            return Ok(());
+        }
         if let Some(zone) = self.click_zones.iter().rev().find(|z| z.contains(x, y)) {
             let action = zone.action.clone();
             self.dispatch(action)?;
         }
         Ok(())
+    }
+
+    fn request_delete(&mut self, permanent: bool) {
+        self.exit_top_files_if_needed();
+        if let Some((idx, node)) = self.display_children().get(self.selected) {
+            self.pending_delete = Some(PendingDelete {
+                orig_idx: *idx,
+                name: node.name.clone(),
+                permanent,
+            });
+        }
     }
 
     pub fn dispatch(&mut self, action: Action) -> Result<()> {
@@ -196,12 +354,17 @@ impl App {
         match action {
             Action::Up => self.selected = self.selected.saturating_sub(1),
             Action::Down => {
-                let len = self.display_children().len();
+                let len = if self.show_top_files {
+                    self.top_files_cache.len()
+                } else {
+                    self.display_children().len()
+                };
                 if self.selected + 1 < len {
                     self.selected += 1;
                 }
             }
             Action::OpenSelected => {
+                self.exit_top_files_if_needed();
                 let target = self
                     .display_children()
                     .get(self.selected)
@@ -223,20 +386,17 @@ impl App {
             }
             Action::CycleSort => self.sort = self.sort.next(),
             Action::ToggleTreemap => self.show_treemap = !self.show_treemap,
-            Action::RequestDelete => {
-                if let Some((_, node)) = self.display_children().get(self.selected) {
-                    self.pending_delete = Some(node.path.clone());
-                }
-            }
+            Action::RequestDelete => self.request_delete(false),
+            Action::RequestDeletePermanent => self.request_delete(true),
             Action::OpenInFileManager => {
+                self.exit_top_files_if_needed();
                 if let Some((_, node)) = self.display_children().get(self.selected) {
+                    let mut target = self.current_path();
+                    target.push(&node.name);
                     let target = if node.is_dir {
-                        node.path.clone()
+                        target
                     } else {
-                        node.path
-                            .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| node.path.clone())
+                        target.parent().map(|p| p.to_path_buf()).unwrap_or(target)
                     };
                     if let Err(e) = crate::util::open_in_file_manager(&target) {
                         self.message = Some(format!("Failed to open file manager: {e}"));
@@ -245,15 +405,22 @@ impl App {
             }
             Action::Quit => self.should_quit = true,
             Action::ToggleHighlight(cat) => {
-                self.highlighted_category =
-                    if self.highlighted_category.as_deref() == Some(cat.as_str()) {
-                        None
-                    } else {
-                        Some(cat)
-                    };
+                self.highlighted_category = if self.highlighted_category == Some(cat) {
+                    None
+                } else {
+                    Some(cat)
+                };
             }
             Action::ClearHighlight => self.highlighted_category = None,
             Action::SelectRow(idx) => {
+                if self.show_top_files {
+                    if let Some(tf) = self.top_files_cache.get(idx) {
+                        let idx_path = tf.index_path.clone();
+                        self.navigate_to(idx_path);
+                    }
+                    self.show_top_files = false;
+                    return Ok(());
+                }
                 let now = Instant::now();
                 let is_double_click = matches!(
                     self.last_click,
@@ -271,14 +438,48 @@ impl App {
                 }
             }
             Action::NavigateTo(path) => self.navigate_to(path),
+            Action::Refresh => self.refresh_requested = true,
+            Action::ToggleTopFiles => {
+                self.show_top_files = !self.show_top_files;
+                self.selected = 0;
+                if self.show_top_files {
+                    self.refresh_top_files();
+                }
+            }
+            Action::ToggleHelp => self.show_help = !self.show_help,
+            Action::ExportReport => self.export_report(),
+            Action::StartSearch => {
+                self.filter_mode = true;
+                self.filter.clear();
+                self.selected = 0;
+            }
             Action::ConfirmDelete | Action::CancelDelete => {}
         }
         Ok(())
     }
 
+    fn export_report(&mut self) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let filename = format!("rustdirstat-report-{secs}.txt");
+        let path = self.current_path();
+        match crate::report::write_report_to_file(
+            &path,
+            self.current_node(),
+            50,
+            4,
+            std::path::Path::new(&filename),
+        ) {
+            Ok(()) => self.message = Some(format!("Report written to {filename}")),
+            Err(e) => self.message = Some(format!("Failed to write report: {e}")),
+        }
+    }
+
     /// Jump the browser to the item identified by `index_path` (as produced
-    /// by the recursive treemap), landing on its parent directory with the
-    /// item itself selected.
+    /// by the recursive treemap or the biggest-files view), landing on its
+    /// parent directory with the item itself selected.
     fn navigate_to(&mut self, mut index_path: Vec<usize>) {
         if index_path.is_empty() {
             return;
@@ -297,44 +498,85 @@ impl App {
     }
 
     fn confirm_delete(&mut self) -> Result<()> {
-        let path = match self.pending_delete.take() {
+        let pending = match self.pending_delete.take() {
             Some(p) => p,
             None => return Ok(()),
         };
 
-        let found = {
-            let disp = self.display_children();
-            disp.iter()
-                .find(|(_, n)| n.path == path)
-                .map(|(idx, n)| (*idx, n.is_dir, n.size, n.file_count))
+        let mut full_index_path = self.path_indices.clone();
+        full_index_path.push(pending.orig_idx);
+        let path = self.tree.path_for(&full_index_path);
+        let target = self.tree.node_for(&full_index_path);
+
+        let (is_dir, size, file_count, dir_count_delta, removed_ext) = if target.is_dir {
+            (
+                true,
+                target.size,
+                target.file_count,
+                target.dir_count + 1,
+                RemovedExt::Dir(target.ext_totals.clone()),
+            )
+        } else {
+            (false, target.size, 1, 0, RemovedExt::File(target.category))
         };
 
-        if let Some((orig_idx, is_dir, size, count)) = found {
+        if pending.permanent {
             if is_dir {
                 std::fs::remove_dir_all(&path)?;
             } else {
                 std::fs::remove_file(&path)?;
             }
-
-            let mut n = &mut self.root;
-            n.size -= size;
-            n.file_count -= count;
-            for &idx in &self.path_indices {
-                n = &mut n.children[idx];
-                n.size -= size;
-                n.file_count -= count;
-            }
-            n.children.remove(orig_idx);
-
-            let len = self.display_children().len();
-            if self.selected >= len {
-                self.selected = len.saturating_sub(1);
-            }
-            self.refresh_ext_stats();
-            self.message = Some(format!("Deleted {}", path.display()));
         } else {
-            self.message = Some("Item no longer exists".to_string());
+            trash::delete(&path).map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
         }
+
+        let mut n = &mut self.tree.root;
+        subtract_totals(n, size, file_count, dir_count_delta, &removed_ext);
+        for &idx in &self.path_indices {
+            n = &mut n.children[idx];
+            subtract_totals(n, size, file_count, dir_count_delta, &removed_ext);
+        }
+        n.children.remove(pending.orig_idx);
+
+        let len = self.display_children().len();
+        if self.selected >= len {
+            self.selected = len.saturating_sub(1);
+        }
+        self.refresh_ext_stats();
+        if self.show_top_files {
+            self.refresh_top_files();
+        }
+        let verb = if pending.permanent {
+            "Permanently deleted"
+        } else {
+            "Moved to trash"
+        };
+        self.message = Some(format!("{verb}: {}", path.display()));
         Ok(())
+    }
+}
+
+enum RemovedExt {
+    File(Option<Category>),
+    Dir(Vec<(u64, u64)>),
+}
+
+fn subtract_totals(n: &mut Node, size: u64, file_count: u64, dir_count: u64, ext: &RemovedExt) {
+    n.size -= size;
+    n.file_count -= file_count;
+    n.dir_count -= dir_count;
+    match ext {
+        RemovedExt::File(Some(cat)) => {
+            let i = cat.index();
+            n.ext_totals[i].0 -= size;
+            n.ext_totals[i].1 -= 1;
+        }
+        RemovedExt::File(None) => {}
+        RemovedExt::Dir(totals) => {
+            for (i, &(s, c)) in totals.iter().enumerate() {
+                n.ext_totals[i].0 -= s;
+                n.ext_totals[i].1 -= c;
+            }
+        }
     }
 }

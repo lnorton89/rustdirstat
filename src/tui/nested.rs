@@ -6,7 +6,7 @@
 
 use super::treemap;
 use super::treemap::Rect;
-use crate::color;
+use crate::color::Category;
 use crate::model::Node;
 
 pub struct TreemapItem {
@@ -17,7 +17,8 @@ pub struct TreemapItem {
     pub is_dir: bool,
     pub depth: u16,
     pub name: String,
-    pub category: String,
+    /// `None` means "directory" (directories aren't `Category`s).
+    pub category: Option<Category>,
     /// Indices (original, unsorted child order) from the directory being
     /// browsed down to this item — enough to reconstruct navigation state.
     pub index_path: Vec<usize>,
@@ -71,12 +72,6 @@ fn recurse(
         }
         index_path.push(*orig_idx);
 
-        let category = if child.is_dir {
-            "Directory".to_string()
-        } else {
-            color::category_for_ext(child.extension()).to_string()
-        };
-
         out.push(TreemapItem {
             x: area.x + r.x,
             y: area.y + r.y,
@@ -85,7 +80,7 @@ fn recurse(
             is_dir: child.is_dir,
             depth,
             name: child.name.clone(),
-            category,
+            category: child.category,
             index_path: index_path.clone(),
         });
 

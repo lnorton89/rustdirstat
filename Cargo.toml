@@ -16,6 +16,7 @@ ratatui = "0.28"
 crossterm = "0.28"
 rayon = "1"
 anyhow = "1"
+trash = "5"
 
 [profile.release]
 opt-level = 3

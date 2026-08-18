@@ -1,36 +1,56 @@
 use crate::model::Node;
 use crate::stats;
 use crate::util::human_bytes;
+use std::fmt::Write as _;
 
-pub fn print_report(root: &Node, top: usize, max_depth: usize) {
-    println!(
-        "{:>10}  {} ({} files)",
+pub fn print_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth: usize) {
+    print!("{}", build_report(root_path, root, top, max_depth));
+}
+
+pub fn write_report_to_file(
+    root_path: &std::path::Path,
+    root: &Node,
+    top: usize,
+    max_depth: usize,
+    out_path: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::write(out_path, build_report(root_path, root, top, max_depth))
+}
+
+fn build_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth: usize) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{:>10}  {} ({} files, {} dirs)",
         human_bytes(root.size),
-        root.path.display(),
-        root.file_count
+        root_path.display(),
+        root.file_count,
+        root.dir_count
     );
     if root.error {
-        println!("  <access denied>");
+        out.push_str("  <access denied>\n");
     }
-    print_children(root, 0, top, max_depth);
+    write_children(&mut out, root, 0, top, max_depth);
 
-    println!();
-    println!("Extension breakdown:");
+    out.push('\n');
+    out.push_str("Extension breakdown:\n");
     let ext_stats = stats::extension_stats(root);
     let total = root.size.max(1);
     for stat in ext_stats.iter().take(top) {
         let pct = stat.size as f64 / total as f64 * 100.0;
-        println!(
+        let _ = writeln!(
+            out,
             "  {:>10}  {:>5.1}%  {:<14} {} files",
             human_bytes(stat.size),
             pct,
-            stat.category,
+            stat.category.label(),
             stat.count
         );
     }
+    out
 }
 
-fn print_children(node: &Node, depth: usize, top: usize, max_depth: usize) {
+fn write_children(out: &mut String, node: &Node, depth: usize, top: usize, max_depth: usize) {
     if depth >= max_depth {
         return;
     }
@@ -41,7 +61,7 @@ fn print_children(node: &Node, depth: usize, top: usize, max_depth: usize) {
 
     for (i, child) in children.iter().enumerate() {
         if i >= top {
-            println!("{}... and {} more", indent, children.len() - top);
+            let _ = writeln!(out, "{}... and {} more", indent, children.len() - top);
             break;
         }
         let pct = child.size as f64 / total as f64 * 100.0;
@@ -53,7 +73,8 @@ fn print_children(node: &Node, depth: usize, top: usize, max_depth: usize) {
             ""
         };
         let err = if child.error { " <access denied>" } else { "" };
-        println!(
+        let _ = writeln!(
+            out,
             "{}{:>10}  {:>5.1}%  {}{}{}",
             indent,
             human_bytes(child.size),
@@ -63,7 +84,7 @@ fn print_children(node: &Node, depth: usize, top: usize, max_depth: usize) {
             err
         );
         if child.is_dir {
-            print_children(child, depth + 1, top, max_depth);
+            write_children(out, child, depth + 1, top, max_depth);
         }
     }
 }

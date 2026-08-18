@@ -1,39 +1,33 @@
-use crate::color;
+use crate::color::Category;
 use crate::model::Node;
-use std::collections::HashMap;
 
 pub struct ExtStat {
-    pub category: String,
+    pub category: Category,
     pub size: u64,
     pub count: u64,
 }
 
-/// Aggregate size/count per extension category across every file in the
-/// subtree rooted at `node` (recursing through all descendant directories).
+/// Extension/category breakdown for `node`'s subtree. This is a direct read
+/// of the totals precomputed bottom-up at scan time (see `scanner::scan_dir`)
+/// — no re-walking the subtree, so it stays instant even for a directory
+/// with millions of descendants.
 pub fn extension_stats(node: &Node) -> Vec<ExtStat> {
-    let mut map: HashMap<String, (u64, u64)> = HashMap::new();
-    accumulate(node, &mut map);
-    let mut v: Vec<ExtStat> = map
-        .into_iter()
-        .map(|(category, (size, count))| ExtStat {
-            category,
-            size,
-            count,
+    let mut v: Vec<ExtStat> = Category::ALL
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &category)| {
+            let (size, count) = *node.ext_totals.get(i)?;
+            if count > 0 {
+                Some(ExtStat {
+                    category,
+                    size,
+                    count,
+                })
+            } else {
+                None
+            }
         })
         .collect();
     v.sort_by(|a, b| b.size.cmp(&a.size));
     v
-}
-
-fn accumulate(node: &Node, map: &mut HashMap<String, (u64, u64)>) {
-    if node.is_dir {
-        for c in &node.children {
-            accumulate(c, map);
-        }
-    } else {
-        let cat = color::category_for_ext(node.extension()).to_string();
-        let entry = map.entry(cat).or_insert((0, 0));
-        entry.0 += node.size;
-        entry.1 += 1;
-    }
 }

@@ -41,7 +41,7 @@ fn main() -> Result<()> {
 
     if cli.no_tui {
         let tree = scanner::scan(&root, None)?;
-        report::print_report(&tree, cli.top, cli.depth);
+        report::print_report(&tree.root_path, &tree.root, cli.top, cli.depth);
     } else {
         tui::run(root)?;
     }
