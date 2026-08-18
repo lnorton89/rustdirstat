@@ -24,18 +24,22 @@ pub struct TreemapItem {
     pub index_path: Vec<usize>,
 }
 
-// A directory tile that's large enough to subdivide keeps recursing into
-// its actual files — capping depth instead would leave big swaths of the
-// map as flat, undifferentiated directory-colored blocks even when there's
-// plenty of room to show what's really inside. MIN_RECURSE_W/H and
-// MAX_ITEMS are the real limits: recursion naturally stops once tiles get
-// too small to be legible, which also bounds the cost on a huge subtree.
-// MAX_DEPTH is just a sanity backstop against pathological nesting.
+// Any directory with room for at least one sub-tile keeps recursing into
+// its actual files. A size *threshold* on recursion (the previous
+// approach) leaves huge swaths of the map as flat, undifferentiated
+// directory-colored blocks whenever the tree is directory-heavy near the
+// top (true of most real filesystems — you pass through many folders
+// before reaching the files that actually take up space), even though
+// there's plenty of room to keep going. The only thing gated by size now
+// is whether a tile is legible enough to bother with a text label —
+// recursion itself only stops when a tile is too small to hold even one
+// child cell, when MAX_DEPTH is hit (a sanity backstop, not a real limit),
+// or when MAX_ITEMS caps the total tile budget for one draw call.
 const MAX_DEPTH: u16 = 24;
-const MIN_RECURSE_W: u16 = 10;
-const MIN_RECURSE_H: u16 = 5;
-const MAX_CHILDREN_PER_LEVEL: usize = 40;
-const MAX_ITEMS: usize = 900;
+const MIN_LABEL_W: u16 = 4;
+const MIN_LABEL_H: u16 = 2;
+const MAX_CHILDREN_PER_LEVEL: usize = 60;
+const MAX_ITEMS: usize = 3000;
 
 pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16) -> Vec<TreemapItem> {
     let mut out = Vec::new();
@@ -91,13 +95,26 @@ fn recurse(
             index_path: index_path.clone(),
         });
 
-        if child.is_dir && depth + 1 < MAX_DEPTH && r.w >= MIN_RECURSE_W && r.h >= MIN_RECURSE_H {
-            // Reserve the rectangle's top row for the directory's own label.
-            let inner = Rect {
-                x: area.x + r.x,
-                y: area.y + r.y + 1,
-                w: r.w,
-                h: r.h - 1,
+        if child.is_dir && depth + 1 < MAX_DEPTH {
+            // Only reserve a row for the directory's own label if the tile
+            // is big enough for that label to be legible — otherwise give
+            // the whole tile to its children instead of wasting a row on
+            // text nobody could read anyway.
+            let reserve_label = r.w >= MIN_LABEL_W && r.h >= MIN_LABEL_H;
+            let inner = if reserve_label {
+                Rect {
+                    x: area.x + r.x,
+                    y: area.y + r.y + 1,
+                    w: r.w,
+                    h: r.h - 1,
+                }
+            } else {
+                Rect {
+                    x: area.x + r.x,
+                    y: area.y + r.y,
+                    w: r.w,
+                    h: r.h,
+                }
             };
             recurse(child, inner, depth + 1, index_path, out);
         }

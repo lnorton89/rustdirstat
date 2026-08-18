@@ -37,6 +37,16 @@ pub struct Node {
     /// subtree. Empty for files (no heap allocation); length
     /// `Category::COUNT` for directories.
     pub ext_totals: Vec<(u64, u64)>,
+    /// Count of filesystem entries in this node's subtree that were seen
+    /// but couldn't be fully read — a directory listing that failed
+    /// outright (also covered by `error`, counted here as 1), or an
+    /// individual entry whose metadata lookup failed mid-listing (a race
+    /// with something else deleting it, a permission edge case, a flaky
+    /// mount). Those entries are silently omitted from every other total
+    /// (`size`, `file_count`, ...), so without this there'd be no way to
+    /// tell "this subtree is 40 KB" from "this subtree is 40 KB *and we
+    /// couldn't read some of it*" — the two look identical otherwise.
+    pub unreadable_count: u64,
 }
 
 /// A scanned tree plus the absolute path its root corresponds to.

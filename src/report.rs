@@ -30,6 +30,13 @@ fn build_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth:
     if root.error {
         out.push_str("  <access denied>\n");
     }
+    if root.unreadable_count > 0 {
+        let _ = writeln!(
+            out,
+            "  warning: {} entries in this subtree could not be read and are excluded from the totals above",
+            root.unreadable_count
+        );
+    }
     write_children(&mut out, root, 0, top, max_depth);
 
     out.push('\n');
@@ -73,15 +80,21 @@ fn write_children(out: &mut String, node: &Node, depth: usize, top: usize, max_d
             ""
         };
         let err = if child.error { " <access denied>" } else { "" };
+        let warn = if !child.error && child.unreadable_count > 0 {
+            format!(" <{} unreadable>", child.unreadable_count)
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "{}{:>10}  {:>5.1}%  {}{}{}",
+            "{}{:>10}  {:>5.1}%  {}{}{}{}",
             indent,
             human_bytes(child.size),
             pct,
             child.name,
             suffix,
-            err
+            err,
+            warn
         );
         if child.is_dir {
             write_children(out, child, depth + 1, top, max_depth);

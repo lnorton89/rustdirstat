@@ -569,6 +569,7 @@ impl App {
         let path = self.tree.path_for(&full_index_path);
         let target = self.tree.node_for(&full_index_path);
 
+        let unreadable_delta = target.unreadable_count;
         let (is_dir, size, file_count, dir_count_delta, removed_ext) = if target.is_dir {
             (
                 true,
@@ -592,10 +593,24 @@ impl App {
         }
 
         let mut n = &mut self.tree.root;
-        subtract_totals(n, size, file_count, dir_count_delta, &removed_ext);
+        subtract_totals(
+            n,
+            size,
+            file_count,
+            dir_count_delta,
+            unreadable_delta,
+            &removed_ext,
+        );
         for &idx in &self.path_indices {
             n = &mut n.children[idx];
-            subtract_totals(n, size, file_count, dir_count_delta, &removed_ext);
+            subtract_totals(
+                n,
+                size,
+                file_count,
+                dir_count_delta,
+                unreadable_delta,
+                &removed_ext,
+            );
         }
         n.children.remove(pending.orig_idx);
 
@@ -622,10 +637,18 @@ enum RemovedExt {
     Dir(Vec<(u64, u64)>),
 }
 
-fn subtract_totals(n: &mut Node, size: u64, file_count: u64, dir_count: u64, ext: &RemovedExt) {
+fn subtract_totals(
+    n: &mut Node,
+    size: u64,
+    file_count: u64,
+    dir_count: u64,
+    unreadable_count: u64,
+    ext: &RemovedExt,
+) {
     n.size -= size;
     n.file_count -= file_count;
     n.dir_count -= dir_count;
+    n.unreadable_count -= unreadable_count;
     match ext {
         RemovedExt::File(Some(cat)) => {
             let i = cat.index();

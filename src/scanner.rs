@@ -49,6 +49,7 @@ pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
             error: false,
             category,
             ext_totals: vec![],
+            unreadable_count: 0,
         }
     };
 
@@ -61,8 +62,24 @@ pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
 fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
     let dir_meta = std::fs::symlink_metadata(path).ok();
 
-    let entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(path) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+    // `read_dir` itself can fail (permission denied, etc.) — that's the
+    // existing `error` flag. But the *iterator it returns* can also yield
+    // individual `Err`s partway through (a race with something deleting an
+    // entry, a flaky mount) without the whole listing failing. Silently
+    // dropping those via `.filter_map(|e| e.ok())` would make a partial
+    // listing look identical to a complete one, so they're counted instead
+    // of discarded.
+    let mut entries: Vec<std::fs::DirEntry> = Vec::new();
+    let mut own_unreadable = 0u64;
+    match std::fs::read_dir(path) {
+        Ok(rd) => {
+            for entry in rd {
+                match entry {
+                    Ok(e) => entries.push(e),
+                    Err(_) => own_unreadable += 1,
+                }
+            }
+        }
         Err(_) => {
             if let Some(p) = progress {
                 p.dirs.fetch_add(1, Ordering::Relaxed);
@@ -79,16 +96,28 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                 error: true,
                 category: None,
                 ext_totals: vec![(0u64, 0u64); Category::COUNT],
+                unreadable_count: 1,
             };
         }
     };
 
     let mut local_files = 0u64;
     let mut local_bytes = 0u64;
+    // Shared across both the parallel and sequential branches below — per-
+    // entry metadata failures are rare enough that contending one atomic
+    // isn't a concern, and it's the simplest way to count them from either
+    // branch without threading a second kind of accumulator through both.
+    let entry_unreadable = AtomicU64::new(0);
 
     let scan_one =
         |entry: std::fs::DirEntry, local_files: &mut u64, local_bytes: &mut u64| -> Option<Node> {
-            let meta = entry.metadata().ok()?;
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => {
+                    entry_unreadable.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
+            };
             let ft = meta.file_type();
             let ename = entry.file_name().to_string_lossy().to_string();
 
@@ -106,6 +135,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                     error: false,
                     category: None,
                     ext_totals: vec![],
+                    unreadable_count: 0,
                 })
             } else if ft.is_dir() {
                 Some(scan_dir(&entry.path(), ename, progress))
@@ -124,6 +154,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                     children: vec![],
                     error: false,
                     ext_totals: vec![],
+                    unreadable_count: 0,
                 })
             }
         };
@@ -157,6 +188,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
         }
         nodes
     };
+    own_unreadable += entry_unreadable.load(Ordering::Relaxed);
 
     if let Some(p) = progress {
         p.dirs.fetch_add(1, Ordering::Relaxed);
@@ -165,11 +197,13 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
     let mut size = 0u64;
     let mut file_count = 0u64;
     let mut dir_count = 0u64;
+    let mut unreadable_count = own_unreadable;
     let mut ext_totals = vec![(0u64, 0u64); Category::COUNT];
 
     for c in &children {
         size += c.size;
         file_count += c.file_count;
+        unreadable_count += c.unreadable_count;
         if c.is_dir {
             dir_count += c.dir_count + 1;
             for (i, &(s, n)) in c.ext_totals.iter().enumerate() {
@@ -195,5 +229,6 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
         error: false,
         category: None,
         ext_totals,
+        unreadable_count,
     }
 }

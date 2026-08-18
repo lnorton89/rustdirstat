@@ -72,7 +72,11 @@ surface):
 - **Click the "Files" title bar** to cycle sort order, the **treemap title
   bar** to toggle the panel, and the **header** to go up a directory.
 - **Drag the border between the list and the treemap** to resize them,
-  like any GUI split pane.
+  like any GUI split pane. It's marked with a permanent accent-colored bar
+  rather than only lighting up on hover — a terminal program has no way to
+  change the OS mouse cursor, and detecting hover at all would mean turning
+  mouse-motion tracking back on, which is exactly what was removed to fix
+  the unresponsive-after-idle bug above.
 - **Click the footer buttons** (Open, Up, Delete, Quit, and "more
   shortcuts" for the rest), or the **Yes/No buttons** in the delete
   confirmation popup.
@@ -138,11 +142,23 @@ multi-million-file, multi-hundred-GB drives):
   rectangle it was allotted by its parent — so a folder that dominates its
   parent still shows real internal structure instead of one flat block.
   A directory keeps recursing into its actual files for as long as its
-  tile is large enough to subdivide legibly, rather than stopping at a
-  fixed depth, so most of the map resolves to real, distinctly-colored
-  files rather than flat directory-colored blocks. Every tile gets a
-  border so same-colored siblings stay visually separate, and directories
-  use a neutral tan rather than a file category's color.
+  tile has room for even one child cell — not just down to some fixed
+  depth or size threshold — since most real filesystems are directory-heavy
+  near the top (you pass through several folders before reaching whatever
+  actually takes up space), and a depth cap left large swaths of the map as
+  flat, undifferentiated directory-colored blocks even with plenty of room
+  to show more. Only the text *label* is size-gated, so a small tile still
+  contributes its real color, just without illegible text on top of it.
+  Every tile gets a border so same-colored siblings stay visually separate,
+  and directories use a neutral tan rather than a file category's color —
+  color is reserved for what it actually differentiates.
+- **Unreadable entries are counted, not dropped.** A directory listing or a
+  file's metadata lookup can fail mid-scan (a permission edge case, a race
+  with something else deleting it) without the whole scan failing. Rather
+  than silently omitting those entries from every size/count total — which
+  would make a partial subtree look identical to a complete one — a running
+  count is kept and surfaced as a warning in the header and against the
+  affected row, so an undercount is visible instead of silent.
 - **Deletes** move to the OS Recycle Bin/Trash by default (`trash` crate,
   cross-platform); permanent deletion is a separate, deliberately
   keyboard-only action. Either way, the in-memory tree's aggregate sizes,

@@ -82,7 +82,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_list(f, app, body[0]);
         draw_treemap(f, app, body[1]);
         // A 1-column drag handle right on the shared border: press and
-        // drag to resize, like a normal GUI split pane.
+        // drag to resize, like a normal GUI split pane. A terminal program
+        // can't change the OS mouse cursor on hover (that's the terminal
+        // emulator's job, not something any TTY app can reach), so instead
+        // the handle stays permanently, visibly distinct — an accent-
+        // colored bar rather than the plain panel border — so it reads as
+        // grabbable without needing hover state at all.
+        draw_resize_handle(f, body[1].x, body[1].y, body[1].height);
         app.click_zones.push(ClickZone {
             x: body[1].x,
             y: body[1].y,
@@ -132,7 +138,20 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         if node.error { "   <access denied>" } else { "" },
         filter_suffix,
     );
-    let p = Paragraph::new(Line::from(title)).style(theme::title_bar());
+    let bar = theme::title_bar();
+    let mut spans = vec![Span::styled(title, bar)];
+    if node.unreadable_count > 0 {
+        // Some entries in this subtree couldn't be read (permission edge
+        // case, a race with something deleting them mid-scan) and were
+        // left out of every total rather than silently pretending they
+        // don't exist — surfaced here so "40 KB" and "40 KB, but some of
+        // it we couldn't see" don't look identical.
+        spans.push(Span::styled(
+            format!("  ⚠ {} unreadable ", thousands(node.unreadable_count)),
+            bar.fg(theme::WARNING).add_modifier(Modifier::BOLD),
+        ));
+    }
+    let p = Paragraph::new(Line::from(spans)).style(bar);
     f.render_widget(p, inner);
 
     app.click_zones.push(ClickZone {
@@ -211,6 +230,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ""
             };
             let err = if node.error { " <access denied>" } else { "" };
+            // Only shown when the directory itself was readable but
+            // something inside it wasn't — `error` above already covers
+            // "couldn't read this one at all".
+            let warn = if !node.error && node.unreadable_count > 0 {
+                " ⚠"
+            } else {
+                ""
+            };
 
             let mut spans = vec![
                 Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
@@ -227,6 +254,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(icon, Style::default().fg(name_color)),
                 Span::styled(format!("{}{}", node.name, suffix), name_style),
                 Span::styled(err, Style::default().fg(theme::DANGER)),
+                Span::styled(warn, Style::default().fg(theme::WARNING)),
             ];
             if show_details {
                 let count = if node.is_dir {
@@ -388,6 +416,41 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
             action: Action::SelectRow(row),
         });
     }
+}
+
+/// A permanently-visible "grab here" bar over the panel divider — bright
+/// accent color, distinct from the ordinary panel border either side of it.
+fn draw_resize_handle(f: &mut Frame, x: u16, y: u16, height: u16) {
+    if height == 0 {
+        return;
+    }
+    let mid = height / 2;
+    let lines: Vec<Line> = (0..height)
+        .map(|row| {
+            // A short dotted grip glyph at the vertical center reads as
+            // "drag" more clearly than a plain solid line would.
+            let glyph = if row == mid || row == mid.saturating_sub(1) || row == mid + 1 {
+                "┃"
+            } else {
+                "│"
+            };
+            Line::from(Span::styled(
+                glyph,
+                Style::default()
+                    .fg(theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        })
+        .collect();
+    f.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x,
+            y,
+            width: 1,
+            height,
+        },
+    );
 }
 
 fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {

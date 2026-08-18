@@ -14,6 +14,7 @@ pub const SELECTION_BG: Color = Color::Rgb(43, 87, 148);
 pub const MUTED: Color = Color::Rgb(142, 150, 165);
 pub const DANGER: Color = Color::Rgb(217, 83, 79);
 pub const DANGER_BG: Color = Color::Rgb(58, 30, 30);
+pub const WARNING: Color = Color::Rgb(230, 175, 46);
 pub const SHADOW: Color = Color::Rgb(18, 18, 22);
 
 pub fn border_type() -> BorderType {
