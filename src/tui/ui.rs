@@ -3,7 +3,7 @@ use super::nested::{self, TreemapItem};
 use super::theme;
 use crate::color::{self, Category};
 use crate::scanner::Progress;
-use crate::util::{format_modified, human_bytes};
+use crate::util::{format_modified, human_bytes, thousands};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -104,19 +104,18 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
 
     let filter_suffix = if app.filter_mode {
-        format!("  search: {}▌", app.filter)
+        format!("   search: {}▌", app.filter)
     } else if !app.filter.is_empty() {
-        format!("  (filtered: \"{}\")", app.filter)
+        format!("   filtered: \"{}\"", app.filter)
     } else {
         String::new()
     };
     let title = format!(
-        " {}  —  {} in {} files, {} dirs{}{}  [click: go up]",
+        " {}   ·   {}, {} files{}{}",
         app.current_path().display(),
         human_bytes(node.size),
-        node.file_count,
-        node.dir_count,
-        if node.error { "  <access denied>" } else { "" },
+        thousands(node.file_count),
+        if node.error { "   <access denied>" } else { "" },
         filter_suffix,
     );
     let p = Paragraph::new(Line::from(title)).style(theme::title_bar());
@@ -162,8 +161,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let disp_len = disp.len();
     let total = app.current_node().size.max(1);
     let max_sibling = disp.iter().map(|(_, n)| n.size).max().unwrap_or(1).max(1);
-    let bar_width: usize = 12;
-    let show_modified = area.width > 100;
+    let bar_width: usize = 10;
+    let show_details = app.detailed;
 
     let items: Vec<ListItem> = disp
         .iter()
@@ -174,12 +173,20 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             let filled = filled.min(bar_width);
 
             let cat = category_of(node);
-            let bar_color = dim_unless_matching(category_color(cat), app.highlighted_category, cat);
+            let muted = app.highlighted_category.is_some_and(|h| Some(h) != cat);
+            let bar_color = if muted { theme::MUTED } else { theme::ACCENT };
+            let name_color = if muted {
+                theme::MUTED
+            } else if node.is_dir {
+                theme::ACCENT
+            } else {
+                Color::Reset
+            };
 
             let name_style = if node.is_dir {
-                Style::default().fg(bar_color).add_modifier(Modifier::BOLD)
+                Style::default().fg(name_color).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(bar_color)
+                Style::default().fg(name_color)
             };
             let icon = if node.is_dir { "▸ " } else { "  " };
             let suffix = if node.is_dir {
@@ -190,30 +197,34 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ""
             };
             let err = if node.error { " <access denied>" } else { "" };
-            let count = if node.is_dir {
-                format!(" {}f {}d", node.file_count, node.dir_count)
-            } else {
-                String::new()
-            };
 
             let mut spans = vec![
                 Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
                 Span::styled(
                     "░".repeat(bar_width - filled),
+                    Style::default().fg(theme::PANEL_BORDER),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{:>9}", human_bytes(node.size)),
                     Style::default().fg(theme::MUTED),
                 ),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{:>10}", human_bytes(node.size)),
-                    Style::default().fg(Color::Gray),
-                ),
-                Span::raw(format!(" {:>5.1}% ", pct)),
-                Span::styled(icon, Style::default().fg(bar_color)),
+                Span::raw(format!(" {:>5.1}%  ", pct)),
+                Span::styled(icon, Style::default().fg(name_color)),
                 Span::styled(format!("{}{}", node.name, suffix), name_style),
-                Span::styled(count, Style::default().fg(theme::MUTED)),
                 Span::styled(err, Style::default().fg(theme::DANGER)),
             ];
-            if show_modified {
+            if show_details {
+                let count = if node.is_dir {
+                    format!(
+                        "  {} files, {} dirs",
+                        thousands(node.file_count),
+                        thousands(node.dir_count)
+                    )
+                } else {
+                    String::new()
+                };
+                spans.push(Span::styled(count, Style::default().fg(theme::MUTED)));
                 spans.push(Span::styled(
                     format!("  {}", format_modified(node.modified)),
                     Style::default().fg(theme::MUTED),
@@ -224,7 +235,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let title = format!(
-        " files — sort: {} (click title or press s) ",
+        " Files — sort: {}  (s to change, m for details) ",
         app.sort.label()
     );
     let list = List::new(items)
@@ -283,8 +294,8 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|t| t.size)
         .unwrap_or(1)
         .max(1);
-    let bar_width: usize = 12;
-    let show_modified = area.width > 110;
+    let bar_width: usize = 10;
+    let show_details = app.detailed;
 
     let items: Vec<ListItem> = app
         .top_files_cache
@@ -292,11 +303,11 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|tf| {
             let filled = ((tf.size as f64 / max_size as f64) * bar_width as f64).round() as usize;
             let filled = filled.min(bar_width);
-            let color = dim_unless_matching(
-                category_color(tf.category),
-                app.highlighted_category,
-                tf.category,
-            );
+            let muted = app
+                .highlighted_category
+                .is_some_and(|h| Some(h) != tf.category);
+            let color = if muted { theme::MUTED } else { theme::ACCENT };
+            let name_color = if muted { theme::MUTED } else { Color::Reset };
 
             let mut full_idx = base.clone();
             full_idx.extend(&tf.index_path);
@@ -307,17 +318,17 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled("█".repeat(filled), Style::default().fg(color)),
                 Span::styled(
                     "░".repeat(bar_width - filled),
-                    Style::default().fg(theme::MUTED),
-                ),
-                Span::raw(" "),
-                Span::styled(
-                    format!("{:>10}", human_bytes(tf.size)),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::PANEL_BORDER),
                 ),
                 Span::raw("  "),
-                Span::styled(rel.display().to_string(), Style::default().fg(color)),
+                Span::styled(
+                    format!("{:>9}", human_bytes(tf.size)),
+                    Style::default().fg(theme::MUTED),
+                ),
+                Span::raw("  "),
+                Span::styled(rel.display().to_string(), Style::default().fg(name_color)),
             ];
-            if show_modified {
+            if show_details {
                 spans.push(Span::styled(
                     format!("  {}", format_modified(tf.modified)),
                     Style::default().fg(theme::MUTED),
@@ -328,8 +339,7 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let count = app.top_files_cache.len();
-    let title =
-        format!(" biggest files in this subtree (top {count}) — click to jump to one, f to close ");
+    let title = format!(" Biggest files in this subtree (top {count}) — f to close ");
     let list = List::new(items)
         .block(
             Block::default()
@@ -546,20 +556,14 @@ fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
     let total: u64 = app.ext_stats.iter().map(|s| s.size).sum::<u64>().max(1);
     let mut spans = Vec::new();
     let mut x = area.x + 1;
-    for (i, stat) in app.ext_stats.iter().take(9).enumerate() {
+    for (i, stat) in app.ext_stats.iter().take(5).enumerate() {
         let pct = stat.size as f64 / total as f64 * 100.0;
         let color = dim_unless_matching(
             stat.category.color(),
             app.highlighted_category,
             Some(stat.category),
         );
-        let text = format!(
-            "{} ■ {} {} ({:.0}%)  ",
-            i + 1,
-            stat.category.label(),
-            human_bytes(stat.size),
-            pct
-        );
+        let text = format!("{} ■ {}  {:.0}%   ", i + 1, stat.category.label(), pct);
         let w = text.chars().count() as u16;
         spans.push(Span::styled(text, Style::default().fg(color)));
         app.click_zones.push(ClickZone {
@@ -571,11 +575,7 @@ fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
         });
         x += w;
     }
-    let title = if app.highlighted_category.is_some() {
-        " extensions — click to toggle highlight (0 to clear) "
-    } else {
-        " extensions (current view) — click a category to highlight it in the treemap "
-    };
+    let title = " File types — click to highlight in the treemap ";
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(theme::border_type())
@@ -598,18 +598,15 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let buttons: [(&str, Action); 11] = [
-        (" ↑↓ nav ", Action::Down),
-        (" → open ", Action::OpenSelected),
-        (" ← back ", Action::Back),
-        (" s sort ", Action::CycleSort),
-        (" t treemap ", Action::ToggleTreemap),
-        (" f biggest ", Action::ToggleTopFiles),
-        (" / search ", Action::StartSearch),
-        (" o file-mgr ", Action::OpenInFileManager),
-        (" r refresh ", Action::Refresh),
-        (" e export ", Action::ExportReport),
-        (" d delete ", Action::RequestDelete),
+    // Only the most common actions get a footer button; everything else
+    // (sort, treemap, search, refresh, export, file manager, permanent
+    // delete) stays a keyboard shortcut discoverable via "? help" — a
+    // dozen buttons crammed into one row was the single busiest part of
+    // the whole interface.
+    let buttons: [(&str, Action); 3] = [
+        (" Enter  Open ", Action::OpenSelected),
+        (" Backspace  Up ", Action::Back),
+        (" d  Delete ", Action::RequestDelete),
     ];
 
     let mut spans = Vec::new();
@@ -621,9 +618,7 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     for (label, action) in buttons.iter() {
         let w = label.chars().count() as u16;
         spans.push(Span::styled(*label, theme::button()));
-        spans.push(Span::raw(" "));
-        // The "/ search" button is display-only here (typing starts search
-        // directly via the '/' key); give it its own zone separately below.
+        spans.push(Span::raw("  "));
         app.click_zones.push(ClickZone {
             x,
             y: area.y,
@@ -631,9 +626,9 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
             h: 1,
             action: action.clone(),
         });
-        x += w + 1;
+        x += w + 2;
     }
-    let quit_label = " q quit ";
+    let quit_label = " q  Quit ";
     spans.push(Span::styled(
         quit_label,
         Style::default().bg(theme::DANGER_BG).fg(theme::DANGER),
@@ -645,7 +640,7 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
         h: 1,
         action: Action::Quit,
     });
-    let help_label = "  ? help ";
+    let help_label = "  ?  more shortcuts ";
     spans.push(Span::styled(help_label, theme::button()));
     app.click_zones.push(ClickZone {
         x: x + quit_label.chars().count() as u16,
@@ -765,11 +760,12 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 18] = [
+    let rows: [(&str, &str); 19] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
         ("s", "Cycle sort order (size, name, modified)"),
+        ("m", "Show/hide file counts and modified dates"),
         ("t", "Toggle the treemap panel"),
         ("f", "Toggle the \"biggest files\" flat view"),
         ("/", "Search/filter the current view by name"),

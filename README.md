@@ -41,6 +41,7 @@ rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels dee
 | `→`/`l`/`Enter` | Open the selected directory |
 | `←`/`h`/`Backspace` | Go up a directory |
 | `s` | Cycle sort order (size, name, modified — each ascending/descending) |
+| `m` | Show/hide file counts and modified dates in the list |
 | `t` | Toggle the treemap panel |
 | `f` | Toggle the "biggest files in this subtree" flat view |
 | `/` | Search/filter the current view by name |
@@ -67,10 +68,26 @@ surface):
   it); click it again quickly to open it (double-click), or scroll the
   wheel to move the selection.
 - **Click the extension legend** to highlight that category in the treemap.
-- **Click the "files" title bar** to cycle sort order, the **treemap title
+- **Click the "Files" title bar** to cycle sort order, the **treemap title
   bar** to toggle the panel, and the **header** to go up a directory.
-- **Click the footer buttons**, or the **Yes/No buttons** in the delete
+- **Click the footer buttons** (Open, Up, Delete, Quit, and "more
+  shortcuts" for the rest), or the **Yes/No buttons** in the delete
   confirmation popup.
+
+## Design
+
+The default view is deliberately spare — one accent color for navigation,
+plain text for file names, a handful of footer buttons — because a screen
+that colors and labels everything ends up highlighting nothing. Anything
+extra is opt-in rather than always-on:
+
+- File/dir counts and modified dates are hidden until you press `m`.
+- The treemap favors a few large, legible tiles over exhaustively nesting
+  every subdirectory into illegible fragments.
+- The footer shows only the handful of actions used constantly; the rest
+  are one keystroke away and listed in `?`.
+- Color is reserved for where it's informative — the treemap, the
+  extension legend, and highlighting — not sprayed across every row.
 
 ## Performance
 

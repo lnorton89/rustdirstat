@@ -24,11 +24,14 @@ pub struct TreemapItem {
     pub index_path: Vec<usize>,
 }
 
-const MAX_DEPTH: u16 = 6;
-const MIN_RECURSE_W: u16 = 4;
-const MIN_RECURSE_H: u16 = 3;
-const MAX_CHILDREN_PER_LEVEL: usize = 128;
-const MAX_ITEMS: usize = 4000;
+// Kept deliberately conservative: a treemap with too many tiny, truncated
+// tiles reads as visual noise rather than information. Fewer, larger
+// rectangles with legible labels are more useful than exhaustive nesting.
+const MAX_DEPTH: u16 = 3;
+const MIN_RECURSE_W: u16 = 12;
+const MIN_RECURSE_H: u16 = 6;
+const MAX_CHILDREN_PER_LEVEL: usize = 40;
+const MAX_ITEMS: usize = 600;
 
 pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16) -> Vec<TreemapItem> {
     let mut out = Vec::new();

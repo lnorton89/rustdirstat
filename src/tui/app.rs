@@ -66,6 +66,7 @@ pub enum Action {
     ToggleHelp,
     ExportReport,
     StartSearch,
+    ToggleDetails,
 }
 
 /// A screen region registered during the last draw that maps a mouse click
@@ -113,6 +114,9 @@ pub struct App {
     pub top_files_cache: Vec<TopFile>,
     pub show_help: bool,
     pub refresh_requested: bool,
+    /// Show file/dir counts and modified dates in the list — off by
+    /// default to keep each row to the essentials (bar, size, name).
+    pub detailed: bool,
 }
 
 const TOP_FILES_LIMIT: usize = 500;
@@ -138,6 +142,7 @@ impl App {
             top_files_cache: vec![],
             show_help: false,
             refresh_requested: false,
+            detailed: false,
         };
         app.refresh_ext_stats();
         app
@@ -301,6 +306,7 @@ impl App {
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('f') => Action::ToggleTopFiles,
             KeyCode::Char('e') => Action::ExportReport,
+            KeyCode::Char('m') => Action::ToggleDetails,
             KeyCode::Char('?') => Action::ToggleHelp,
             KeyCode::Char('/') => Action::StartSearch,
             KeyCode::Char('0') => Action::ClearHighlight,
@@ -453,6 +459,7 @@ impl App {
                 self.filter.clear();
                 self.selected = 0;
             }
+            Action::ToggleDetails => self.detailed = !self.detailed,
             Action::ConfirmDelete | Action::CancelDelete => {}
         }
         Ok(())

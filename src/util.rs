@@ -14,6 +14,20 @@ pub fn human_bytes(bytes: u64) -> String {
     format!("{:.1} {}", size, UNITS[unit])
 }
 
+/// Format an integer with thousands separators (e.g. `8_924_548` -> `"8,924,548"`).
+pub fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
 /// Format a modification time as `YYYY-MM-DD HH:MM` (UTC). Implemented by
 /// hand (Howard Hinnant's `civil_from_days` algorithm) instead of pulling in
 /// a date/time crate for what's ultimately a display-only field.
