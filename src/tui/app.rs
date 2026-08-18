@@ -3,6 +3,7 @@ use crate::stats::{self, ExtStat};
 use anyhow::Result;
 use crossterm::event::KeyCode;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
@@ -32,6 +33,44 @@ impl SortMode {
     }
 }
 
+/// Every user-triggerable operation, so keyboard and mouse input can share
+/// one code path instead of duplicating behavior.
+#[derive(Clone)]
+pub enum Action {
+    Up,
+    Down,
+    OpenSelected,
+    Back,
+    CycleSort,
+    ToggleTreemap,
+    RequestDelete,
+    OpenInFileManager,
+    Quit,
+    ToggleHighlight(String),
+    ClearHighlight,
+    SelectRow(usize),
+    NavigateTo(Vec<usize>),
+    ConfirmDelete,
+    CancelDelete,
+}
+
+/// A screen region registered during the last draw that maps a mouse click
+/// to an `Action`. Rebuilt every frame in `ui::draw`.
+#[derive(Clone)]
+pub struct ClickZone {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+    pub action: Action,
+}
+
+impl ClickZone {
+    pub fn contains(&self, x: u16, y: u16) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
 pub struct App {
     pub root: Node,
     /// Indices (into each level's original, unsorted `children` vec) from
@@ -44,6 +83,10 @@ pub struct App {
     pub message: Option<String>,
     pub ext_stats: Vec<ExtStat>,
     pub should_quit: bool,
+    pub highlighted_category: Option<String>,
+    /// Clickable regions from the most recent frame; consumed by mouse clicks.
+    pub click_zones: Vec<ClickZone>,
+    last_click: Option<(usize, Instant)>,
 }
 
 impl App {
@@ -58,6 +101,9 @@ impl App {
             message: None,
             ext_stats: vec![],
             should_quit: false,
+            highlighted_category: None,
+            click_zones: vec![],
+            last_click: None,
         };
         app.refresh_ext_stats();
         app
@@ -80,8 +126,12 @@ impl App {
         match self.sort {
             SortMode::SizeDesc => v.sort_by(|a, b| b.1.size.cmp(&a.1.size)),
             SortMode::SizeAsc => v.sort_by(|a, b| a.1.size.cmp(&b.1.size)),
-            SortMode::NameAsc => v.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase())),
-            SortMode::NameDesc => v.sort_by(|a, b| b.1.name.to_lowercase().cmp(&a.1.name.to_lowercase())),
+            SortMode::NameAsc => {
+                v.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+            }
+            SortMode::NameDesc => {
+                v.sort_by(|a, b| b.1.name.to_lowercase().cmp(&a.1.name.to_lowercase()))
+            }
         }
         v
     }
@@ -92,27 +142,70 @@ impl App {
 
     pub fn handle_key(&mut self, code: KeyCode) -> Result<()> {
         if self.pending_delete.is_some() {
-            match code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_delete()?,
+            let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                Action::ConfirmDelete
+            } else {
+                Action::CancelDelete
+            };
+            return self.dispatch(action);
+        }
+
+        let action = match code {
+            KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+            KeyCode::Up | KeyCode::Char('k') => Action::Up,
+            KeyCode::Down | KeyCode::Char('j') => Action::Down,
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => Action::OpenSelected,
+            KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => Action::Back,
+            KeyCode::Char('s') => Action::CycleSort,
+            KeyCode::Char('t') => Action::ToggleTreemap,
+            KeyCode::Char('d') => Action::RequestDelete,
+            KeyCode::Char('o') => Action::OpenInFileManager,
+            KeyCode::Char('0') => Action::ClearHighlight,
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = c.to_digit(10).unwrap() as usize - 1;
+                match self.ext_stats.get(idx) {
+                    Some(stat) => Action::ToggleHighlight(stat.category.clone()),
+                    None => return Ok(()),
+                }
+            }
+            _ => return Ok(()),
+        };
+        self.dispatch(action)
+    }
+
+    /// Look up whatever click zone (if any) contains `(x, y)` — the most
+    /// recently drawn zone wins, so popups drawn last take priority.
+    pub fn handle_click(&mut self, x: u16, y: u16) -> Result<()> {
+        if let Some(zone) = self.click_zones.iter().rev().find(|z| z.contains(x, y)) {
+            let action = zone.action.clone();
+            self.dispatch(action)?;
+        }
+        Ok(())
+    }
+
+    pub fn dispatch(&mut self, action: Action) -> Result<()> {
+        if self.pending_delete.is_some() {
+            match action {
+                Action::ConfirmDelete => self.confirm_delete()?,
                 _ => self.pending_delete = None,
             }
             return Ok(());
         }
 
         self.message = None;
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.selected = self.selected.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
+        match action {
+            Action::Up => self.selected = self.selected.saturating_sub(1),
+            Action::Down => {
                 let len = self.display_children().len();
                 if self.selected + 1 < len {
                     self.selected += 1;
                 }
             }
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
-                let target = self.display_children().get(self.selected).map(|(idx, n)| (*idx, n.is_dir));
+            Action::OpenSelected => {
+                let target = self
+                    .display_children()
+                    .get(self.selected)
+                    .map(|(idx, n)| (*idx, n.is_dir));
                 if let Some((idx, is_dir)) = target {
                     if is_dir {
                         self.path_indices.push(idx);
@@ -121,35 +214,86 @@ impl App {
                     }
                 }
             }
-            KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => {
+            Action::Back => {
                 if !self.path_indices.is_empty() {
                     self.path_indices.pop();
                     self.selected = 0;
                     self.refresh_ext_stats();
                 }
             }
-            KeyCode::Char('s') => self.sort = self.sort.next(),
-            KeyCode::Char('t') => self.show_treemap = !self.show_treemap,
-            KeyCode::Char('d') => {
+            Action::CycleSort => self.sort = self.sort.next(),
+            Action::ToggleTreemap => self.show_treemap = !self.show_treemap,
+            Action::RequestDelete => {
                 if let Some((_, node)) = self.display_children().get(self.selected) {
                     self.pending_delete = Some(node.path.clone());
                 }
             }
-            KeyCode::Char('o') => {
+            Action::OpenInFileManager => {
                 if let Some((_, node)) = self.display_children().get(self.selected) {
                     let target = if node.is_dir {
                         node.path.clone()
                     } else {
-                        node.path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| node.path.clone())
+                        node.path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| node.path.clone())
                     };
                     if let Err(e) = crate::util::open_in_file_manager(&target) {
                         self.message = Some(format!("Failed to open file manager: {e}"));
                     }
                 }
             }
-            _ => {}
+            Action::Quit => self.should_quit = true,
+            Action::ToggleHighlight(cat) => {
+                self.highlighted_category =
+                    if self.highlighted_category.as_deref() == Some(cat.as_str()) {
+                        None
+                    } else {
+                        Some(cat)
+                    };
+            }
+            Action::ClearHighlight => self.highlighted_category = None,
+            Action::SelectRow(idx) => {
+                let now = Instant::now();
+                let is_double_click = matches!(
+                    self.last_click,
+                    Some((last_idx, t)) if last_idx == idx && now.duration_since(t) < Duration::from_millis(450)
+                );
+                let len = self.display_children().len();
+                if idx < len {
+                    self.selected = idx;
+                }
+                if is_double_click {
+                    self.last_click = None;
+                    self.dispatch(Action::OpenSelected)?;
+                } else {
+                    self.last_click = Some((idx, now));
+                }
+            }
+            Action::NavigateTo(path) => self.navigate_to(path),
+            Action::ConfirmDelete | Action::CancelDelete => {}
         }
         Ok(())
+    }
+
+    /// Jump the browser to the item identified by `index_path` (as produced
+    /// by the recursive treemap), landing on its parent directory with the
+    /// item itself selected.
+    fn navigate_to(&mut self, mut index_path: Vec<usize>) {
+        if index_path.is_empty() {
+            return;
+        }
+        let target = index_path.remove(index_path.len() - 1);
+        self.path_indices.extend(index_path);
+        self.selected = 0;
+        self.refresh_ext_stats();
+        if let Some(pos) = self
+            .display_children()
+            .iter()
+            .position(|(idx, _)| *idx == target)
+        {
+            self.selected = pos;
+        }
     }
 
     fn confirm_delete(&mut self) -> Result<()> {

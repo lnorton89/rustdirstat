@@ -10,8 +10,8 @@ pub fn category_for_ext(ext: &str) -> &'static str {
         }
         "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" => "Video",
         "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => "Audio",
-        "doc" | "docx" | "pdf" | "txt" | "md" | "odt" | "rtf" | "xls" | "xlsx" | "ppt"
-        | "pptx" | "csv" => "Documents",
+        "doc" | "docx" | "pdf" | "txt" | "md" | "odt" | "rtf" | "xls" | "xlsx" | "ppt" | "pptx"
+        | "csv" => "Documents",
         "exe" | "dll" | "so" | "dylib" | "bin" | "app" | "msi" => "Programs",
         "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "h" | "hpp" | "java" | "go"
         | "rb" | "php" | "html" | "css" | "json" | "toml" | "yaml" | "yml" | "sh" => "Source",

@@ -21,14 +21,34 @@ struct FRect {
 
 pub fn layout(values: &[u64], width: u16, height: u16) -> Vec<Rect> {
     if values.is_empty() || width == 0 || height == 0 {
-        return values.iter().map(|_| Rect { x: 0, y: 0, w: 0, h: 0 }).collect();
+        return values
+            .iter()
+            .map(|_| Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            })
+            .collect();
     }
     let total: f64 = values.iter().map(|&v| v.max(1) as f64).sum();
     let area = width as f64 * height as f64;
-    let scaled: Vec<f64> = values.iter().map(|&v| (v.max(1) as f64 / total) * area).collect();
+    let scaled: Vec<f64> = values
+        .iter()
+        .map(|&v| (v.max(1) as f64 / total) * area)
+        .collect();
 
     let mut out = Vec::with_capacity(values.len());
-    squarify(&scaled, FRect { x: 0.0, y: 0.0, w: width as f64, h: height as f64 }, &mut out);
+    squarify(
+        &scaled,
+        FRect {
+            x: 0.0,
+            y: 0.0,
+            w: width as f64,
+            h: height as f64,
+        },
+        &mut out,
+    );
 
     out.into_iter()
         .map(|r| {
@@ -70,12 +90,22 @@ fn squarify(values: &[f64], rect: FRect, out: &mut Vec<FRect>) {
         let mut cy = rect.y;
         for &v in row {
             let ih = rect.h * (v / row_sum);
-            out.push(FRect { x: rect.x, y: cy, w: strip_w, h: ih });
+            out.push(FRect {
+                x: rect.x,
+                y: cy,
+                w: strip_w,
+                h: ih,
+            });
             cy += ih;
         }
         squarify(
             &values[i..],
-            FRect { x: rect.x + strip_w, y: rect.y, w: (rect.w - strip_w).max(0.0), h: rect.h },
+            FRect {
+                x: rect.x + strip_w,
+                y: rect.y,
+                w: (rect.w - strip_w).max(0.0),
+                h: rect.h,
+            },
             out,
         );
     } else {
@@ -83,12 +113,22 @@ fn squarify(values: &[f64], rect: FRect, out: &mut Vec<FRect>) {
         let mut cx = rect.x;
         for &v in row {
             let iw = rect.w * (v / row_sum);
-            out.push(FRect { x: cx, y: rect.y, w: iw, h: strip_h });
+            out.push(FRect {
+                x: cx,
+                y: rect.y,
+                w: iw,
+                h: strip_h,
+            });
             cx += iw;
         }
         squarify(
             &values[i..],
-            FRect { x: rect.x, y: rect.y + strip_h, w: rect.w, h: (rect.h - strip_h).max(0.0) },
+            FRect {
+                x: rect.x,
+                y: rect.y + strip_h,
+                w: rect.w,
+                h: (rect.h - strip_h).max(0.0),
+            },
             out,
         );
     }

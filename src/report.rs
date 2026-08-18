@@ -45,7 +45,13 @@ fn print_children(node: &Node, depth: usize, top: usize, max_depth: usize) {
             break;
         }
         let pct = child.size as f64 / total as f64 * 100.0;
-        let suffix = if child.is_dir { "/" } else if child.is_symlink { "@" } else { "" };
+        let suffix = if child.is_dir {
+            "/"
+        } else if child.is_symlink {
+            "@"
+        } else {
+            ""
+        };
         let err = if child.error { " <access denied>" } else { "" };
         println!(
             "{}{:>10}  {:>5.1}%  {}{}{}",

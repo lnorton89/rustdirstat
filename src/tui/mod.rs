@@ -1,13 +1,18 @@
 mod app;
+mod nested;
 mod treemap;
 mod ui;
 
 use crate::scanner::{self, Progress};
 use anyhow::Result;
 use app::App;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
+};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::path::PathBuf;
@@ -17,14 +22,18 @@ use std::time::{Duration, Instant};
 pub fn run(root: PathBuf) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_app(&mut terminal, root);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -57,15 +66,28 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, root: PathB
     let mut app = App::new(tree);
 
     loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| ui::draw(f, &mut app))?;
         if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(k) = event::read()? {
-                if k.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
                     app.handle_key(k.code)?;
-                    if app.should_quit {
-                        break;
-                    }
                 }
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        app.handle_click(m.column, m.row)?;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.dispatch(app::Action::Down)?;
+                    }
+                    MouseEventKind::ScrollUp => {
+                        app.dispatch(app::Action::Up)?;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+            if app.should_quit {
+                break;
             }
         }
     }
