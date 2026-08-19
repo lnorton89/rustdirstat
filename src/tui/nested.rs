@@ -31,19 +31,39 @@ pub struct TreemapItem {
 }
 
 // Any directory with room for at least one sub-tile keeps recursing into
-// its actual files. A size *threshold* on recursion (the previous
-// approach) leaves huge swaths of the map as flat, undifferentiated
-// directory-colored blocks whenever the tree is directory-heavy near the
-// top (true of most real filesystems — you pass through many folders
-// before reaching the files that actually take up space), even though
-// there's plenty of room to keep going. The only thing gated by size now
-// is whether a tile is legible enough to bother with a text label —
+// its actual files. A size *threshold* on recursion (an earlier approach)
+// leaves huge swaths of the map as flat, undifferentiated directory-
+// colored blocks whenever the tree is directory-heavy near the top (true
+// of most real filesystems — you pass through many folders before
+// reaching the files that actually take up space), even though there's
+// plenty of room to keep going. The only thing gated by size now is
+// whether a tile is legible enough to bother with a text label —
 // recursion itself only stops when a tile is too small to hold even one
 // child cell, when MAX_DEPTH is hit (a sanity backstop, not a real limit),
-// or when MAX_ITEMS caps the total tile budget for one draw call.
+// or when MIN_RECURSE_AREA is hit.
+//
+// MIN_RECURSE_AREA matters more than it looks: MAX_ITEMS is a *global*
+// counter checked in traversal order (children sorted largest-first,
+// fully recursed depth-first before the next sibling starts). Without a
+// per-tile floor, a single branch with a huge, deeply-fanned-out subtree
+// (e.g. a cache directory with tens of thousands of tiny files) keeps
+// subdividing all the way down to 1-cell slivers — each level change only
+// swaps which leaf owns that one screen cell, but still costs a full
+// recursive call and an item slot. On a real multi-million-file drive
+// that alone can exhaust the entire item budget before a large *sibling*
+// directory (equally deserving of subdivision) gets to recurse at all,
+// leaving it rendered as a single flat, uninformative block — this was
+// visibly reproduced on a real Windows scan where a `Documents` subtree
+// next to a large `AppData` subtree came out as one solid slab. Stopping
+// recursion once a tile's own area drops below a couple of cells (further
+// subdivision of a literal single character cell can't show anything new
+// anyway) keeps per-branch cost roughly proportional to that branch's own
+// screen footprint, so one huge fanout can no longer starve everything
+// drawn after it.
 const MAX_DEPTH: u16 = 24;
 const MIN_LABEL_W: u16 = 4;
 const MIN_LABEL_H: u16 = 2;
+const MIN_RECURSE_AREA: u32 = 2;
 const MAX_CHILDREN_PER_LEVEL: usize = 60;
 const MAX_ITEMS: usize = 3000;
 
@@ -151,7 +171,8 @@ fn recurse(
             is_free_space: false,
         });
 
-        if child.is_dir && depth + 1 < MAX_DEPTH {
+        let area_cells = u32::from(r.w) * u32::from(r.h);
+        if child.is_dir && depth + 1 < MAX_DEPTH && area_cells >= MIN_RECURSE_AREA {
             // Only reserve a row for the directory's own label if the tile
             // is big enough for that label to be legible — otherwise give
             // the whole tile to its children instead of wasting a row on
