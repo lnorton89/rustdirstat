@@ -1,6 +1,7 @@
 use super::search::{self, SearchHit};
 use super::top_files::{self, TopFile};
 use crate::color::Category;
+use crate::duplicates::DupGroup;
 use crate::model::{Node, Tree};
 use crate::stats::{self, ExtStat};
 use anyhow::Result;
@@ -73,6 +74,15 @@ pub enum Action {
     ShrinkTreemap,
     StartResize,
     TogglePhysicalSize,
+    ToggleDuplicates,
+}
+
+/// One row of the flattened duplicate-groups view: either a group header
+/// (not itself navigable — just a size/count label) or a member file
+/// (navigable, like a search hit).
+pub enum DupRow {
+    Header { size: u64, count: usize },
+    Member { index_path: Vec<usize> },
 }
 
 /// A screen region registered during the last draw that maps a mouse click
@@ -143,6 +153,17 @@ pub struct App {
     pub resizing_treemap: bool,
     body_x: u16,
     body_width: u16,
+    /// Set by `Action::ToggleDuplicates` and consumed by the browse loop in
+    /// `tui::mod`, which runs the actual (background-threaded) scan and
+    /// its own progress screen — hashing file content can take a while on
+    /// a large tree, which doesn't fit the instant request/dispatch model
+    /// every other action uses.
+    pub duplicate_scan_requested: bool,
+    pub show_duplicates: bool,
+    pub duplicate_rows: Vec<DupRow>,
+    pub duplicate_group_count: usize,
+    pub duplicate_total_wasted: u64,
+    pub duplicate_truncated: bool,
 }
 
 const TREEMAP_SPLIT_MIN: u16 = 20;
@@ -184,6 +205,12 @@ impl App {
             resizing_treemap: false,
             body_x: 0,
             body_width: 0,
+            duplicate_scan_requested: false,
+            show_duplicates: false,
+            duplicate_rows: vec![],
+            duplicate_group_count: 0,
+            duplicate_total_wasted: 0,
+            duplicate_truncated: false,
         };
         app.refresh_ext_stats();
         app
@@ -301,7 +328,47 @@ impl App {
                 self.navigate_to(idx_path);
             }
             self.show_search = false;
+        } else if self.show_duplicates {
+            if let Some(DupRow::Member { index_path }) = self.duplicate_rows.get(self.selected) {
+                let idx_path = index_path.clone();
+                self.navigate_to_absolute(idx_path);
+            }
+            self.show_duplicates = false;
         }
+    }
+
+    /// Caps how many duplicate groups are turned into list rows — the
+    /// underlying scan can find far more than is sensible to hand to
+    /// ratatui's list widget every frame; the most-impactful groups (by
+    /// wasted space) are already sorted first, so this only ever drops the
+    /// long tail of smaller groups.
+    const MAX_DUPLICATE_DISPLAY_GROUPS: usize = 500;
+
+    pub fn set_duplicate_results(&mut self, groups: Vec<DupGroup>) {
+        self.duplicate_group_count = groups.len();
+        self.duplicate_truncated = groups.len() > Self::MAX_DUPLICATE_DISPLAY_GROUPS;
+        self.duplicate_total_wasted = groups
+            .iter()
+            .map(|g| g.size * (g.files.len() as u64 - 1))
+            .sum();
+
+        let mut rows = Vec::new();
+        for group in groups.into_iter().take(Self::MAX_DUPLICATE_DISPLAY_GROUPS) {
+            rows.push(DupRow::Header {
+                size: group.size,
+                count: group.files.len(),
+            });
+            for f in group.files {
+                rows.push(DupRow::Member {
+                    index_path: f.index_path,
+                });
+            }
+        }
+        self.duplicate_rows = rows;
+        self.show_duplicates = true;
+        self.show_search = false;
+        self.show_top_files = false;
+        self.selected = 0;
     }
 
     fn run_subtree_search(&mut self) {
@@ -381,6 +448,7 @@ impl App {
             KeyCode::Char('?') => Action::ToggleHelp,
             KeyCode::Char('/') => Action::StartFilter,
             KeyCode::Char('S') => Action::StartSubtreeSearch,
+            KeyCode::Char('u') => Action::ToggleDuplicates,
             KeyCode::Char('0') => Action::ClearHighlight,
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = c.to_digit(10).unwrap() as usize - 1;
@@ -458,6 +526,8 @@ impl App {
                     self.top_files_cache.len()
                 } else if self.show_search {
                     self.search_results.len()
+                } else if self.show_duplicates {
+                    self.duplicate_rows.len()
                 } else {
                     self.display_children().len()
                 };
@@ -542,6 +612,18 @@ impl App {
                     self.show_search = false;
                     return Ok(());
                 }
+                if self.show_duplicates {
+                    match self.duplicate_rows.get(idx) {
+                        Some(DupRow::Member { index_path }) => {
+                            let idx_path = index_path.clone();
+                            self.navigate_to_absolute(idx_path);
+                            self.show_duplicates = false;
+                        }
+                        Some(DupRow::Header { .. }) => self.selected = idx,
+                        None => {}
+                    }
+                    return Ok(());
+                }
                 let now = Instant::now();
                 let is_double_click = matches!(
                     self.last_click,
@@ -562,6 +644,7 @@ impl App {
             Action::Refresh => self.refresh_requested = true,
             Action::ToggleTopFiles => {
                 self.show_search = false;
+                self.show_duplicates = false;
                 self.show_top_files = !self.show_top_files;
                 self.selected = 0;
                 if self.show_top_files {
@@ -580,6 +663,7 @@ impl App {
                     self.show_search = false;
                 } else {
                     self.show_top_files = false;
+                    self.show_duplicates = false;
                     self.search_mode = true;
                     self.search_query.clear();
                     self.selected = 0;
@@ -587,6 +671,15 @@ impl App {
             }
             Action::ToggleDetails => self.detailed = !self.detailed,
             Action::TogglePhysicalSize => self.use_physical = !self.use_physical,
+            Action::ToggleDuplicates => {
+                if self.show_duplicates {
+                    self.show_duplicates = false;
+                } else {
+                    self.show_search = false;
+                    self.show_top_files = false;
+                    self.duplicate_scan_requested = true;
+                }
+            }
             Action::ConfirmDelete | Action::CancelDelete => {}
         }
         Ok(())
@@ -629,6 +722,15 @@ impl App {
         {
             self.selected = pos;
         }
+    }
+
+    /// Like `navigate_to`, but for an `index_path` rooted at the whole
+    /// tree rather than the currently browsed directory — needed for
+    /// duplicate results, which are found by scanning from `tree.root`,
+    /// not from `current_node()` the way search/top-files results are.
+    fn navigate_to_absolute(&mut self, index_path: Vec<usize>) {
+        self.path_indices.clear();
+        self.navigate_to(index_path);
     }
 
     fn confirm_delete(&mut self) -> Result<()> {

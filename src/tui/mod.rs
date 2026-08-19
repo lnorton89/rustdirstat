@@ -20,6 +20,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -197,8 +198,70 @@ fn browse<B: ratatui::backend::Backend>(
         if app.refresh_requested {
             return Ok(BrowseOutcome::Refresh);
         }
+        if app.duplicate_scan_requested {
+            app.duplicate_scan_requested = false;
+            if let Some(groups) = run_duplicate_scan(terminal, &app.tree)? {
+                app.set_duplicate_results(groups);
+            }
+            changed = true;
+        }
         if changed {
             terminal.draw(|f| ui::draw(f, app))?;
         }
     }
+}
+
+/// Runs the duplicate-file scan with its own progress screen, the same
+/// shape as `scan_with_progress` above. Unlike that initial scan (which
+/// only reads directory metadata), hashing file *content* to find
+/// duplicates can genuinely take a while on a large tree, so it needs the
+/// same cancellable, blocking progress UI rather than running inline in
+/// `App::dispatch`.
+///
+/// Uses `thread::scope` (rather than `scan_with_progress`'s bare
+/// `thread::spawn`) so the worker can borrow `tree` directly instead of
+/// requiring an owned/`'static` copy — duplicate scanning runs against the
+/// tree already sitting in `App`, and cloning a potentially huge tree just
+/// to satisfy `'static` would be wasteful. That means a cancel can't just
+/// abandon the thread and return immediately the way scan cancellation
+/// does: `thread::scope` won't return until the worker finishes, so cancel
+/// instead sets `DupProgress::cancelled`, which the hashing loop checks
+/// between files to wind down quickly.
+fn run_duplicate_scan<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    tree: &crate::model::Tree,
+) -> Result<Option<Vec<crate::duplicates::DupGroup>>> {
+    let progress = crate::duplicates::DupProgress::default();
+    let started = Instant::now();
+
+    std::thread::scope(
+        |scope| -> Result<Option<Vec<crate::duplicates::DupGroup>>> {
+            let handle = scope.spawn(|| crate::duplicates::find_duplicates(tree, Some(&progress)));
+
+            let mut cancelled = false;
+            loop {
+                terminal.draw(|f| ui::draw_duplicate_progress(f, &progress, started))?;
+                if handle.is_finished() {
+                    break;
+                }
+                if event::poll(Duration::from_millis(150))? {
+                    if let Event::Key(k) = event::read()? {
+                        let cancel = k.kind == KeyEventKind::Press
+                            && (k.code == KeyCode::Char('q')
+                                || k.code == KeyCode::Esc
+                                || is_ctrl_c(&k));
+                        if cancel && !cancelled {
+                            cancelled = true;
+                            progress.cancelled.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+
+            let groups = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("duplicate scan thread panicked"))?;
+            Ok(if cancelled { None } else { Some(groups) })
+        },
+    )
 }

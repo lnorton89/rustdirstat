@@ -47,6 +47,7 @@ rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels dee
 | `f` | Toggle the "biggest files in this subtree" flat view |
 | `/` | Search/filter the current directory's direct children by name |
 | `S` | Search the entire current subtree by name (glob, or `re:` for regex) |
+| `u` | Find duplicate files (by content hash) across the whole scan |
 | `p` | Toggle logical vs. physical (on-disk) size everywhere |
 | `1`-`9` | Highlight a file-type category in the treemap |
 | `0` | Clear the highlight |

@@ -1,4 +1,4 @@
-use super::app::{Action, App, ClickZone};
+use super::app::{Action, App, ClickZone, DupRow};
 use super::nested::{self, TreemapItem};
 use super::theme;
 use crate::color::{self, Category};
@@ -51,6 +51,54 @@ pub fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
     f.render_widget(p, area);
 }
 
+pub fn draw_duplicate_progress(
+    f: &mut Frame,
+    progress: &crate::duplicates::DupProgress,
+    started: Instant,
+) {
+    let area = f.area();
+    let hashed = progress.hashed.load(Ordering::Relaxed);
+    let total = progress.candidates_total.load(Ordering::Relaxed);
+    let elapsed = started.elapsed().as_secs_f64();
+
+    let status = if total > 0 {
+        format!(
+            "Hashed {} of {} candidate files",
+            thousands(hashed),
+            thousands(total)
+        )
+    } else {
+        "Finding same-size candidates...".to_string()
+    };
+
+    let text = vec![
+        Line::from(Span::styled(
+            "rustdirstat",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Scanning for duplicates... {elapsed:.1}s")),
+        Line::from(status),
+        Line::from(""),
+        Line::from(Span::styled(
+            "(press q to cancel)",
+            Style::default().fg(theme::MUTED),
+        )),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(theme::panel_border(true))
+        .title(" rustdirstat ");
+    let p = Paragraph::new(text)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(p, area);
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.click_zones.clear();
 
@@ -67,7 +115,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, app, chunks[0]);
 
-    if app.show_search {
+    if app.show_duplicates {
+        draw_duplicates(f, app, chunks[1]);
+    } else if app.show_search {
         draw_search_results(f, app, chunks[1]);
     } else if app.show_top_files {
         draw_top_files(f, app, chunks[1]);
@@ -238,6 +288,89 @@ fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
             msg_area,
         );
     }
+
+    let inner_y = area.y + 1;
+    let inner_h = area.height.saturating_sub(2) as usize;
+    let offset = state.offset();
+    for row in offset..(offset + inner_h).min(count) {
+        let y = inner_y + (row - offset) as u16;
+        app.click_zones.push(ClickZone {
+            x: area.x + 1,
+            y,
+            w: area.width.saturating_sub(2),
+            h: 1,
+            action: Action::SelectRow(row),
+        });
+    }
+}
+
+fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
+    let root_path = app.tree.root_path.clone();
+    let mut group_num = 0usize;
+
+    let items: Vec<ListItem> = app
+        .duplicate_rows
+        .iter()
+        .map(|row| match row {
+            DupRow::Header { size, count } => {
+                group_num += 1;
+                let wasted = *size * (*count as u64 - 1);
+                ListItem::new(Line::from(Span::styled(
+                    format!(
+                        "Group {group_num} — {count} × {}  ({} wasted)",
+                        human_bytes(*size),
+                        human_bytes(wasted)
+                    ),
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )))
+            }
+            DupRow::Member { index_path } => {
+                let full_path = app.tree.path_for(index_path);
+                let rel = full_path.strip_prefix(&root_path).unwrap_or(&full_path);
+                ListItem::new(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(rel.display().to_string(), Style::default().fg(Color::Reset)),
+                ]))
+            }
+        })
+        .collect();
+
+    let count = app.duplicate_rows.len();
+    let mut title = if app.duplicate_group_count == 0 {
+        " No duplicate files found".to_string()
+    } else {
+        format!(
+            " Duplicates: {} groups, {} wasted",
+            thousands(app.duplicate_group_count as u64),
+            human_bytes(app.duplicate_total_wasted)
+        )
+    };
+    if app.duplicate_truncated {
+        title.push_str(" (showing largest groups)");
+    }
+    title.push_str(" — u to close ");
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(theme::border_type())
+                .border_style(theme::panel_border(true))
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        )
+        .highlight_style(theme::selection());
+
+    let mut state = ListState::default();
+    if count > 0 {
+        state.select(Some(app.selected.min(count - 1)));
+    }
+    f.render_stateful_widget(list, area, &mut state);
 
     let inner_y = area.y + 1;
     let inner_h = area.height.saturating_sub(2) as usize;
@@ -1028,7 +1161,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 22] = [
+    let rows: [(&str, &str); 23] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
@@ -1040,6 +1173,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
         ("f", "Toggle the \"biggest files\" flat view"),
         ("/", "Search/filter the current directory by name"),
         ("S", "Search this entire subtree (glob or re: regex)"),
+        ("u", "Find duplicate files (by content hash) across the whole scan"),
         ("1-9", "Highlight a file-type category in the treemap"),
         ("0", "Clear the highlight"),
         ("o", "Open the selected item in the OS file manager"),
