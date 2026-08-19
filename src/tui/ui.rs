@@ -1160,7 +1160,19 @@ impl<'a> Widget for TreemapWidget<'a> {
                 draw_border(buf, area, item.x, item.y, item.w, item.h, Color::White);
             }
 
-            if item.w >= 3 && item.h >= 1 {
+            // A dense tree (a build output directory, node_modules, ...)
+            // recurses into thousands of small tiles — that's real data,
+            // not a bug, and each one still needs its own color to be
+            // accurate. But labeling every single one, down to a 3-cell
+            // sliver, turns the treemap into illegible fragments like
+            // "bu…"/"qu…" that add noise without conveying anything —
+            // worse than no label, since it reads as clutter rather than
+            // as missing information. WinDirStat doesn't label tiles it
+            // can't fit a real name into either; small tiles just show
+            // their color. 6 cells is enough for a short full name (e.g.
+            // "src/") or a handful of real characters before the ellipsis
+            // — below that, skip the label rather than draw noise.
+            if item.w >= 6 && item.h >= 1 {
                 let label = truncate(&item.name, item.w as usize - 1);
                 let style = Style::default().fg(contrast_fg(bg)).bg(bg);
                 let style = if item.is_dir {
