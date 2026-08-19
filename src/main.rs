@@ -1,21 +1,11 @@
-mod color;
-mod config;
-mod csv_export;
-mod duplicates;
-mod model;
-mod platform;
-mod report;
-mod scanner;
-mod stats;
-mod tui;
-mod util;
-mod wintools;
-
 use anyhow::{bail, Result};
 use clap::Parser;
+use rustdirstat::{csv_export, report, scanner, tui};
 use std::path::PathBuf;
 
-/// A cross-platform, terminal-based clone of WinDirStat for visualizing disk usage.
+/// A cross-platform clone of WinDirStat for visualizing disk usage. Run
+/// with no flags to launch the terminal UI (`rustdirstat-gui` for the
+/// desktop GUI instead).
 #[derive(Parser, Debug)]
 #[command(name = "rustdirstat", version, about)]
 struct Cli {

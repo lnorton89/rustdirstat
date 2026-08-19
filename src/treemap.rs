@@ -1,7 +1,10 @@
 //! A squarified treemap layout (Bruls, Huizing, van Wijk), operating on
-//! integer terminal cells. Given a list of relative sizes and a target
-//! width/height, returns one rectangle per input, in the same order, tiling
-//! the target area with minimal-aspect-ratio rectangles.
+//! an abstract integer grid — terminal cells for the TUI, pixels for the
+//! GUI. Given a list of relative sizes and a target width/height, returns
+//! one rectangle per input, in the same order, tiling the target area with
+//! minimal-aspect-ratio rectangles. Shared by both front ends rather than
+//! duplicated, since the layout math itself has nothing to do with which
+//! one is rendering the result.
 
 #[derive(Debug, Clone, Copy)]
 pub struct Rect {

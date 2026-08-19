@@ -4,10 +4,10 @@
 //! the treemap show real internal structure instead of one flat blob for
 //! any directory that dominates its parent.
 
-use super::treemap;
-use super::treemap::Rect;
 use crate::color::Category;
 use crate::model::Node;
+use crate::treemap;
+use crate::treemap::Rect;
 
 pub struct TreemapItem {
     pub x: u16,

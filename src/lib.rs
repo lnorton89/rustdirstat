@@ -1,0 +1,14 @@
+pub mod color;
+pub mod config;
+pub mod csv_export;
+pub mod duplicates;
+pub mod gui;
+pub mod model;
+pub mod platform;
+pub mod report;
+pub mod scanner;
+pub mod stats;
+pub mod treemap;
+pub mod tui;
+pub mod util;
+pub mod wintools;

@@ -3,7 +3,6 @@ mod nested;
 mod search;
 mod theme;
 mod top_files;
-mod treemap;
 mod ui;
 
 use crate::scanner::{self, Progress};
