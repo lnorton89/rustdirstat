@@ -841,6 +841,23 @@ impl App {
             Action::ExportReport => self.export_report(),
             Action::ExportCsv => self.export_csv(),
             Action::StartFilter => {
+                // Filtering only applies to the normal browse view (see
+                // `display_children`) — search results and duplicate
+                // groups aren't filtered by it at all, so typing here
+                // while one of those flat views is open would be dead
+                // input with a real side effect: `self.filter` still gets
+                // set, and it stays active once the user leaves the flat
+                // view, silently filtering whatever directory they land
+                // in next by a string they never meant to apply there.
+                // Closes the other flat views the same way
+                // ToggleTopFiles/StartSubtreeSearch/ToggleDuplicates
+                // already do, rather than navigating anywhere — starting
+                // a filter isn't "act on the selected row", so it
+                // shouldn't move the browse location the way
+                // exit_flat_view_if_needed's callers do.
+                self.show_search = false;
+                self.show_top_files = false;
+                self.show_duplicates = false;
                 self.filter_mode = true;
                 self.filter.clear();
                 self.selected = 0;

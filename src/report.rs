@@ -54,6 +54,14 @@ fn build_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth:
             stat.count
         );
     }
+    // Matches write_children's "... and N more" above — a `--top` small
+    // enough to also truncate this list (at most Category::COUNT rows, so
+    // only ever with an unusually small --top) should say so here too,
+    // rather than silently dropping categories with no indication
+    // anywhere in the report that something was cut.
+    if ext_stats.len() > top {
+        let _ = writeln!(out, "  ... and {} more", ext_stats.len() - top);
+    }
     out
 }
 

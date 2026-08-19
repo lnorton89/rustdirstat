@@ -233,6 +233,18 @@ fn quit_key_works_after_large_event_backlog() {
         QUIT_TIMEOUT,
         FLOOD_EVENTS
     );
+    // `is_some()` alone only proves the process died within the timeout —
+    // a regression that made the flood *crash* the app (e.g. a panic
+    // reading stale state) would exit just as fast and pass that check,
+    // even though this test is specifically guarding "the quit key
+    // works," not "the app doesn't crash." A clean quit returns Ok(())
+    // from main, so it should exit 0; a Rust panic exits 101 instead.
+    assert!(
+        status.unwrap().success(),
+        "rustdirstat exited with a failure status after 'q' — it died \
+         (e.g. panicked) rather than quitting cleanly: {:?}",
+        status
+    );
 }
 
 #[test]
@@ -267,5 +279,13 @@ fn ctrl_c_works_after_large_event_backlog_and_overrides_help_popup() {
          (with the help popup open)",
         QUIT_TIMEOUT,
         FLOOD_EVENTS
+    );
+    // See the matching assertion in quit_key_works_after_large_event_backlog
+    // for why process death alone isn't sufficient.
+    assert!(
+        status.unwrap().success(),
+        "rustdirstat exited with a failure status after Ctrl+C — it died \
+         (e.g. panicked) rather than quitting cleanly: {:?}",
+        status
     );
 }
