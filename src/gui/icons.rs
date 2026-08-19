@@ -61,6 +61,7 @@ pub enum Icon {
     Settings,
     Tools,
     ChevronRight,
+    ChevronUp,
     ChevronDown,
     Search,
     Duplicate,
@@ -73,7 +74,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::App,
         Self::Folder,
         Self::FolderOpen,
@@ -91,6 +92,7 @@ impl Icon {
         Self::Settings,
         Self::Tools,
         Self::ChevronRight,
+        Self::ChevronUp,
         Self::ChevronDown,
         Self::Search,
         Self::Duplicate,
@@ -233,6 +235,7 @@ impl Icon {
                 line(&[(12.8, 1.7), (10.4, 4.1), (12.0, 5.7), (14.4, 3.3)]);
             }
             Self::ChevronRight => line(&[(5.5, 3.0), (10.5, 8.0), (5.5, 13.0)]),
+            Self::ChevronUp => line(&[(3.0, 10.5), (8.0, 5.5), (13.0, 10.5)]),
             Self::ChevronDown => line(&[(3.0, 5.5), (8.0, 10.5), (13.0, 5.5)]),
             Self::Duplicate => {
                 box_outline(1.5, 4.5, 11.5, 14.0, 1.0);
@@ -290,7 +293,7 @@ mod tests {
 
     #[test]
     fn icon_catalog_has_no_missing_variants() {
-        assert_eq!(Icon::ALL.len(), 25);
+        assert_eq!(Icon::ALL.len(), 26);
     }
 
     #[test]

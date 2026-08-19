@@ -640,6 +640,9 @@ static TEST_DIRECTORY_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>>
 static TEST_DIRECTORY_HEADER_RECTS: std::sync::Mutex<Vec<(&'static str, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
+static TEST_DIRECTORY_HEADER_ICONS: std::sync::Mutex<Vec<(&'static str, Option<Icon>)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
 static TEST_ICON_MENU_LAYOUTS: std::sync::Mutex<Vec<(String, egui::Rect, egui::Rect, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
@@ -655,7 +658,13 @@ static TEST_SEARCH_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =
 static TEST_DUPLICATE_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 
-fn sortable_header(ui: &mut egui::Ui, label: &'static str) -> egui::Response {
+fn sortable_header(
+    ui: &mut egui::Ui,
+    label: &'static str,
+    direction: Option<Icon>,
+) -> egui::Response {
+    const ICON_SIZE: f32 = 12.0;
+    const ICON_GAP: f32 = 5.0;
     let galley = egui::WidgetText::from(RichText::new(label).strong()).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
@@ -666,12 +675,28 @@ fn sortable_header(ui: &mut egui::Ui, label: &'static str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let text_pos = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
-        ui.painter().galley(
-            text_pos,
-            galley,
-            ui.style().interact(&response).text_color(),
-        );
+        let color = if direction.is_some() {
+            Color32::from_rgb(104, 168, 255)
+        } else {
+            ui.style().interact(&response).text_color()
+        };
+        ui.painter().galley(text_pos, galley.clone(), color);
+        if let Some(icon) = direction {
+            let icon_rect = egui::Rect::from_center_size(
+                egui::pos2(
+                    text_pos.x + galley.size().x + ICON_GAP + ICON_SIZE * 0.5,
+                    rect.center().y,
+                ),
+                Vec2::splat(ICON_SIZE),
+            );
+            icon.paint(ui.painter(), icon_rect, color);
+        }
     }
+    #[cfg(test)]
+    TEST_DIRECTORY_HEADER_ICONS
+        .lock()
+        .unwrap()
+        .push((label, direction));
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(format!("Sort by {label}"))
@@ -790,7 +815,15 @@ fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
     table
         .header(28.0, |mut h| {
             h.col(|ui| {
-                let response = sortable_header(ui, "Name");
+                let response = sortable_header(
+                    ui,
+                    "Name",
+                    match app.sort {
+                        SortMode::NameAsc => Some(Icon::ChevronUp),
+                        SortMode::NameDesc => Some(Icon::ChevronDown),
+                        _ => None,
+                    },
+                );
                 #[cfg(test)]
                 TEST_DIRECTORY_HEADER_RECTS
                     .lock()
@@ -805,7 +838,15 @@ fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                 }
             });
             h.col(|ui| {
-                let response = sortable_header(ui, "Size");
+                let response = sortable_header(
+                    ui,
+                    "Size",
+                    match app.sort {
+                        SortMode::SizeAsc => Some(Icon::ChevronUp),
+                        SortMode::SizeDesc => Some(Icon::ChevronDown),
+                        _ => None,
+                    },
+                );
                 #[cfg(test)]
                 TEST_DIRECTORY_HEADER_RECTS
                     .lock()
@@ -837,7 +878,15 @@ fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                     ui.strong("Subdirs");
                 });
                 h.col(|ui| {
-                    let response = sortable_header(ui, "Last change");
+                    let response = sortable_header(
+                        ui,
+                        "Last change",
+                        match app.sort {
+                            SortMode::ModifiedAsc => Some(Icon::ChevronUp),
+                            SortMode::ModifiedDesc => Some(Icon::ChevronDown),
+                            _ => None,
+                        },
+                    );
                     #[cfg(test)]
                     TEST_DIRECTORY_HEADER_RECTS
                         .lock()
@@ -2035,32 +2084,56 @@ mod interaction_tests {
             .collect()
     }
 
+    fn latest_header_icon(label: &str) -> Option<Icon> {
+        TEST_DIRECTORY_HEADER_ICONS
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(header, _)| *header == label)
+            .and_then(|(_, icon)| *icon)
+    }
+
     #[test]
     fn clicking_directory_headers_changes_and_toggles_sort_order() {
         let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let ctx = egui::Context::default();
         let mut app = app_with_sortable_files();
 
+        render_directory(&ctx, &mut app, raw_input(Vec::new()));
+        assert_eq!(latest_header_icon("Size"), Some(Icon::ChevronDown));
+        assert_eq!(latest_header_icon("Name"), None);
+        assert_eq!(latest_header_icon("Last change"), None);
+
         click_directory_header(&ctx, &mut app, "Name");
         assert!(matches!(app.sort, SortMode::NameAsc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![1, 2, 0]);
+        assert_eq!(latest_header_icon("Name"), Some(Icon::ChevronUp));
+        assert_eq!(latest_header_icon("Size"), None);
         click_directory_header(&ctx, &mut app, "Name");
         assert!(matches!(app.sort, SortMode::NameDesc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
+        assert_eq!(latest_header_icon("Name"), Some(Icon::ChevronDown));
 
         click_directory_header(&ctx, &mut app, "Size");
         assert!(matches!(app.sort, SortMode::SizeDesc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
+        assert_eq!(latest_header_icon("Size"), Some(Icon::ChevronDown));
+        assert_eq!(latest_header_icon("Name"), None);
         click_directory_header(&ctx, &mut app, "Size");
         assert!(matches!(app.sort, SortMode::SizeAsc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![1, 2, 0]);
+        assert_eq!(latest_header_icon("Size"), Some(Icon::ChevronUp));
 
         click_directory_header(&ctx, &mut app, "Last change");
         assert!(matches!(app.sort, SortMode::ModifiedDesc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![1, 2, 0]);
+        assert_eq!(latest_header_icon("Last change"), Some(Icon::ChevronDown));
+        assert_eq!(latest_header_icon("Size"), None);
         click_directory_header(&ctx, &mut app, "Last change");
         assert!(matches!(app.sort, SortMode::ModifiedAsc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
+        assert_eq!(latest_header_icon("Last change"), Some(Icon::ChevronUp));
     }
 
     #[test]
