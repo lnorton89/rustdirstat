@@ -96,6 +96,19 @@ impl Tree {
         }
         node
     }
+
+    /// True only when the scan root is an actual filesystem/volume root
+    /// (`/` on Unix, `C:\` or `\\?\C:\` on Windows) rather than some
+    /// subfolder. `volume_free`/`volume_total` are always the *whole
+    /// volume's* numbers, which only mean anything relative to the
+    /// scanned tree when the tree IS the whole volume — comparing a
+    /// small subfolder's size against gigabytes of unrelated free space
+    /// on the rest of the drive would swamp the treemap with a free-space
+    /// tile representing almost the entire area, which is what WinDirStat
+    /// avoids by only ever showing it for a whole-drive scan.
+    pub fn is_volume_root(&self) -> bool {
+        self.root_path.parent().is_none()
+    }
 }
 
 pub fn category_for_name(name: &str) -> Category {

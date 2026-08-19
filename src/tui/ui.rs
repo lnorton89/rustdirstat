@@ -158,7 +158,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(pending) = &app.pending_delete {
         let name = pending.name.clone();
         let permanent = pending.permanent;
-        draw_confirm_popup(f, app, &name, permanent);
+        let is_dir = pending.is_dir;
+        draw_confirm_popup(f, app, &name, permanent, is_dir);
     }
 
     if app.search_mode {
@@ -415,7 +416,7 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     );
     let bar = theme::title_bar();
     let mut spans = vec![Span::styled(title, bar)];
-    if app.path_indices.is_empty() {
+    if app.path_indices.is_empty() && app.tree.is_volume_root() {
         if let (Some(free), Some(total)) = (app.tree.volume_free, app.tree.volume_total) {
             spans.push(Span::styled(
                 format!(
@@ -778,9 +779,14 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Free space only makes sense relative to the whole volume, so it's
-    // only shown at the root of what was scanned — not injected into every
-    // subfolder's treemap, where it wouldn't correspond to anything real.
-    let free_space = if app.path_indices.is_empty() {
+    // only shown when the scan root IS the volume root — not for every
+    // scan just because you happen to be browsing at its top (a small
+    // subfolder's content compared against gigabytes of unrelated free
+    // space elsewhere on the drive would swamp the treemap with a
+    // free-space tile representing almost the entire area), and not
+    // injected into subfolder views either, where it wouldn't correspond
+    // to anything real.
+    let free_space = if app.path_indices.is_empty() && app.tree.is_volume_root() {
         app.tree.volume_free
     } else {
         None
@@ -1072,7 +1078,7 @@ fn shadow(f: &mut Frame, area: Rect) {
     }
 }
 
-fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool) {
+fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool, is_dir: bool) {
     let area = centered_rect(60, 24, f.area());
     shadow(f, area);
     f.render_widget(Clear, area);
@@ -1101,8 +1107,13 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool)
     };
     let mut text = vec![Line::from(format!("Delete '{name}'?")), Line::from("")];
     text.extend(action_desc);
+    if is_dir {
+        text.push(Line::from(
+            "Or empty it — delete its contents, keep the folder.",
+        ));
+    }
     text.push(Line::from(""));
-    text.push(Line::from(vec![
+    let mut buttons = vec![
         Span::styled(
             " [ Y ]es ",
             Style::default()
@@ -1111,14 +1122,25 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("   "),
-        Span::styled(
-            " [ N ]o ",
+    ];
+    if is_dir {
+        buttons.push(Span::styled(
+            " [ E ]mpty ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Gray)
+                .bg(theme::WARNING)
                 .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+        ));
+        buttons.push(Span::raw("   "));
+    }
+    buttons.push(Span::styled(
+        " [ N ]o ",
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Gray)
+            .add_modifier(Modifier::BOLD),
+    ));
+    text.push(Line::from(buttons));
     let p = Paragraph::new(text).wrap(Wrap { trim: true });
     f.render_widget(p, inner);
 
@@ -1129,7 +1151,7 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool)
         h: area.height,
         action: Action::CancelDelete,
     });
-    let button_row = inner.y + 4;
+    let button_row = inner.y + if is_dir { 5 } else { 4 };
     app.click_zones.push(ClickZone {
         x: inner.x,
         y: button_row,
@@ -1137,8 +1159,19 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool)
         h: 1,
         action: Action::ConfirmDelete,
     });
+    let mut next_x = inner.x + 12;
+    if is_dir {
+        app.click_zones.push(ClickZone {
+            x: next_x,
+            y: button_row,
+            w: 11,
+            h: 1,
+            action: Action::ConfirmEmpty,
+        });
+        next_x += 14;
+    }
     app.click_zones.push(ClickZone {
-        x: inner.x + 12,
+        x: next_x,
         y: button_row,
         w: 8,
         h: 1,

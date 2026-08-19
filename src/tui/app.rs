@@ -63,6 +63,7 @@ pub enum Action {
     SelectRow(usize),
     NavigateTo(Vec<usize>),
     ConfirmDelete,
+    ConfirmEmpty,
     CancelDelete,
     Refresh,
     ToggleTopFiles,
@@ -108,6 +109,10 @@ pub struct PendingDelete {
     pub orig_idx: usize,
     pub name: String,
     pub permanent: bool,
+    /// Whether the target is a directory — the delete-confirm popup only
+    /// offers an "Empty" (keep the folder, delete its contents) option
+    /// when this is true.
+    pub is_dir: bool,
 }
 
 pub struct App {
@@ -424,9 +429,11 @@ impl App {
             self.show_help = false;
             return Ok(());
         }
-        if self.pending_delete.is_some() {
+        if let Some(pending) = &self.pending_delete {
             let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                 Action::ConfirmDelete
+            } else if pending.is_dir && matches!(code, KeyCode::Char('e') | KeyCode::Char('E')) {
+                Action::ConfirmEmpty
             } else {
                 Action::CancelDelete
             };
@@ -544,6 +551,7 @@ impl App {
                 orig_idx: *idx,
                 name: node.name.clone(),
                 permanent,
+                is_dir: node.is_dir,
             });
         }
     }
@@ -552,6 +560,7 @@ impl App {
         if self.pending_delete.is_some() {
             match action {
                 Action::ConfirmDelete => self.confirm_delete()?,
+                Action::ConfirmEmpty => self.confirm_empty()?,
                 _ => self.pending_delete = None,
             }
             return Ok(());
@@ -720,7 +729,7 @@ impl App {
                     self.duplicate_scan_requested = true;
                 }
             }
-            Action::ConfirmDelete | Action::CancelDelete => {}
+            Action::ConfirmDelete | Action::ConfirmEmpty | Action::CancelDelete => {}
         }
         Ok(())
     }
@@ -863,6 +872,84 @@ impl App {
             "Moved to trash"
         };
         self.message = Some(format!("{verb}: {}", path.display()));
+        Ok(())
+    }
+
+    /// Deletes a directory's contents (each direct child moved to trash)
+    /// while keeping the directory itself, unlike `confirm_delete` which
+    /// removes the node from its parent entirely. The node's own
+    /// aggregates are zeroed out in place rather than the node being
+    /// removed, so it still shows up afterward — just empty.
+    fn confirm_empty(&mut self) -> Result<()> {
+        let pending = match self.pending_delete.take() {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if !pending.is_dir {
+            return Ok(());
+        }
+
+        let mut full_index_path = self.path_indices.clone();
+        full_index_path.push(pending.orig_idx);
+        let path = self.tree.path_for(&full_index_path);
+        let target = self.tree.node_for(&full_index_path);
+
+        let unreadable_delta = target.unreadable_count;
+        let physical_delta = target.physical_size;
+        let size = target.size;
+        let file_count = target.file_count;
+        let dir_count_delta = target.dir_count;
+        let removed_ext = RemovedExt::Dir(target.ext_totals.clone());
+
+        let children: Vec<std::path::PathBuf> = std::fs::read_dir(&path)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        for child_path in children {
+            trash::delete(&child_path)
+                .map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+        }
+
+        let mut n = &mut self.tree.root;
+        subtract_totals(
+            n,
+            size,
+            physical_delta,
+            file_count,
+            dir_count_delta,
+            unreadable_delta,
+            &removed_ext,
+        );
+        for &idx in &self.path_indices {
+            n = &mut n.children[idx];
+            subtract_totals(
+                n,
+                size,
+                physical_delta,
+                file_count,
+                dir_count_delta,
+                unreadable_delta,
+                &removed_ext,
+            );
+        }
+        let node = &mut n.children[pending.orig_idx];
+        node.size = 0;
+        node.physical_size = 0;
+        node.file_count = 0;
+        node.dir_count = 0;
+        node.unreadable_count = 0;
+        node.ext_totals = vec![(0u64, 0u64); Category::COUNT];
+        node.children.clear();
+
+        let len = self.display_children().len();
+        if self.selected >= len {
+            self.selected = len.saturating_sub(1);
+        }
+        self.refresh_ext_stats();
+        if self.show_top_files {
+            self.refresh_top_files();
+        }
+        self.message = Some(format!("Emptied: {}", path.display()));
         Ok(())
     }
 }
