@@ -283,6 +283,7 @@ impl App {
             treemap_split: Some(self.treemap_split),
             detailed: Some(self.detailed),
             use_physical: Some(self.use_physical),
+            ..Config::default()
         }
     }
 

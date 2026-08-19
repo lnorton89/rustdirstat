@@ -1,8 +1,8 @@
 mod app;
 mod nested;
-mod search;
+pub(crate) mod search;
 mod theme;
-mod top_files;
+pub(crate) mod top_files;
 mod ui;
 
 use crate::scanner::{self, Progress};

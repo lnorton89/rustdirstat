@@ -6,6 +6,7 @@
 //! this front end has instead.
 
 mod app;
+mod icons;
 mod treemap_layout;
 mod ui;
 
@@ -13,18 +14,21 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 pub fn run(root: PathBuf) -> Result<()> {
-    let tree = crate::scanner::scan(&root, None)?;
-    let gui_app = app::GuiApp::new(tree);
+    // Open the native shell immediately; the initial scan runs on the same
+    // background path as later rescans so a large drive never looks like a
+    // failed launch while the process is busy walking the filesystem.
+    let gui_app = app::GuiApp::loading(root);
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 750.0])
-            .with_min_inner_size([600.0, 400.0]),
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([720.0, 480.0])
+            .with_icon(icons::app_icon()),
         ..Default::default()
     };
 
     eframe::run_native(
-        "rustdirstat",
+        "RustDirStat",
         options,
         Box::new(|_cc| Ok(Box::new(gui_app))),
     )

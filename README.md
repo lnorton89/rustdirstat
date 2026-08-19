@@ -26,7 +26,24 @@ rustdirstat [PATH]                # launch the interactive TUI (defaults to '.')
 rustdirstat --no-tui [PATH]       # print a plain-text report instead
 rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels deep
 rustdirstat --csv out.csv [PATH]  # scan and write a full CSV export instead
+rustdirstat-gui [PATH]            # launch the native WinDirStat-style GUI
 ```
+
+The GUI implements the three coupled views from the installed WinDirStat
+1.1.2 reference: an expandable directory tree, exact-extension list, and
+interactive treemap. Use the toolbar orientation button (↕/↔) or the
+**Treemap** menu to place the treemap below the lists or to their right. Every
+splitter can collapse its pane to zero. See
+[`docs/WINDIRSTAT_PARITY.md`](docs/WINDIRSTAT_PARITY.md) for the view-by-view
+comparison.
+
+Long-running GUI work stays off the frame thread: rescans show live file,
+folder, and byte counters while the existing result remains browsable;
+duplicate hashing and Windows maintenance commands also run in background
+workers. Layout, visibility, sizing mode, and treemap presentation preferences
+are restored on the next launch. The directory tree supports right-click
+actions and Explorer-style arrow/Enter navigation, and automatically switches
+to a compact column set in narrow panes.
 
 | Flag | Description |
 |---|---|
