@@ -1,5 +1,6 @@
 mod color;
 mod config;
+mod csv_export;
 mod duplicates;
 mod model;
 mod platform;
@@ -32,6 +33,11 @@ struct Cli {
     /// Maximum depth to descend when producing the report
     #[arg(short = 'd', long = "depth", default_value_t = 2)]
     depth: usize,
+
+    /// Scan and write a full CSV export (one row per file/directory) to
+    /// this path instead of launching the TUI or printing a text report
+    #[arg(long = "csv", value_name = "PATH")]
+    csv: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -42,7 +48,10 @@ fn main() -> Result<()> {
     }
     let root = cli.path.canonicalize().unwrap_or(cli.path.clone());
 
-    if cli.no_tui {
+    if let Some(csv_path) = &cli.csv {
+        let tree = scanner::scan(&root, None)?;
+        csv_export::write_csv_to_file(&tree.root_path, &tree.root, csv_path)?;
+    } else if cli.no_tui {
         let tree = scanner::scan(&root, None)?;
         report::print_report(&tree.root_path, &tree.root, cli.top, cli.depth);
     } else {

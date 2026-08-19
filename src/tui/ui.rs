@@ -1161,7 +1161,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 23] = [
+    let rows: [(&str, &str); 24] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
@@ -1179,6 +1179,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
         ("o", "Open the selected item in the OS file manager"),
         ("r", "Rescan from the root (keeps your current location)"),
         ("e", "Export a text report of the current view to a file"),
+        ("E", "Export a full CSV of the current view's subtree to a file"),
         ("d", "Delete the selected item (moves to Recycle Bin/Trash)"),
         ("D", "Delete PERMANENTLY (bypasses Recycle Bin/Trash)"),
         ("?", "Toggle this help"),

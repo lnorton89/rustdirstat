@@ -25,6 +25,7 @@ cargo build --release
 rustdirstat [PATH]                # launch the interactive TUI (defaults to '.')
 rustdirstat --no-tui [PATH]       # print a plain-text report instead
 rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels deep
+rustdirstat --csv out.csv [PATH]  # scan and write a full CSV export instead
 ```
 
 | Flag | Description |
@@ -32,6 +33,7 @@ rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels dee
 | `-n`, `--no-tui` | Print a text report instead of opening the TUI |
 | `-t`, `--top <N>` | Entries shown per directory in report mode (default 20) |
 | `-d`, `--depth <N>` | Depth of the report tree (default 2) |
+| `--csv <PATH>` | Scan and write a full CSV export (one row per file/directory: path, type, size, physical_size, files, dirs, modified, unreadable) instead of opening the TUI |
 
 ## TUI keybindings
 
@@ -54,6 +56,7 @@ rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels dee
 | `o` | Open the selected item in the OS file manager |
 | `r` | Rescan from the root (keeps your current location) |
 | `e` | Export a text report of the current view to a file |
+| `E` | Export a full CSV of the current view's subtree to a file |
 | `d` | Delete the selected item — moves it to the Recycle Bin/Trash |
 | `D` | Delete **permanently**, bypassing the Recycle Bin/Trash |
 | `?` | Toggle the in-app help screen |

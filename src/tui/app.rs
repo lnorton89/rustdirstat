@@ -76,6 +76,7 @@ pub enum Action {
     StartResize,
     TogglePhysicalSize,
     ToggleDuplicates,
+    ExportCsv,
 }
 
 /// One row of the flattened duplicate-groups view: either a group header
@@ -480,6 +481,7 @@ impl App {
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('f') => Action::ToggleTopFiles,
             KeyCode::Char('e') => Action::ExportReport,
+            KeyCode::Char('E') => Action::ExportCsv,
             KeyCode::Char('m') => Action::ToggleDetails,
             KeyCode::Char('p') => Action::TogglePhysicalSize,
             KeyCode::Char('?') => Action::ToggleHelp,
@@ -690,6 +692,7 @@ impl App {
             }
             Action::ToggleHelp => self.show_help = !self.show_help,
             Action::ExportReport => self.export_report(),
+            Action::ExportCsv => self.export_csv(),
             Action::StartFilter => {
                 self.filter_mode = true;
                 self.filter.clear();
@@ -738,6 +741,23 @@ impl App {
         ) {
             Ok(()) => self.message = Some(format!("Report written to {filename}")),
             Err(e) => self.message = Some(format!("Failed to write report: {e}")),
+        }
+    }
+
+    fn export_csv(&mut self) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let filename = format!("rustdirstat-export-{secs}.csv");
+        let path = self.current_path();
+        match crate::csv_export::write_csv_to_file(
+            &path,
+            self.current_node(),
+            std::path::Path::new(&filename),
+        ) {
+            Ok(()) => self.message = Some(format!("CSV written to {filename}")),
+            Err(e) => self.message = Some(format!("Failed to write CSV: {e}")),
         }
     }
 
