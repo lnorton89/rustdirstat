@@ -75,9 +75,17 @@ pub fn category_for_ext(ext: &str) -> Category {
         "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" => Category::Audio,
         "doc" | "docx" | "pdf" | "txt" | "md" | "odt" | "rtf" | "xls" | "xlsx" | "ppt" | "pptx"
         | "csv" => Category::Documents,
-        "exe" | "dll" | "so" | "dylib" | "bin" | "app" | "msi" => Category::Programs,
+        // Compiled/binary build artifacts (static libs, object files, debug
+        // symbols, ...) — conceptually the same bucket as a finished
+        // executable even though you wouldn't run them directly. Without
+        // this, a build output directory (cargo's target/, node_modules,
+        // a C/C++ build tree) reads as almost entirely the catch-all
+        // "Other" color, since none of these extensions are documents,
+        // media, or archives either — they just have nowhere else to go.
+        "exe" | "dll" | "so" | "dylib" | "bin" | "app" | "msi" | "rlib" | "rmeta" | "a" | "lib"
+        | "o" | "obj" | "pdb" | "ilk" | "exp" | "class" | "jar" | "wasm" => Category::Programs,
         "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "h" | "hpp" | "java" | "go"
-        | "rb" | "php" | "html" | "css" | "json" | "toml" | "yaml" | "yml" | "sh" => {
+        | "rb" | "php" | "html" | "css" | "json" | "toml" | "yaml" | "yml" | "sh" | "d" => {
             Category::Source
         }
         "" => Category::NoExtension,
