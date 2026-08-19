@@ -195,7 +195,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_search_prompt(f: &mut Frame, app: &mut App) {
-    let area = centered_rect(60, 20, f.area());
+    let full_area = f.area();
+    let inner_w = (full_area.width as u32 * 60 / 100).saturating_sub(2) as usize;
+    let hint_lines = wrap_text(
+        "Enter to search, Esc to cancel. * and ? are wildcards; prefix with re: for a regex.",
+        inner_w,
+    );
+    let content_rows = 2 + hint_lines.len() as u16;
+    let area = centered_rect_for_lines(60, content_rows, full_area);
     shadow(f, area);
     f.render_widget(Clear, area);
     let block = Block::default()
@@ -209,20 +216,31 @@ fn draw_search_prompt(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let text =
-        vec![
-        Line::from(vec![Span::raw("> "), Span::raw(&app.search_query), Span::raw("▌")]),
+    let mut text = vec![
+        Line::from(vec![
+            Span::raw("> "),
+            Span::raw(&app.search_query),
+            Span::raw("▌"),
+        ]),
         Line::from(""),
-        Line::from(Span::styled(
-            "Enter to search, Esc to cancel. * and ? are wildcards; prefix with re: for a regex.",
-            Style::default().fg(theme::MUTED),
-        )),
     ];
-    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+    text.extend(
+        hint_lines
+            .into_iter()
+            .map(|l| Line::from(Span::styled(l, Style::default().fg(theme::MUTED)))),
+    );
+    f.render_widget(Paragraph::new(text), inner);
 }
 
 fn draw_move_prompt(f: &mut Frame, app: &mut App) {
-    let area = centered_rect(60, 20, f.area());
+    let full_area = f.area();
+    let inner_w = (full_area.width as u32 * 60 / 100).saturating_sub(2) as usize;
+    let hint_lines = wrap_text(
+        "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
+        inner_w,
+    );
+    let content_rows = 2 + hint_lines.len() as u16;
+    let area = centered_rect_for_lines(60, content_rows, full_area);
     shadow(f, area);
     f.render_widget(Clear, area);
     let name = app
@@ -241,19 +259,20 @@ fn draw_move_prompt(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let text = vec![
+    let mut text = vec![
         Line::from(vec![
             Span::raw("> "),
             Span::raw(&app.move_destination),
             Span::raw("▌"),
         ]),
         Line::from(""),
-        Line::from(Span::styled(
-            "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
-            Style::default().fg(theme::MUTED),
-        )),
     ];
-    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+    text.extend(
+        hint_lines
+            .into_iter()
+            .map(|l| Line::from(Span::styled(l, Style::default().fg(theme::MUTED)))),
+    );
+    f.render_widget(Paragraph::new(text), inner);
 }
 
 fn draw_properties_popup(f: &mut Frame, app: &mut App) {
@@ -573,6 +592,14 @@ fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_stateful_widget(list, area, &mut state);
 
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: 1,
+        action: Action::StartSubtreeSearch,
+    });
+
     if let Some(err) = &app.search_error {
         let msg_area = Rect {
             x: area.x + 2,
@@ -672,6 +699,14 @@ fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_stateful_widget(list, area, &mut state);
 
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: 1,
+        action: Action::ToggleDuplicates,
+    });
+
     let inner_y = area.y + 1;
     let inner_h = area.height.saturating_sub(2) as usize;
     let offset = state.offset();
@@ -696,7 +731,7 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let filter_suffix = if app.filter_mode {
+    let mut filter_suffix = if app.filter_mode {
         format!("   search: {}▌", app.filter)
     } else if !app.filter.is_empty() {
         format!("   filtered: \"{}\"", app.filter)
@@ -704,15 +739,14 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         String::new()
     };
     let size_note = if app.use_physical { " (physical)" } else { "" };
-    let stats = format!(
-        "   ·   {}{}, {} files{}{}",
+    let stats_core = format!(
+        "   ·   {}{}, {} files{}",
         human_bytes(node.effective_size(app.use_physical)),
         size_note,
         thousands(node.file_count),
         if node.error { "   <access denied>" } else { "" },
-        filter_suffix,
     );
-    let free_space_extra = if app.path_indices.is_empty() && app.tree.is_volume_root() {
+    let mut free_space_extra = if app.path_indices.is_empty() && app.tree.is_volume_root() {
         match (app.tree.volume_free, app.tree.volume_total) {
             (Some(free), Some(total)) => format!(
                 "   ·   {} free of {} on this volume",
@@ -745,16 +779,39 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     // the middle — keeping both the volume/drive prefix and the leaf
     // directory name, the two most identifying parts of a long path —
     // rather than cut off at the end.
-    let reserved = 1
-        + stats.chars().count()
-        + free_space_extra.chars().count()
-        + warning_extra.chars().count();
-    let available_for_path = (inner.width as usize).saturating_sub(reserved).max(8);
+    //
+    // But the fixed parts themselves aren't bounded — a long typed filter,
+    // or the free-space/warning text together, can add up to more than the
+    // whole terminal is wide before the path even enters the picture. Just
+    // flooring `available_for_path` in that case would silently push the
+    // warning off the right edge again, the exact failure this line was
+    // rewritten to prevent. So the least essential fixed segments are
+    // dropped first — free space (a nice-to-have shown only at a volume
+    // root), then the filter/search suffix — before the path is ever let
+    // to starve, and the warning (the highest-priority segment) is never
+    // dropped.
+    let fixed_len = |free: &str, filt: &str| {
+        1 + stats_core.chars().count()
+            + filt.chars().count()
+            + free.chars().count()
+            + warning_extra.chars().count()
+    };
+    if fixed_len(&free_space_extra, &filter_suffix) > inner.width as usize {
+        free_space_extra.clear();
+    }
+    if fixed_len(&free_space_extra, &filter_suffix) > inner.width as usize {
+        filter_suffix.clear();
+    }
+    let reserved = fixed_len(&free_space_extra, &filter_suffix);
+    let available_for_path = (inner.width as usize).saturating_sub(reserved);
     let full_path = app.current_path().display().to_string();
     let path_display = truncate_middle(&full_path, available_for_path);
 
     let bar = theme::title_bar();
-    let mut spans = vec![Span::styled(format!(" {path_display}{stats}"), bar)];
+    let mut spans = vec![Span::styled(
+        format!(" {path_display}{stats_core}{filter_suffix}"),
+        bar,
+    )];
     if !free_space_extra.is_empty() {
         spans.push(Span::styled(free_space_extra, bar));
     }
@@ -1020,6 +1077,14 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         state.select(Some(app.selected.min(count - 1)));
     }
     f.render_stateful_widget(list, area, &mut state);
+
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: 1,
+        action: Action::ToggleTopFiles,
+    });
 
     let inner_y = area.y + 1;
     let inner_h = area.height.saturating_sub(2) as usize;
@@ -1793,4 +1858,30 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Like `centered_rect`, but sized to fit exactly `content_rows` rows of
+/// content (plus the two border rows), rather than a fixed screen
+/// percentage. A percentage height is a guess about content that doesn't
+/// scale with it — too small a guess silently clips text (`Wrap{trim:
+/// true}` drops whatever doesn't fit, with no visible sign anything was
+/// cut), too large leaves a mostly-empty box. Used for popups whose
+/// content length is known ahead of render time via `wrap_text`.
+fn centered_rect_for_lines(percent_x: u16, content_rows: u16, r: Rect) -> Rect {
+    let height = (content_rows + 2).min(r.height);
+    let x_rect = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(r)[1];
+    let y = r.y + r.height.saturating_sub(height) / 2;
+    Rect {
+        x: x_rect.x,
+        y,
+        width: x_rect.width,
+        height,
+    }
 }
