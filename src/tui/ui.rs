@@ -1256,6 +1256,15 @@ impl<'a> Widget for TreemapWidget<'a> {
                 }
             }
 
+            // Per-cell "cushion" gradient on top of the tile's own flat
+            // base color — a diagonal highlight near the upper-left corner
+            // fading to a shadow near the lower-right, the light-from-one-
+            // corner effect that gives WinDirStat's treemap its
+            // recognizable slightly-3D look. Without this, every tile is a
+            // single flat poster-paint rectangle; this is a cheap
+            // approximation (no real lighting model, just a brightness
+            // gradient) but reads the same way at terminal-cell
+            // resolution.
             for yy in 0..item.h {
                 for xx in 0..item.w {
                     let px = item.x + xx;
@@ -1265,7 +1274,7 @@ impl<'a> Widget for TreemapWidget<'a> {
                     }
                     if let Some(cell) = buf.cell_mut((px, py)) {
                         cell.set_symbol(" ");
-                        cell.set_bg(bg);
+                        cell.set_bg(cushion_shade(bg, xx, yy, item.w, item.h));
                     }
                 }
             }
@@ -1305,7 +1314,14 @@ impl<'a> Widget for TreemapWidget<'a> {
             // — below that, skip the label rather than draw noise.
             if item.can_label && item.w >= 6 && item.h >= 1 {
                 let label = truncate(&item.name, item.w as usize - 1);
-                let style = Style::default().fg(contrast_fg(bg)).bg(bg);
+                // Matches the cushion shade the fill loop above just wrote
+                // into the label's own starting cell (top-left corner,
+                // xx=0/yy=0) — using the flat `bg` here instead would draw
+                // the label on a small rectangle of the tile's unshaded
+                // color, visibly breaking the gradient right where text
+                // sits.
+                let label_bg = cushion_shade(bg, 0, 0, item.w, item.h);
+                let style = Style::default().fg(contrast_fg(label_bg)).bg(label_bg);
                 let style = if item.is_dir {
                     style.add_modifier(Modifier::BOLD)
                 } else {
@@ -1361,6 +1377,35 @@ fn blend_toward(c: Color, target: Color, t: f32) -> Color {
         Color::Rgb(mix(r1, r2), mix(g1, g2), mix(b1, b2))
     } else {
         target
+    }
+}
+
+/// Diagonal brightness gradient across one tile's cells — light near the
+/// top-left corner (`x=0, y=0`), dark near the bottom-right — approximating
+/// WinDirStat's "cushion" tile shading. `w`/`h` are the tile's own
+/// dimensions, so this is independent of the tile's absolute screen
+/// position.
+fn cushion_shade(base: Color, x: u16, y: u16, w: u16, h: u16) -> Color {
+    let nx = if w > 1 {
+        f32::from(x) / f32::from(w - 1)
+    } else {
+        0.0
+    };
+    let ny = if h > 1 {
+        f32::from(y) / f32::from(h - 1)
+    } else {
+        0.0
+    };
+    let t = (nx + ny) / 2.0; // 0.0 at the top-left corner, 1.0 at bottom-right
+                             // `blend_toward` only blends between two `Color::Rgb` values — passing
+                             // the named `Color::White`/`Color::Black` variants instead would fail
+                             // its pattern match and return the target color unchanged (flat white
+                             // or flat black, not a gradient), so the endpoints are spelled out as
+                             // Rgb here even though they're pure white/black.
+    if t < 0.5 {
+        blend_toward(base, Color::Rgb(255, 255, 255), (0.5 - t) * 0.5)
+    } else {
+        blend_toward(base, Color::Rgb(0, 0, 0), (t - 0.5) * 0.6)
     }
 }
 
