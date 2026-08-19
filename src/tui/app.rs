@@ -61,6 +61,10 @@ pub enum Action {
     CopyPath,
     StartMove,
     ToggleProperties,
+    ToggleWinTools,
+    SelectWinTool(usize),
+    ConfirmWinTool,
+    CancelWinTool,
     Quit,
     ToggleHighlight(Category),
     ClearHighlight,
@@ -180,6 +184,14 @@ pub struct App {
     pub move_mode: bool,
     pub move_destination: String,
     pub show_properties: bool,
+    /// The Windows system-maintenance tools menu (`T`) — present on every
+    /// platform (see `wintools`'s module doc for why), just reporting
+    /// every entry as unavailable off Windows rather than not existing.
+    pub show_wintools: bool,
+    pub wintools_selected: usize,
+    /// Set while a destructive tool is waiting on a yes/no confirmation
+    /// before `wintools::run` is actually called.
+    pub pending_wintool: Option<usize>,
 }
 
 const TREEMAP_SPLIT_MIN: u16 = 20;
@@ -230,6 +242,9 @@ impl App {
             move_mode: false,
             move_destination: String::new(),
             show_properties: false,
+            show_wintools: false,
+            wintools_selected: 0,
+            pending_wintool: None,
         };
         app.refresh_ext_stats();
         app
@@ -445,6 +460,32 @@ impl App {
             self.show_properties = false;
             return Ok(());
         }
+        if self.pending_wintool.is_some() {
+            let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                Action::ConfirmWinTool
+            } else {
+                Action::CancelWinTool
+            };
+            return self.dispatch(action);
+        }
+        if self.show_wintools {
+            match code {
+                KeyCode::Esc | KeyCode::Char('T') => self.show_wintools = false,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.wintools_selected = self.wintools_selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.wintools_selected + 1 < crate::wintools::TOOLS.len() {
+                        self.wintools_selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    return self.dispatch(Action::SelectWinTool(self.wintools_selected))
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         if let Some(pending) = &self.pending_delete {
             let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                 Action::ConfirmDelete
@@ -517,6 +558,7 @@ impl App {
             KeyCode::Char('y') => Action::CopyPath,
             KeyCode::Char('M') => Action::StartMove,
             KeyCode::Char('i') => Action::ToggleProperties,
+            KeyCode::Char('T') => Action::ToggleWinTools,
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('f') => Action::ToggleTopFiles,
             KeyCode::Char('e') => Action::ExportReport,
@@ -703,6 +745,25 @@ impl App {
                 self.exit_flat_view_if_needed();
                 self.show_properties = !self.show_properties;
             }
+            Action::ToggleWinTools => {
+                self.show_wintools = !self.show_wintools;
+                self.wintools_selected = 0;
+            }
+            Action::SelectWinTool(idx) => {
+                if let Some(tool) = crate::wintools::TOOLS.get(idx) {
+                    if tool.destructive {
+                        self.pending_wintool = Some(idx);
+                    } else {
+                        self.run_wintool(idx);
+                    }
+                }
+            }
+            Action::ConfirmWinTool => {
+                if let Some(idx) = self.pending_wintool.take() {
+                    self.run_wintool(idx);
+                }
+            }
+            Action::CancelWinTool => self.pending_wintool = None,
             Action::Quit => self.should_quit = true,
             Action::ToggleHighlight(cat) => {
                 self.highlighted_category = if self.highlighted_category == Some(cat) {
@@ -837,6 +898,17 @@ impl App {
             Ok(()) => self.message = Some(format!("CSV written to {filename}")),
             Err(e) => self.message = Some(format!("Failed to write CSV: {e}")),
         }
+    }
+
+    fn run_wintool(&mut self, idx: usize) {
+        let Some(tool) = crate::wintools::TOOLS.get(idx) else {
+            return;
+        };
+        match crate::wintools::run(idx, &self.tree.root_path) {
+            Ok(msg) => self.message = Some(msg),
+            Err(e) => self.message = Some(format!("{}: {e}", tool.name)),
+        }
+        self.show_wintools = false;
     }
 
     /// Moves the selected item to the folder (or exact path) typed into

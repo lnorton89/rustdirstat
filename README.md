@@ -58,6 +58,7 @@ rustdirstat --csv out.csv [PATH]  # scan and write a full CSV export instead
 | `y` | Copy the selected item's full path to the clipboard |
 | `M` | Move the selected item to another folder |
 | `i` | Show properties (path, size, type, counts, modified) for the selected item |
+| `T` | Windows system tools (Disk Cleanup, DISM, shadow copies, ...) |
 | `r` | Rescan from the root (keeps your current location) |
 | `e` | Export a text report of the current view to a file |
 | `E` | Export a full CSV of the current view's subtree to a file |
@@ -117,6 +118,16 @@ extra is opt-in rather than always-on:
   are one keystroke away and listed in `?`.
 - Color is reserved for where it's informative — the treemap, the
   extension legend, and highlighting — not sprayed across every row.
+
+Being cross-platform doesn't mean every feature has to work everywhere.
+The `T` Windows tools menu (Disk Cleanup, DISM component-store cleanup,
+shadow copies, ...) has no equivalent concept on Linux or macOS — there's
+no universal "shrink WinSxS" — so it's genuinely Windows-only code,
+`cfg(windows)`-gated. But the menu itself is always present: on other
+platforms every entry shows up grayed out with a note that it needs
+Windows, rather than the whole feature category quietly not existing. A
+cross-platform app can still carry a platform-specific feature subset
+without pretending that subset isn't there for everyone else.
 
 ## Performance
 

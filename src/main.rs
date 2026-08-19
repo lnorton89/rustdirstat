@@ -9,6 +9,7 @@ mod scanner;
 mod stats;
 mod tui;
 mod util;
+mod wintools;
 
 use anyhow::{bail, Result};
 use clap::Parser;

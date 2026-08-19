@@ -174,6 +174,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_properties_popup(f, app);
     }
 
+    if app.show_wintools {
+        draw_wintools_popup(f, app);
+    }
+
+    if let Some(idx) = app.pending_wintool {
+        draw_wintool_confirm_popup(f, app, idx);
+    }
+
     if app.show_help {
         draw_help_popup(f, app);
     }
@@ -317,6 +325,150 @@ fn draw_properties_popup(f: &mut Frame, app: &mut App) {
         w: area.width,
         h: area.height,
         action: Action::ToggleProperties,
+    });
+}
+
+fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(70, 60, f.area());
+    shadow(f, area);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(Span::styled(
+            " Windows system tools (Esc/T to close) ",
+            theme::title_bar(),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let available = cfg!(windows);
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, tool) in crate::wintools::TOOLS.iter().enumerate() {
+        let selected = i == app.wintools_selected;
+        let name_style = if !available {
+            Style::default().fg(theme::MUTED)
+        } else if selected {
+            theme::selection()
+        } else if tool.destructive {
+            Style::default().fg(theme::WARNING)
+        } else {
+            Style::default().fg(Color::Reset)
+        };
+        let marker = if selected { "> " } else { "  " };
+        lines.push(Line::from(Span::styled(
+            format!("{marker}{}", tool.name),
+            name_style,
+        )));
+        if selected {
+            lines.push(Line::from(Span::styled(
+                format!("    {}", tool.description),
+                Style::default().fg(theme::MUTED),
+            )));
+        }
+    }
+    if !available {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "These tools call native Windows utilities and aren't available on this platform.",
+            Style::default().fg(theme::MUTED),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::ToggleWinTools,
+    });
+    for (i, _) in crate::wintools::TOOLS.iter().enumerate() {
+        // Each entry is drawn as either one line (unselected) or two
+        // lines (selected, with its description) — approximate the
+        // click target as the single name row; good enough for a list
+        // this short, and selecting first before activating (arrow keys,
+        // or a first click to select then a second to open) is the same
+        // two-step interaction other apps use for a destructive menu.
+        let y = inner.y + i as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
+        app.click_zones.push(ClickZone {
+            x: inner.x,
+            y,
+            w: inner.width,
+            h: 1,
+            action: Action::SelectWinTool(i),
+        });
+    }
+}
+
+fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
+    let Some(tool) = crate::wintools::TOOLS.get(idx) else {
+        return;
+    };
+    let area = centered_rect(60, 24, f.area());
+    shadow(f, area);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .title(" confirm ")
+        .border_style(Style::default().fg(theme::DANGER));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text = vec![
+        Line::from(format!("Run '{}'?", tool.name)),
+        Line::from(""),
+        Line::from(Span::styled(
+            tool.description,
+            Style::default().fg(theme::DANGER),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                " [ Y ]es ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(theme::DANGER)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                " [ N ]o ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::CancelWinTool,
+    });
+    let button_row = inner.y + 4;
+    app.click_zones.push(ClickZone {
+        x: inner.x,
+        y: button_row,
+        w: 9,
+        h: 1,
+        action: Action::ConfirmWinTool,
+    });
+    app.click_zones.push(ClickZone {
+        x: inner.x + 12,
+        y: button_row,
+        w: 8,
+        h: 1,
+        action: Action::CancelWinTool,
     });
 }
 
@@ -1319,7 +1471,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 29] = [
+    let rows: [(&str, &str); 30] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
@@ -1339,6 +1491,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
         ("y", "Copy the selected item's full path to the clipboard"),
         ("M", "Move the selected item to another folder"),
         ("i", "Show properties for the selected item"),
+        ("T", "Windows system tools (Disk Cleanup, DISM, shadow copies, ...)"),
         ("r", "Rescan from the root (keeps your current location)"),
         ("e", "Export a text report of the current view to a file"),
         ("E", "Export a full CSV of the current view's subtree to a file"),
