@@ -166,44 +166,72 @@ fn browse<B: ratatui::backend::Backend>(
 ) -> Result<BrowseOutcome> {
     terminal.draw(|f| ui::draw(f, app))?;
     loop {
-        // Track whether this event actually changed anything worth a
-        // redraw, without ever skipping the quit/refresh check below —
-        // even a long run of ignored events (e.g. a terminal that still
-        // reports raw mouse motion despite MOUSE_CAPTURE_ON) must never
-        // stop a 'q' sitting later in the queue from being noticed as
-        // soon as it's read.
-        let mut changed = true;
-        match event::read()? {
-            Event::Key(k) if k.kind == KeyEventKind::Press && is_ctrl_c(&k) => {
+        // Drain every event already queued before redrawing, instead of
+        // redrawing (a full list/treemap relayout — not cheap on a huge
+        // tree) once per event. Without this, a large backlog — buffered
+        // input a terminal replays after being resized or scrolled, or
+        // simply more clicks/keys than one redraw cycle kept up with —
+        // gets worked through one expensive redraw at a time, which on a
+        // multi-million-file tree can take long enough to look
+        // indistinguishable from "won't quit", even though a 'q' or
+        // Ctrl+C sitting in that backlog was always going to be honored
+        // the moment it was reached. The quit/refresh checks still run
+        // after every single drained event, not just at the end of the
+        // drain, so nothing after this loop can ever delay noticing them.
+        let mut changed = false;
+        loop {
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press && is_ctrl_c(&k) => {
+                    return Ok(BrowseOutcome::Quit);
+                }
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    app.handle_key(k.code)?;
+                    changed = true;
+                }
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        app.handle_click(m.column, m.row)?;
+                        changed = true;
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        app.handle_drag(m.column);
+                        changed = true;
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        app.end_drag();
+                        changed = true;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.dispatch(app::Action::Down)?;
+                        changed = true;
+                    }
+                    MouseEventKind::ScrollUp => {
+                        app.dispatch(app::Action::Up)?;
+                        changed = true;
+                    }
+                    _ => {}
+                },
+                Event::Resize(_, _) => changed = true,
+                _ => {}
+            }
+
+            if app.should_quit {
                 return Ok(BrowseOutcome::Quit);
             }
-            Event::Key(k) if k.kind == KeyEventKind::Press => {
-                app.handle_key(k.code)?;
+            if app.refresh_requested {
+                return Ok(BrowseOutcome::Refresh);
             }
-            Event::Mouse(m) => match m.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    app.handle_click(m.column, m.row)?;
-                }
-                MouseEventKind::Drag(MouseButton::Left) => {
-                    app.handle_drag(m.column);
-                }
-                MouseEventKind::Up(MouseButton::Left) => {
-                    app.end_drag();
-                }
-                MouseEventKind::ScrollDown => app.dispatch(app::Action::Down)?,
-                MouseEventKind::ScrollUp => app.dispatch(app::Action::Up)?,
-                _ => changed = false,
-            },
-            Event::Resize(_, _) => {}
-            _ => changed = false,
+            if app.duplicate_scan_requested {
+                // Needs its own blocking progress-screen loop below, which
+                // can't run mid-drain — stop draining and handle it once
+                // the current backlog processing yields control back.
+                break;
+            }
+            if !event::poll(Duration::ZERO)? {
+                break;
+            }
         }
 
-        if app.should_quit {
-            return Ok(BrowseOutcome::Quit);
-        }
-        if app.refresh_requested {
-            return Ok(BrowseOutcome::Refresh);
-        }
         if app.duplicate_scan_requested {
             app.duplicate_scan_requested = false;
             if let Some(groups) = run_duplicate_scan(terminal, &app.tree)? {

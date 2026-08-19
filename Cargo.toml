@@ -13,7 +13,20 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.28"
-crossterm = "0.28"
+# use-dev-tty switches crossterm's Unix input backend from mio/epoll to a
+# plain poll(2)-based one. This isn't about /dev/tty itself (both backends
+# already fall back to stdin when it's a tty, which it always is for us) —
+# it's about avoiding a real bug in the default mio backend: its read loop
+# returns as soon as one event is parseable without draining the fd to
+# EAGAIN, and mio registers fds edge-triggered, so any leftover unread
+# bytes past that point never trigger another epoll wakeup. A burst of
+# more than ~1024 bytes of input in one go (a terminal replaying buffered
+# events after being left idle, or several thousand queued mouse events)
+# reliably loses everything after the first batch — including a 'q' or
+# Ctrl+C that arrived after it — hanging the app until new input arrives
+# to create a fresh edge. Verified via tests/quit_stress.rs against a
+# real pty. poll(2) is level-triggered, so it can't get stuck this way.
+crossterm = { version = "0.28", features = ["use-dev-tty"] }
 rayon = "1"
 anyhow = "1"
 trash = "5"

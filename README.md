@@ -197,6 +197,23 @@ multi-million-file, multi-hundred-GB drives):
   capture is enabled with a narrower escape sequence instead, covering
   everything the app actually uses (clicks, drag, scroll) without the
   motion flood.
+- **Input polling avoids a real crossterm bug.** crossterm's default Unix
+  input backend (`mio`/epoll) registers the terminal fd edge-triggered but
+  doesn't drain it to `EAGAIN` before returning an event — once more than
+  ~1KB of input arrives in one burst (a terminal replaying buffered input
+  after being left idle, or a large queued backlog), everything past that
+  point is silently dropped and epoll never wakes up for it again, hanging
+  the app until new input arrives from elsewhere. The `use-dev-tty`
+  feature switches to a level-triggered `poll(2)`-based backend that can't
+  get stuck this way. Caught and regression-tested in
+  `tests/quit_stress.rs`, which drives the real binary through an actual
+  pty under a synthetic event flood.
+- **Redraws are batched per input burst, not per event.** The event loop
+  drains every already-queued input event before redrawing once, rather
+  than doing a full list/treemap relayout per event — on a huge tree, a
+  large backlog processed one redraw at a time can take long enough to
+  feel like the app isn't responding, even though it was always going to
+  get there eventually.
 
 ## License
 
