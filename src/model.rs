@@ -23,6 +23,11 @@ pub struct Node {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size: u64,
+    /// On-disk (allocated) size — for directories, the sum of descendants'.
+    /// Can differ from `size` (the logical/apparent size) for compressed,
+    /// sparse, or small-file-on-large-cluster cases. On platforms/files
+    /// where this can't be determined, it falls back to `size`.
+    pub physical_size: u64,
     pub file_count: u64,
     /// Number of directory descendants (not including this node itself).
     pub dir_count: u64,
@@ -53,6 +58,22 @@ pub struct Node {
 pub struct Tree {
     pub root_path: PathBuf,
     pub root: Node,
+    /// Free/total bytes on the volume containing `root_path`, if it could
+    /// be determined. Volume-level info, not part of the file hierarchy —
+    /// used only to draw a "free space" reference tile alongside the real
+    /// content when browsing the scan root, the way WinDirStat does.
+    pub volume_free: Option<u64>,
+    pub volume_total: Option<u64>,
+}
+
+impl Node {
+    pub fn effective_size(&self, physical: bool) -> u64 {
+        if physical {
+            self.physical_size
+        } else {
+            self.size
+        }
+    }
 }
 
 impl Tree {

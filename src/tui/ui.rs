@@ -130,10 +130,12 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         String::new()
     };
+    let size_note = if app.use_physical { " (physical)" } else { "" };
     let title = format!(
-        " {}   ·   {}, {} files{}{}",
+        " {}   ·   {}{}, {} files{}{}",
         app.current_path().display(),
-        human_bytes(node.size),
+        human_bytes(node.effective_size(app.use_physical)),
+        size_note,
         thousands(node.file_count),
         if node.error { "   <access denied>" } else { "" },
         filter_suffix,
@@ -192,17 +194,18 @@ fn dim_unless_matching(
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let disp = app.display_children();
     let disp_len = disp.len();
-    let total = app.current_node().size.max(1);
-    let max_sibling = disp.iter().map(|(_, n)| n.size).max().unwrap_or(1).max(1);
+    let phys = app.use_physical;
+    let total = app.current_node().effective_size(phys).max(1);
+    let max_sibling = disp.iter().map(|(_, n)| n.effective_size(phys)).max().unwrap_or(1).max(1);
     let bar_width: usize = 10;
     let show_details = app.detailed;
 
     let items: Vec<ListItem> = disp
         .iter()
         .map(|(_, node)| {
-            let pct = node.size as f64 / total as f64 * 100.0;
-            let filled =
-                ((node.size as f64 / max_sibling as f64) * bar_width as f64).round() as usize;
+            let shown_size = node.effective_size(phys);
+            let pct = shown_size as f64 / total as f64 * 100.0;
+            let filled = ((shown_size as f64 / max_sibling as f64) * bar_width as f64).round() as usize;
             let filled = filled.min(bar_width);
 
             let cat = category_of(node);
@@ -247,7 +250,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    format!("{:>9}", human_bytes(node.size)),
+                    format!("{:>9}", human_bytes(shown_size)),
                     Style::default().fg(theme::MUTED),
                 ),
                 Span::raw(format!(" {:>5.1}%  ", pct)),
@@ -276,9 +279,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let size_label = if phys { "physical" } else { "logical" };
     let title = format!(
-        " Files — sort: {}  (s to change, m for details) ",
-        app.sort.label()
+        " Files — sort: {}, {} size  (s sort, p size, m details) ",
+        app.sort.label(),
+        size_label
     );
     let list = List::new(items)
         .block(
@@ -330,10 +335,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
     let base = app.path_indices.clone();
     let base_path = app.current_path();
+    let phys = app.use_physical;
     let max_size = app
         .top_files_cache
         .first()
-        .map(|t| t.size)
+        .map(|t| if phys { t.physical_size } else { t.size })
         .unwrap_or(1)
         .max(1);
     let bar_width: usize = 10;
@@ -343,7 +349,8 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .top_files_cache
         .iter()
         .map(|tf| {
-            let filled = ((tf.size as f64 / max_size as f64) * bar_width as f64).round() as usize;
+            let shown_size = if phys { tf.physical_size } else { tf.size };
+            let filled = ((shown_size as f64 / max_size as f64) * bar_width as f64).round() as usize;
             let filled = filled.min(bar_width);
             let muted = app
                 .highlighted_category
@@ -364,7 +371,7 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled(
-                    format!("{:>9}", human_bytes(tf.size)),
+                    format!("{:>9}", human_bytes(shown_size)),
                     Style::default().fg(theme::MUTED),
                 ),
                 Span::raw("  "),
@@ -484,6 +491,7 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
         inner.y,
         inner.width,
         inner.height,
+        app.use_physical,
     );
     let selected_orig = app
         .display_children()

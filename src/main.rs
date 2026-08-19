@@ -1,5 +1,6 @@
 mod color;
 mod model;
+mod platform;
 mod report;
 mod scanner;
 mod stats;

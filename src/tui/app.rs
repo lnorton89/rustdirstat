@@ -70,6 +70,7 @@ pub enum Action {
     GrowTreemap,
     ShrinkTreemap,
     StartResize,
+    TogglePhysicalSize,
 }
 
 /// A screen region registered during the last draw that maps a mouse click
@@ -120,6 +121,9 @@ pub struct App {
     /// Show file/dir counts and modified dates in the list — off by
     /// default to keep each row to the essentials (bar, size, name).
     pub detailed: bool,
+    /// Size the list/treemap/header show and use for proportions: physical
+    /// (on-disk, allocated) when true, logical (apparent) when false.
+    pub use_physical: bool,
     /// Width of the treemap panel as a percentage of the body area.
     pub treemap_split: u16,
     /// Set while the divider between the list and treemap panels is being
@@ -158,6 +162,7 @@ impl App {
             show_help: false,
             refresh_requested: false,
             detailed: false,
+            use_physical: false,
             treemap_split: 45,
             resizing_treemap: false,
             body_x: 0,
@@ -328,6 +333,7 @@ impl App {
             KeyCode::Char('f') => Action::ToggleTopFiles,
             KeyCode::Char('e') => Action::ExportReport,
             KeyCode::Char('m') => Action::ToggleDetails,
+            KeyCode::Char('p') => Action::TogglePhysicalSize,
             KeyCode::Char('?') => Action::ToggleHelp,
             KeyCode::Char('/') => Action::StartSearch,
             KeyCode::Char('0') => Action::ClearHighlight,
@@ -514,6 +520,7 @@ impl App {
                 self.selected = 0;
             }
             Action::ToggleDetails => self.detailed = !self.detailed,
+            Action::TogglePhysicalSize => self.use_physical = !self.use_physical,
             Action::ConfirmDelete | Action::CancelDelete => {}
         }
         Ok(())
@@ -570,6 +577,7 @@ impl App {
         let target = self.tree.node_for(&full_index_path);
 
         let unreadable_delta = target.unreadable_count;
+        let physical_delta = target.physical_size;
         let (is_dir, size, file_count, dir_count_delta, removed_ext) = if target.is_dir {
             (
                 true,
@@ -596,6 +604,7 @@ impl App {
         subtract_totals(
             n,
             size,
+            physical_delta,
             file_count,
             dir_count_delta,
             unreadable_delta,
@@ -606,6 +615,7 @@ impl App {
             subtract_totals(
                 n,
                 size,
+                physical_delta,
                 file_count,
                 dir_count_delta,
                 unreadable_delta,
@@ -640,12 +650,14 @@ enum RemovedExt {
 fn subtract_totals(
     n: &mut Node,
     size: u64,
+    physical_size: u64,
     file_count: u64,
     dir_count: u64,
     unreadable_count: u64,
     ext: &RemovedExt,
 ) {
     n.size -= size;
+    n.physical_size -= physical_size;
     n.file_count -= file_count;
     n.dir_count -= dir_count;
     n.unreadable_count -= unreadable_count;

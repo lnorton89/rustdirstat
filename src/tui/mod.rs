@@ -8,7 +8,7 @@ mod ui;
 use crate::scanner::{self, Progress};
 use anyhow::Result;
 use app::App;
-use crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -19,6 +19,18 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// True for Ctrl+C specifically. Raw mode disables the terminal's own
+/// SIGINT-on-Ctrl+C handling (that's what "raw" means — no line discipline
+/// processing input for us), so once raw mode is on, *we* are the only
+/// thing that can respond to Ctrl+C; if no key binding checks for it, it
+/// does nothing at all. Checked ahead of every other key handling, in both
+/// the scan and browse loops, so it always works as an immediate quit
+/// regardless of what modal state (delete confirm, search input, help) is
+/// open — the same "get me out of here" role it has everywhere else.
+fn is_ctrl_c(k: &crossterm::event::KeyEvent) -> bool {
+    k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c')
+}
 
 /// Mouse tracking modes, written directly instead of via crossterm's
 /// `EnableMouseCapture` (which also turns on mode 1003, "report every
@@ -35,7 +47,28 @@ use std::time::{Duration, Instant};
 const MOUSE_CAPTURE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_CAPTURE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
+/// Restores the terminal (raw mode, mouse capture, alternate screen) to a
+/// normal state. Used both on the ordinary exit path and, via the panic
+/// hook below, on a crash — without this, a panic mid-session leaves the
+/// terminal stuck in raw mode with the alternate screen still active,
+/// where neither 'q' nor Ctrl+C look like they do anything afterward (raw
+/// mode is what makes Ctrl+C our responsibility instead of the shell's in
+/// the first place, and a dead process isn't around to handle it).
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let mut stdout = std::io::stdout();
+    let _ = write!(stdout, "{MOUSE_CAPTURE_OFF}\x1b[?25h");
+    let _ = execute!(stdout, LeaveAlternateScreen);
+    let _ = stdout.flush();
+}
+
 pub fn run(root: PathBuf) -> Result<()> {
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default_panic_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -46,12 +79,7 @@ pub fn run(root: PathBuf) -> Result<()> {
 
     let result = run_app(&mut terminal, root);
 
-    disable_raw_mode()?;
-    let out = terminal.backend_mut();
-    write!(out, "{MOUSE_CAPTURE_OFF}")?;
-    execute!(out, LeaveAlternateScreen)?;
-    out.flush()?;
-    terminal.show_cursor()?;
+    restore_terminal();
 
     result
 }
@@ -101,7 +129,9 @@ fn scan_with_progress<B: ratatui::backend::Backend>(
         }
         if event::poll(Duration::from_millis(150))? {
             if let Event::Key(k) = event::read()? {
-                if k.kind == KeyEventKind::Press && k.code == crossterm::event::KeyCode::Char('q') {
+                let cancel = k.kind == KeyEventKind::Press
+                    && (k.code == KeyCode::Char('q') || k.code == KeyCode::Esc || is_ctrl_c(&k));
+                if cancel {
                     return Ok(None);
                 }
             }
@@ -134,6 +164,9 @@ fn browse<B: ratatui::backend::Backend>(
         // soon as it's read.
         let mut changed = true;
         match event::read()? {
+            Event::Key(k) if k.kind == KeyEventKind::Press && is_ctrl_c(&k) => {
+                return Ok(BrowseOutcome::Quit);
+            }
             Event::Key(k) if k.kind == KeyEventKind::Press => {
                 app.handle_key(k.code)?;
             }

@@ -42,6 +42,7 @@ pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
             is_dir: false,
             is_symlink: meta.file_type().is_symlink(),
             size: meta.len(),
+            physical_size: crate::platform::physical_size(&meta),
             file_count: 1,
             dir_count: 0,
             modified: meta.modified().ok(),
@@ -53,9 +54,13 @@ pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
         }
     };
 
+    let (volume_free, volume_total) = crate::platform::volume_space(root);
+
     Ok(Tree {
         root_path: root.to_path_buf(),
         root: root_node,
+        volume_free,
+        volume_total,
     })
 }
 
@@ -89,6 +94,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                 is_dir: true,
                 is_symlink: false,
                 size: 0,
+                physical_size: 0,
                 file_count: 0,
                 dir_count: 0,
                 modified: dir_meta.and_then(|m| m.modified().ok()),
@@ -128,6 +134,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                     is_dir: false,
                     is_symlink: true,
                     size: 0,
+                    physical_size: 0,
                     file_count: 1,
                     dir_count: 0,
                     modified: meta.modified().ok(),
@@ -148,6 +155,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                     is_dir: false,
                     is_symlink: false,
                     size: meta.len(),
+                    physical_size: crate::platform::physical_size(&meta),
                     file_count: 1,
                     dir_count: 0,
                     modified: meta.modified().ok(),
@@ -195,6 +203,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
     }
 
     let mut size = 0u64;
+    let mut physical_size = 0u64;
     let mut file_count = 0u64;
     let mut dir_count = 0u64;
     let mut unreadable_count = own_unreadable;
@@ -202,6 +211,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
 
     for c in &children {
         size += c.size;
+        physical_size += c.physical_size;
         file_count += c.file_count;
         unreadable_count += c.unreadable_count;
         if c.is_dir {
@@ -222,6 +232,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
         is_dir: true,
         is_symlink: false,
         size,
+        physical_size,
         file_count,
         dir_count,
         modified: dir_meta.and_then(|m| m.modified().ok()),

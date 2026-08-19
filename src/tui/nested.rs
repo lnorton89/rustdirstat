@@ -41,7 +41,7 @@ const MIN_LABEL_H: u16 = 2;
 const MAX_CHILDREN_PER_LEVEL: usize = 60;
 const MAX_ITEMS: usize = 3000;
 
-pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16) -> Vec<TreemapItem> {
+pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16, use_physical: bool) -> Vec<TreemapItem> {
     let mut out = Vec::new();
     let mut path = Vec::new();
     recurse(
@@ -53,6 +53,7 @@ pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16) -> Vec<Treema
             h: height,
         },
         0,
+        use_physical,
         &mut path,
         &mut out,
     );
@@ -63,6 +64,7 @@ fn recurse(
     node: &Node,
     area: Rect,
     depth: u16,
+    use_physical: bool,
     index_path: &mut Vec<usize>,
     out: &mut Vec<TreemapItem>,
 ) {
@@ -71,10 +73,10 @@ fn recurse(
     }
 
     let mut children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
-    children.sort_by(|a, b| b.1.size.cmp(&a.1.size));
+    children.sort_by(|a, b| b.1.effective_size(use_physical).cmp(&a.1.effective_size(use_physical)));
     children.truncate(MAX_CHILDREN_PER_LEVEL);
 
-    let sizes: Vec<u64> = children.iter().map(|(_, c)| c.size.max(1)).collect();
+    let sizes: Vec<u64> = children.iter().map(|(_, c)| c.effective_size(use_physical).max(1)).collect();
     let rects = treemap::layout(&sizes, area.w, area.h);
 
     for ((orig_idx, child), r) in children.iter().zip(rects.iter()) {
@@ -116,7 +118,7 @@ fn recurse(
                     h: r.h,
                 }
             };
-            recurse(child, inner, depth + 1, index_path, out);
+            recurse(child, inner, depth + 1, use_physical, index_path, out);
         }
 
         index_path.pop();

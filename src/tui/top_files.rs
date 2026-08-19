@@ -14,6 +14,11 @@ pub struct TopFile {
     pub index_path: Vec<usize>,
     pub name: String,
     pub size: u64,
+    /// Selection ("top k") is always by logical size — the two rarely
+    /// disagree enough to matter for "what's biggest", and it keeps a size
+    /// toggle from needing to redo the whole search. This is just for
+    /// display when physical size is what's being shown.
+    pub physical_size: u64,
     pub modified: Option<SystemTime>,
     pub category: Option<Category>,
 }
@@ -57,6 +62,7 @@ fn visit(node: &Node, path: &mut Vec<usize>, heap: &mut BinaryHeap<Reverse<Entry
                 index_path: path.clone(),
                 name: child.name.clone(),
                 size: child.size,
+                physical_size: child.physical_size,
                 modified: child.modified,
                 category: child.category,
             })));
