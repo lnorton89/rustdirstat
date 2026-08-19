@@ -736,13 +736,6 @@ fn category_of(node: &crate::model::Node) -> Option<Category> {
     }
 }
 
-fn category_color(cat: Option<Category>) -> Color {
-    match cat {
-        Some(c) => c.color(),
-        None => color::directory_color(),
-    }
-}
-
 fn dim_unless_matching(
     c: Color,
     highlighted: Option<Category>,
@@ -1117,8 +1110,10 @@ impl<'a> Widget for TreemapWidget<'a> {
             }
             let base = if item.is_free_space {
                 color::free_space_color()
+            } else if item.is_dir {
+                color::directory_color()
             } else {
-                category_color(item.category)
+                color::ext_color(&item.name)
             };
             // Cushion-style shading: darker with depth, alternated by
             // sibling index, so nested rectangles read as distinct tiles.

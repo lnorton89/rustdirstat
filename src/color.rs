@@ -108,3 +108,59 @@ pub fn free_space_color() -> Color {
 pub fn directory_color() -> Color {
     Color::Rgb(196, 164, 96)
 }
+
+/// Per-extension treemap/list color — deterministically derived from a
+/// hash of the extension itself rather than the small, fixed set of
+/// broad `Category` buckets. Nine categories inevitably collapse a
+/// directory dominated by one kind of thing (a cargo `target/` full of
+/// `.rlib`/`.rmeta`/`.d`/`.pdb`, all legitimately "Programs" or "Source")
+/// down to one or two colors, no matter how the categories are drawn —
+/// that's what the buckets mean, not a rendering bug, but it still reads
+/// as "broken" next to WinDirStat's own treemap, which colors by
+/// individual extension and so stays visually varied even when a
+/// directory is semantically homogeneous. Hashing the extension into a
+/// hue spread across the full color wheel gets the same effect without
+/// maintaining a growing, ever-incomplete list of extension-to-category
+/// mappings. `Category` itself is unchanged and still drives the
+/// extension-breakdown legend and highlighting — this only changes what
+/// color a file's tile actually renders as.
+pub fn ext_color(name: &str) -> Color {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext.is_empty() {
+        return Category::NoExtension.color();
+    }
+    let hue = (fnv1a(ext.as_bytes()) % 360) as f32;
+    hsv_to_rgb(hue, 0.55, 0.85)
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r1, g1, b1) = match h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    Color::Rgb(
+        ((r1 + m) * 255.0) as u8,
+        ((g1 + m) * 255.0) as u8,
+        ((b1 + m) * 255.0) as u8,
+    )
+}
