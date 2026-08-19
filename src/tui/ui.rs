@@ -13,6 +13,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
     let area = f.area();
@@ -790,11 +791,12 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     // root), then the filter/search suffix — before the path is ever let
     // to starve, and the warning (the highest-priority segment) is never
     // dropped.
+    // Measured in terminal columns, not characters — `filt` embeds
+    // whatever the user typed into the filter/search box, which can
+    // legitimately contain wide (e.g. CJK) characters that render as 2
+    // columns each.
     let fixed_len = |free: &str, filt: &str| {
-        1 + stats_core.chars().count()
-            + filt.chars().count()
-            + free.chars().count()
-            + warning_extra.chars().count()
+        1 + stats_core.width() + filt.width() + free.width() + warning_extra.width()
     };
     if fixed_len(&free_space_extra, &filter_suffix) > inner.width as usize {
         free_space_extra.clear();
@@ -1375,39 +1377,76 @@ fn contrast_fg(bg: Color) -> Color {
     }
 }
 
+/// Truncates `s` to at most `max` *terminal columns* — not characters.
+/// A CJK character, most emoji, and other "wide" codepoints render as 2
+/// columns, so measuring/cutting by `chars().count()` can let a label
+/// through that's actually up to 2x wider than the caller asked for,
+/// overflowing whatever fixed-width box (a treemap tile, the header line)
+/// it was sized to fit inside.
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else if max == 0 {
-        String::new()
-    } else {
-        format!(
-            "{}…",
-            s.chars().take(max.saturating_sub(1)).collect::<String>()
-        )
+    if s.width() <= max {
+        return s.to_string();
     }
+    if max == 0 {
+        return String::new();
+    }
+    let budget = max - 1; // reserve 1 column for the "…"
+    let mut out = String::new();
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if w + cw > budget {
+            break;
+        }
+        out.push(ch);
+        w += cw;
+    }
+    out.push('…');
+    out
 }
 
-/// Truncates `s` to at most `max` characters by cutting out the middle
-/// and joining the head/tail with an ellipsis — for a filesystem path,
-/// the drive/volume prefix and the leaf (innermost) directory name are
-/// usually the most identifying parts, so keeping both ends and losing
-/// the middle preserves more useful information than `truncate`'s plain
-/// trailing ellipsis would.
+/// Truncates `s` to at most `max` terminal columns by cutting out the
+/// middle and joining the head/tail with an ellipsis — for a filesystem
+/// path, the drive/volume prefix and the leaf (innermost) directory name
+/// are usually the most identifying parts, so keeping both ends and
+/// losing the middle preserves more useful information than `truncate`'s
+/// plain trailing ellipsis would. Column-width-aware for the same reason
+/// as `truncate` above — a path can legitimately contain wide characters.
 fn truncate_middle(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
+    if s.width() <= max {
         return s.to_string();
     }
     if max <= 1 {
         return "…".to_string();
     }
-    let keep = max - 1;
-    let head = keep.div_ceil(2);
-    let tail = keep / 2;
-    let head_str: String = chars[..head].iter().collect();
-    let tail_str: String = chars[chars.len() - tail..].iter().collect();
-    format!("{head_str}…{tail_str}")
+    let budget = max - 1;
+    let head_budget = budget.div_ceil(2);
+    let tail_budget = budget / 2;
+    let chars: Vec<char> = s.chars().collect();
+
+    let mut head = String::new();
+    let mut w = 0usize;
+    for &ch in &chars {
+        let cw = ch.width().unwrap_or(0);
+        if w + cw > head_budget {
+            break;
+        }
+        head.push(ch);
+        w += cw;
+    }
+
+    let mut tail = String::new();
+    let mut w = 0usize;
+    for &ch in chars.iter().rev() {
+        let cw = ch.width().unwrap_or(0);
+        if w + cw > tail_budget {
+            break;
+        }
+        tail.insert(0, ch);
+        w += cw;
+    }
+
+    format!("{head}…{tail}")
 }
 
 /// Greedy word-wrap into lines of at most `width` characters. Used
@@ -1423,19 +1462,24 @@ fn wrap_text(s: &str, width: usize) -> Vec<String> {
     }
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_w = 0usize;
     for word in s.split(' ') {
-        let candidate_len = if current.is_empty() {
-            word.chars().count()
+        let word_w = word.width();
+        let candidate_w = if current.is_empty() {
+            word_w
         } else {
-            current.chars().count() + 1 + word.chars().count()
+            current_w + 1 + word_w
         };
-        if candidate_len > width && !current.is_empty() {
+        if candidate_w > width && !current.is_empty() {
             lines.push(std::mem::take(&mut current));
+            current_w = 0;
         }
         if !current.is_empty() {
             current.push(' ');
+            current_w += 1;
         }
         current.push_str(word);
+        current_w += word_w;
     }
     lines.push(current);
     lines

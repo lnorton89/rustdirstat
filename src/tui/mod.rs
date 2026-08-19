@@ -211,7 +211,21 @@ fn browse<B: ratatui::backend::Backend>(
                     }
                     _ => {}
                 },
-                Event::Resize(_, _) => changed = true,
+                Event::Resize(_, _) => {
+                    changed = true;
+                    // Stop draining and redraw immediately, rather than
+                    // continuing to process whatever else is already
+                    // queued against the pre-resize layout. `click_zones`
+                    // is only rebuilt inside `ui::draw`, which otherwise
+                    // wouldn't run again until the whole backlog empties
+                    // — so a resize followed almost immediately by a
+                    // click (an ordinary sequence: widen the terminal,
+                    // then click before the next paint) would evaluate
+                    // that click against click zones sized for the old
+                    // layout, potentially hitting the wrong button on a
+                    // popup whose buttons just moved.
+                    break;
+                }
                 _ => {}
             }
 

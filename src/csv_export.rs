@@ -55,11 +55,14 @@ fn write_children(out: &mut String, base: &Path, node: &Node) {
 }
 
 /// Quotes a field only when it contains something that would otherwise be
-/// ambiguous in CSV (a comma, quote, or newline) — file names containing
-/// any of those are rare but not disallowed by any filesystem this app
-/// targets, so this can't be skipped.
+/// ambiguous in CSV (a comma, quote, newline, or carriage return) — file
+/// names containing any of those are rare but not disallowed by any
+/// filesystem this app targets, so this can't be skipped. `\r` needs the
+/// same treatment as `\n`: an unquoted bare CR is still a row terminator
+/// to plenty of real-world CSV readers (Excel among them), so leaving one
+/// unescaped can split a row and corrupt everything parsed after it.
 fn csv_field(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()

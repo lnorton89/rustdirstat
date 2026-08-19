@@ -832,6 +832,7 @@ dependencies = [
  "serde",
  "toml",
  "trash",
+ "unicode-width",
  "windows-sys 0.59.0",
 ]
 
