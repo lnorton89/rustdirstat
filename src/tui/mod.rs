@@ -1,5 +1,6 @@
 mod app;
 mod nested;
+mod search;
 mod theme;
 mod top_files;
 mod treemap;
@@ -8,7 +9,9 @@ mod ui;
 use crate::scanner::{self, Progress};
 use anyhow::Result;
 use app::App;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,

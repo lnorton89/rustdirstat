@@ -1,3 +1,4 @@
+use super::search::{self, SearchHit};
 use super::top_files::{self, TopFile};
 use crate::color::Category;
 use crate::model::{Node, Tree};
@@ -65,7 +66,8 @@ pub enum Action {
     ToggleTopFiles,
     ToggleHelp,
     ExportReport,
-    StartSearch,
+    StartFilter,
+    StartSubtreeSearch,
     ToggleDetails,
     GrowTreemap,
     ShrinkTreemap,
@@ -116,6 +118,15 @@ pub struct App {
     pub filter_mode: bool,
     pub show_top_files: bool,
     pub top_files_cache: Vec<TopFile>,
+    /// Recursive subtree search (distinct from `filter`, which only
+    /// narrows the current directory's direct children): `search_mode` is
+    /// the query text-entry state, `show_search` is the results view.
+    pub search_query: String,
+    pub search_mode: bool,
+    pub show_search: bool,
+    pub search_results: Vec<SearchHit>,
+    pub search_truncated: bool,
+    pub search_error: Option<String>,
     pub show_help: bool,
     pub refresh_requested: bool,
     /// Show file/dir counts and modified dates in the list — off by
@@ -159,6 +170,12 @@ impl App {
             filter_mode: false,
             show_top_files: false,
             top_files_cache: vec![],
+            search_query: String::new(),
+            search_mode: false,
+            show_search: false,
+            search_results: vec![],
+            search_truncated: false,
+            search_error: None,
             show_help: false,
             refresh_requested: false,
             detailed: false,
@@ -266,20 +283,35 @@ impl App {
         }
     }
 
-    /// If the "biggest files" flat view is active, jump browsing to the
-    /// currently selected file's actual parent directory (and select it
-    /// there), then leave the flat view — so every action that operates on
-    /// "the selected row" (delete, open, Enter) works the same regardless
-    /// of which view found that row.
-    fn exit_top_files_if_needed(&mut self) {
-        if !self.show_top_files {
-            return;
+    /// If the "biggest files" or search-results flat view is active, jump
+    /// browsing to the currently selected entry's actual parent directory
+    /// (and select it there), then leave the flat view — so every action
+    /// that operates on "the selected row" (delete, open, Enter) works the
+    /// same regardless of which view found that row.
+    fn exit_flat_view_if_needed(&mut self) {
+        if self.show_top_files {
+            if let Some(tf) = self.top_files_cache.get(self.selected) {
+                let idx_path = tf.index_path.clone();
+                self.navigate_to(idx_path);
+            }
+            self.show_top_files = false;
+        } else if self.show_search {
+            if let Some(hit) = self.search_results.get(self.selected) {
+                let idx_path = hit.index_path.clone();
+                self.navigate_to(idx_path);
+            }
+            self.show_search = false;
         }
-        if let Some(tf) = self.top_files_cache.get(self.selected) {
-            let idx_path = tf.index_path.clone();
-            self.navigate_to(idx_path);
-        }
-        self.show_top_files = false;
+    }
+
+    fn run_subtree_search(&mut self) {
+        let outcome = search::search(self.current_node(), &self.search_query);
+        self.search_error = outcome.error;
+        self.search_truncated = outcome.truncated;
+        self.search_results = outcome.hits;
+        self.show_search = true;
+        self.search_mode = false;
+        self.selected = 0;
     }
 
     pub fn handle_key(&mut self, code: KeyCode) -> Result<()> {
@@ -315,6 +347,18 @@ impl App {
             }
             return Ok(());
         }
+        if self.search_mode {
+            match code {
+                KeyCode::Esc => self.search_mode = false,
+                KeyCode::Enter => self.run_subtree_search(),
+                KeyCode::Backspace => {
+                    self.search_query.pop();
+                }
+                KeyCode::Char(c) => self.search_query.push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
 
         let action = match code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
@@ -335,7 +379,8 @@ impl App {
             KeyCode::Char('m') => Action::ToggleDetails,
             KeyCode::Char('p') => Action::TogglePhysicalSize,
             KeyCode::Char('?') => Action::ToggleHelp,
-            KeyCode::Char('/') => Action::StartSearch,
+            KeyCode::Char('/') => Action::StartFilter,
+            KeyCode::Char('S') => Action::StartSubtreeSearch,
             KeyCode::Char('0') => Action::ClearHighlight,
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = c.to_digit(10).unwrap() as usize - 1;
@@ -386,7 +431,7 @@ impl App {
     }
 
     fn request_delete(&mut self, permanent: bool) {
-        self.exit_top_files_if_needed();
+        self.exit_flat_view_if_needed();
         if let Some((idx, node)) = self.display_children().get(self.selected) {
             self.pending_delete = Some(PendingDelete {
                 orig_idx: *idx,
@@ -411,6 +456,8 @@ impl App {
             Action::Down => {
                 let len = if self.show_top_files {
                     self.top_files_cache.len()
+                } else if self.show_search {
+                    self.search_results.len()
                 } else {
                     self.display_children().len()
                 };
@@ -419,7 +466,7 @@ impl App {
                 }
             }
             Action::OpenSelected => {
-                self.exit_top_files_if_needed();
+                self.exit_flat_view_if_needed();
                 let target = self
                     .display_children()
                     .get(self.selected)
@@ -455,7 +502,7 @@ impl App {
             Action::RequestDelete => self.request_delete(false),
             Action::RequestDeletePermanent => self.request_delete(true),
             Action::OpenInFileManager => {
-                self.exit_top_files_if_needed();
+                self.exit_flat_view_if_needed();
                 if let Some((_, node)) = self.display_children().get(self.selected) {
                     let mut target = self.current_path();
                     target.push(&node.name);
@@ -487,6 +534,14 @@ impl App {
                     self.show_top_files = false;
                     return Ok(());
                 }
+                if self.show_search {
+                    if let Some(hit) = self.search_results.get(idx) {
+                        let idx_path = hit.index_path.clone();
+                        self.navigate_to(idx_path);
+                    }
+                    self.show_search = false;
+                    return Ok(());
+                }
                 let now = Instant::now();
                 let is_double_click = matches!(
                     self.last_click,
@@ -506,6 +561,7 @@ impl App {
             Action::NavigateTo(path) => self.navigate_to(path),
             Action::Refresh => self.refresh_requested = true,
             Action::ToggleTopFiles => {
+                self.show_search = false;
                 self.show_top_files = !self.show_top_files;
                 self.selected = 0;
                 if self.show_top_files {
@@ -514,10 +570,20 @@ impl App {
             }
             Action::ToggleHelp => self.show_help = !self.show_help,
             Action::ExportReport => self.export_report(),
-            Action::StartSearch => {
+            Action::StartFilter => {
                 self.filter_mode = true;
                 self.filter.clear();
                 self.selected = 0;
+            }
+            Action::StartSubtreeSearch => {
+                if self.show_search {
+                    self.show_search = false;
+                } else {
+                    self.show_top_files = false;
+                    self.search_mode = true;
+                    self.search_query.clear();
+                    self.selected = 0;
+                }
             }
             Action::ToggleDetails => self.detailed = !self.detailed,
             Action::TogglePhysicalSize => self.use_physical = !self.use_physical,

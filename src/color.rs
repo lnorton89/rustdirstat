@@ -93,6 +93,10 @@ pub fn category_for_ext(ext: &str) -> Category {
 /// as "everything is blue" whenever directories dominated the view (which
 /// they usually do, since most of a tree's area is directories until the
 /// treemap recurses down into actual files).
+pub fn free_space_color() -> Color {
+    Color::Rgb(70, 78, 86)
+}
+
 pub fn directory_color() -> Color {
     Color::Rgb(196, 164, 96)
 }

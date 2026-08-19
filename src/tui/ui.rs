@@ -67,7 +67,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, app, chunks[0]);
 
-    if app.show_top_files {
+    if app.show_search {
+        draw_search_results(f, app, chunks[1]);
+    } else if app.show_top_files {
         draw_top_files(f, app, chunks[1]);
     } else if app.show_treemap {
         app.set_body_area(chunks[1].x, chunks[1].width);
@@ -109,8 +111,146 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_confirm_popup(f, app, &name, permanent);
     }
 
+    if app.search_mode {
+        draw_search_prompt(f, app);
+    }
+
     if app.show_help {
         draw_help_popup(f, app);
+    }
+}
+
+fn draw_search_prompt(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(60, 20, f.area());
+    shadow(f, area);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(Span::styled(" Search this subtree ", theme::title_bar()));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text =
+        vec![
+        Line::from(vec![Span::raw("> "), Span::raw(&app.search_query), Span::raw("▌")]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter to search, Esc to cancel. * and ? are wildcards; prefix with re: for a regex.",
+            Style::default().fg(theme::MUTED),
+        )),
+    ];
+    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+}
+
+/// The recursive subtree search results — independent of the normal
+/// directory browser, listing every match found anywhere below the
+/// current directory (not just its direct children).
+fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
+    let base = app.path_indices.clone();
+    let base_path = app.current_path();
+    let phys = app.use_physical;
+    let show_details = app.detailed;
+
+    let items: Vec<ListItem> = app
+        .search_results
+        .iter()
+        .map(|hit| {
+            let shown_size = if phys { hit.physical_size } else { hit.size };
+            let muted = app
+                .highlighted_category
+                .is_some_and(|h| Some(h) != hit.category);
+            let color = if muted {
+                theme::MUTED
+            } else if hit.is_dir {
+                theme::ACCENT
+            } else {
+                Color::Reset
+            };
+
+            let mut full_idx = base.clone();
+            full_idx.extend(&hit.index_path);
+            let full_path = app.tree.path_for(&full_idx);
+            let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
+            let suffix = if hit.is_dir { "/" } else { "" };
+
+            let mut spans = vec![
+                Span::styled(
+                    format!("{:>9}", human_bytes(shown_size)),
+                    Style::default().fg(theme::MUTED),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{}{}", rel.display(), suffix),
+                    Style::default().fg(color),
+                ),
+            ];
+            if show_details {
+                spans.push(Span::styled(
+                    format!("  {}", format_modified(hit.modified)),
+                    Style::default().fg(theme::MUTED),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let count = app.search_results.len();
+    let mut title = format!(" Search: \"{}\" — {} matches", app.search_query, count);
+    if app.search_truncated {
+        title.push_str(" (truncated)");
+    }
+    title.push_str(" — S to close ");
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(theme::border_type())
+                .border_style(theme::panel_border(true))
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        )
+        .highlight_style(theme::selection());
+
+    let mut state = ListState::default();
+    if count > 0 {
+        state.select(Some(app.selected.min(count - 1)));
+    }
+    f.render_stateful_widget(list, area, &mut state);
+
+    if let Some(err) = &app.search_error {
+        let msg_area = Rect {
+            x: area.x + 2,
+            y: area.y + area.height.saturating_sub(2),
+            width: area.width.saturating_sub(4),
+            height: 1,
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                err.as_str(),
+                Style::default().fg(theme::DANGER),
+            )),
+            msg_area,
+        );
+    }
+
+    let inner_y = area.y + 1;
+    let inner_h = area.height.saturating_sub(2) as usize;
+    let offset = state.offset();
+    for row in offset..(offset + inner_h).min(count) {
+        let y = inner_y + (row - offset) as u16;
+        app.click_zones.push(ClickZone {
+            x: area.x + 1,
+            y,
+            w: area.width.saturating_sub(2),
+            h: 1,
+            action: Action::SelectRow(row),
+        });
     }
 }
 
@@ -142,6 +282,18 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     );
     let bar = theme::title_bar();
     let mut spans = vec![Span::styled(title, bar)];
+    if app.path_indices.is_empty() {
+        if let (Some(free), Some(total)) = (app.tree.volume_free, app.tree.volume_total) {
+            spans.push(Span::styled(
+                format!(
+                    "   ·   {} free of {} on this volume",
+                    human_bytes(free),
+                    human_bytes(total)
+                ),
+                bar,
+            ));
+        }
+    }
     if node.unreadable_count > 0 {
         // Some entries in this subtree couldn't be read (permission edge
         // case, a race with something deleting them mid-scan) and were
@@ -196,7 +348,12 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let disp_len = disp.len();
     let phys = app.use_physical;
     let total = app.current_node().effective_size(phys).max(1);
-    let max_sibling = disp.iter().map(|(_, n)| n.effective_size(phys)).max().unwrap_or(1).max(1);
+    let max_sibling = disp
+        .iter()
+        .map(|(_, n)| n.effective_size(phys))
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let bar_width: usize = 10;
     let show_details = app.detailed;
 
@@ -205,7 +362,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(_, node)| {
             let shown_size = node.effective_size(phys);
             let pct = shown_size as f64 / total as f64 * 100.0;
-            let filled = ((shown_size as f64 / max_sibling as f64) * bar_width as f64).round() as usize;
+            let filled =
+                ((shown_size as f64 / max_sibling as f64) * bar_width as f64).round() as usize;
             let filled = filled.min(bar_width);
 
             let cat = category_of(node);
@@ -350,7 +508,8 @@ fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|tf| {
             let shown_size = if phys { tf.physical_size } else { tf.size };
-            let filled = ((shown_size as f64 / max_size as f64) * bar_width as f64).round() as usize;
+            let filled =
+                ((shown_size as f64 / max_size as f64) * bar_width as f64).round() as usize;
             let filled = filled.min(bar_width);
             let muted = app
                 .highlighted_category
@@ -485,6 +644,14 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    // Free space only makes sense relative to the whole volume, so it's
+    // only shown at the root of what was scanned — not injected into every
+    // subfolder's treemap, where it wouldn't correspond to anything real.
+    let free_space = if app.path_indices.is_empty() {
+        app.tree.volume_free
+    } else {
+        None
+    };
     let items = nested::build(
         app.current_node(),
         inner.x,
@@ -492,6 +659,7 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
         inner.width,
         inner.height,
         app.use_physical,
+        free_space,
     );
     let selected_orig = app
         .display_children()
@@ -506,6 +674,9 @@ fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(widget, inner);
 
     for item in &items {
+        if item.is_free_space {
+            continue; // not a real entry — nothing to navigate to
+        }
         app.click_zones.push(ClickZone {
             x: item.x,
             y: item.y,
@@ -528,15 +699,21 @@ impl<'a> Widget for TreemapWidget<'a> {
             if item.w == 0 || item.h == 0 {
                 continue;
             }
-            let base = category_color(item.category);
+            let base = if item.is_free_space {
+                color::free_space_color()
+            } else {
+                category_color(item.category)
+            };
             // Cushion-style shading: darker with depth, alternated by
             // sibling index, so nested rectangles read as distinct tiles.
             let depth_factor = 1.0 - (item.depth as f32 * 0.09).min(0.55);
             let parity = if i % 2 == 0 { 1.0 } else { 0.88 };
             let mut bg = lighten(base, depth_factor * parity);
-            if let Some(h) = self.highlighted {
-                if Some(h) != item.category {
-                    bg = Color::Rgb(50, 50, 50);
+            if !item.is_free_space {
+                if let Some(h) = self.highlighted {
+                    if Some(h) != item.category {
+                        bg = Color::Rgb(50, 50, 50);
+                    }
                 }
             }
 
@@ -851,16 +1028,18 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 20] = [
+    let rows: [(&str, &str); 22] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
         ("s", "Cycle sort order (size, name, modified)"),
         ("m", "Show/hide file counts and modified dates"),
+        ("p", "Toggle logical vs. physical (on-disk) size"),
         ("t", "Toggle the treemap panel"),
         ("[ / ]", "Resize the treemap panel (or drag its left edge)"),
         ("f", "Toggle the \"biggest files\" flat view"),
-        ("/", "Search/filter the current view by name"),
+        ("/", "Search/filter the current directory by name"),
+        ("S", "Search this entire subtree (glob or re: regex)"),
         ("1-9", "Highlight a file-type category in the treemap"),
         ("0", "Clear the highlight"),
         ("o", "Open the selected item in the OS file manager"),

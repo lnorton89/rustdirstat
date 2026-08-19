@@ -21,7 +21,13 @@ pub struct TreemapItem {
     pub category: Option<Category>,
     /// Indices (original, unsorted child order) from the directory being
     /// browsed down to this item — enough to reconstruct navigation state.
+    /// Empty for the synthetic free-space tile, which doesn't correspond
+    /// to a real filesystem entry (`App::navigate_to` already no-ops on an
+    /// empty path, so it's simply not clickable-to-navigate).
     pub index_path: Vec<usize>,
+    /// True only for the synthetic "free space on this volume" tile —
+    /// never a real file or directory.
+    pub is_free_space: bool,
 }
 
 // Any directory with room for at least one sub-tile keeps recursing into
@@ -41,7 +47,20 @@ const MIN_LABEL_H: u16 = 2;
 const MAX_CHILDREN_PER_LEVEL: usize = 60;
 const MAX_ITEMS: usize = 3000;
 
-pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16, use_physical: bool) -> Vec<TreemapItem> {
+/// `free_space`, when given, adds one extra synthetic tile at the top
+/// level only — sized alongside the real children so "used vs. free" is
+/// visible at a glance, the way WinDirStat's own treemap does for a
+/// whole-volume scan. It's not part of `node`'s children and never
+/// recursed into.
+pub fn build(
+    node: &Node,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    use_physical: bool,
+    free_space: Option<u64>,
+) -> Vec<TreemapItem> {
     let mut out = Vec::new();
     let mut path = Vec::new();
     recurse(
@@ -54,6 +73,7 @@ pub fn build(node: &Node, x: u16, y: u16, width: u16, height: u16, use_physical:
         },
         0,
         use_physical,
+        free_space,
         &mut path,
         &mut out,
     );
@@ -65,25 +85,58 @@ fn recurse(
     area: Rect,
     depth: u16,
     use_physical: bool,
+    free_space: Option<u64>,
     index_path: &mut Vec<usize>,
     out: &mut Vec<TreemapItem>,
 ) {
-    if area.w == 0 || area.h == 0 || out.len() >= MAX_ITEMS || node.children.is_empty() {
+    if area.w == 0 || area.h == 0 || out.len() >= MAX_ITEMS {
+        return;
+    }
+    if node.children.is_empty() && free_space.is_none() {
         return;
     }
 
     let mut children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
-    children.sort_by(|a, b| b.1.effective_size(use_physical).cmp(&a.1.effective_size(use_physical)));
+    children.sort_by(|a, b| {
+        b.1.effective_size(use_physical)
+            .cmp(&a.1.effective_size(use_physical))
+    });
     children.truncate(MAX_CHILDREN_PER_LEVEL);
 
-    let sizes: Vec<u64> = children.iter().map(|(_, c)| c.effective_size(use_physical).max(1)).collect();
+    let mut sizes: Vec<u64> = children
+        .iter()
+        .map(|(_, c)| c.effective_size(use_physical).max(1))
+        .collect();
+    if let Some(fs) = free_space {
+        sizes.push(fs.max(1));
+    }
     let rects = treemap::layout(&sizes, area.w, area.h);
 
-    for ((orig_idx, child), r) in children.iter().zip(rects.iter()) {
+    for (i, r) in rects.iter().enumerate() {
         if r.w == 0 || r.h == 0 || out.len() >= MAX_ITEMS {
             continue;
         }
-        index_path.push(*orig_idx);
+
+        if i >= children.len() {
+            // The synthetic free-space tile — always last, since it was
+            // appended last to `sizes` above.
+            out.push(TreemapItem {
+                x: area.x + r.x,
+                y: area.y + r.y,
+                w: r.w,
+                h: r.h,
+                is_dir: false,
+                depth,
+                name: "Free space".to_string(),
+                category: None,
+                index_path: vec![],
+                is_free_space: true,
+            });
+            continue;
+        }
+
+        let (orig_idx, child) = children[i];
+        index_path.push(orig_idx);
 
         out.push(TreemapItem {
             x: area.x + r.x,
@@ -95,6 +148,7 @@ fn recurse(
             name: child.name.clone(),
             category: child.category,
             index_path: index_path.clone(),
+            is_free_space: false,
         });
 
         if child.is_dir && depth + 1 < MAX_DEPTH {
@@ -118,7 +172,8 @@ fn recurse(
                     h: r.h,
                 }
             };
-            recurse(child, inner, depth + 1, use_physical, index_path, out);
+            // Free space is only ever shown once, at the top level.
+            recurse(child, inner, depth + 1, use_physical, None, index_path, out);
         }
 
         index_path.pop();
