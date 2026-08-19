@@ -108,7 +108,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3), // header / title bar
             Constraint::Min(6),    // body
-            Constraint::Length(3), // extension breakdown
+            Constraint::Length(4), // extension breakdown (2 rows: up to all 9 categories can wrap)
             Constraint::Length(1), // footer / status bar
         ])
         .split(area);
@@ -415,7 +415,7 @@ fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(theme::border_type())
-        .title(" confirm ")
+        .title(Span::styled(" Confirm ", theme::danger_title_bar()))
         .border_style(Style::default().fg(theme::DANGER));
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -440,8 +440,8 @@ fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
             Span::styled(
                 " [ N ]o ",
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Gray)
+                    .fg(theme::BUTTON_NEUTRAL_FG)
+                    .bg(theme::BUTTON_NEUTRAL_BG)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -682,37 +682,63 @@ fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         String::new()
     };
     let size_note = if app.use_physical { " (physical)" } else { "" };
-    let title = format!(
-        " {}   ·   {}{}, {} files{}{}",
-        app.current_path().display(),
+    let stats = format!(
+        "   ·   {}{}, {} files{}{}",
         human_bytes(node.effective_size(app.use_physical)),
         size_note,
         thousands(node.file_count),
         if node.error { "   <access denied>" } else { "" },
         filter_suffix,
     );
-    let bar = theme::title_bar();
-    let mut spans = vec![Span::styled(title, bar)];
-    if app.path_indices.is_empty() && app.tree.is_volume_root() {
-        if let (Some(free), Some(total)) = (app.tree.volume_free, app.tree.volume_total) {
-            spans.push(Span::styled(
-                format!(
-                    "   ·   {} free of {} on this volume",
-                    human_bytes(free),
-                    human_bytes(total)
-                ),
-                bar,
-            ));
+    let free_space_extra = if app.path_indices.is_empty() && app.tree.is_volume_root() {
+        match (app.tree.volume_free, app.tree.volume_total) {
+            (Some(free), Some(total)) => format!(
+                "   ·   {} free of {} on this volume",
+                human_bytes(free),
+                human_bytes(total)
+            ),
+            _ => String::new(),
         }
+    } else {
+        String::new()
+    };
+    // Some entries in this subtree couldn't be read (permission edge case,
+    // a race with something deleting them mid-scan) and were left out of
+    // every total rather than silently pretending they don't exist —
+    // surfaced here so "40 KB" and "40 KB, but some of it we couldn't
+    // see" don't look identical.
+    let warning_extra = if node.unreadable_count > 0 {
+        format!("  ⚠ {} unreadable ", thousands(node.unreadable_count))
+    } else {
+        String::new()
+    };
+
+    // The path is the most compressible part of this line — everything
+    // else here is fixed-width and must never be silently clipped just
+    // because the terminal is narrow or the path is long, especially the
+    // unreadable-count warning above (that's the exact bug it exists to
+    // prevent, just one level up: a truncated *line* hiding it is no
+    // different from a truncated *total*). So the fixed parts are sized
+    // first and the path gets whatever width is left over, truncated in
+    // the middle — keeping both the volume/drive prefix and the leaf
+    // directory name, the two most identifying parts of a long path —
+    // rather than cut off at the end.
+    let reserved = 1
+        + stats.chars().count()
+        + free_space_extra.chars().count()
+        + warning_extra.chars().count();
+    let available_for_path = (inner.width as usize).saturating_sub(reserved).max(8);
+    let full_path = app.current_path().display().to_string();
+    let path_display = truncate_middle(&full_path, available_for_path);
+
+    let bar = theme::title_bar();
+    let mut spans = vec![Span::styled(format!(" {path_display}{stats}"), bar)];
+    if !free_space_extra.is_empty() {
+        spans.push(Span::styled(free_space_extra, bar));
     }
-    if node.unreadable_count > 0 {
-        // Some entries in this subtree couldn't be read (permission edge
-        // case, a race with something deleting them mid-scan) and were
-        // left out of every total rather than silently pretending they
-        // don't exist — surfaced here so "40 KB" and "40 KB, but some of
-        // it we couldn't see" don't look identical.
+    if !warning_extra.is_empty() {
         spans.push(Span::styled(
-            format!("  ⚠ {} unreadable ", thousands(node.unreadable_count)),
+            warning_extra,
             bar.fg(theme::WARNING).add_modifier(Modifier::BOLD),
         ));
     }
@@ -742,7 +768,7 @@ fn dim_unless_matching(
     category: Option<Category>,
 ) -> Color {
     match highlighted {
-        Some(h) if Some(h) != category => Color::Rgb(70, 70, 70),
+        Some(h) if Some(h) != category => theme::DIM,
         _ => c,
     }
 }
@@ -852,7 +878,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(theme::border_type())
-                .border_style(theme::panel_border(false))
+                .border_style(theme::panel_border(true))
                 .title(Span::styled(
                     title,
                     Style::default()
@@ -1123,7 +1149,15 @@ impl<'a> Widget for TreemapWidget<'a> {
             if !item.is_free_space {
                 if let Some(h) = self.highlighted {
                     if Some(h) != item.category {
-                        bg = Color::Rgb(50, 50, 50);
+                        // Blend toward theme::DIM rather than replacing
+                        // the tile outright — a flat gray recreates the
+                        // "everything looks the same" flatness that
+                        // per-extension coloring was built to fix, for
+                        // every non-matching tile at once. Keeping a
+                        // little of the real hue means shape and rough
+                        // color still read while the highlighted set
+                        // clearly stands out.
+                        bg = blend_toward(bg, theme::DIM, 0.75);
                     }
                 }
             }
@@ -1152,7 +1186,15 @@ impl<'a> Widget for TreemapWidget<'a> {
                 && item.index_path.len() == 1
                 && Some(item.index_path[0]) == self.selected_orig;
             if is_selected {
-                draw_border(buf, area, item.x, item.y, item.w, item.h, Color::White);
+                draw_border(
+                    buf,
+                    area,
+                    item.x,
+                    item.y,
+                    item.w,
+                    item.h,
+                    theme::SELECTED_BORDER,
+                );
             }
 
             // A dense tree (a build output directory, node_modules, ...)
@@ -1217,6 +1259,17 @@ fn lighten(c: Color, factor: f32) -> Color {
     }
 }
 
+/// Mixes `c` toward `target` by `t` (0 = unchanged, 1 = fully `target`).
+fn blend_toward(c: Color, target: Color, t: f32) -> Color {
+    if let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (c, target) {
+        let t = t.clamp(0.0, 1.0);
+        let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - t) + f32::from(b) * t) as u8;
+        Color::Rgb(mix(r1, r2), mix(g1, g2), mix(b1, b2))
+    } else {
+        target
+    }
+}
+
 fn contrast_fg(bg: Color) -> Color {
     if let Color::Rgb(r, g, b) = bg {
         let luminance = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
@@ -1243,38 +1296,85 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Truncates `s` to at most `max` characters by cutting out the middle
+/// and joining the head/tail with an ellipsis — for a filesystem path,
+/// the drive/volume prefix and the leaf (innermost) directory name are
+/// usually the most identifying parts, so keeping both ends and losing
+/// the middle preserves more useful information than `truncate`'s plain
+/// trailing ellipsis would.
+fn truncate_middle(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let keep = max - 1;
+    let head = keep.div_ceil(2);
+    let tail = keep / 2;
+    let head_str: String = chars[..head].iter().collect();
+    let tail_str: String = chars[chars.len() - tail..].iter().collect();
+    format!("{head_str}…{tail_str}")
+}
+
 fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
     let total: u64 = app.ext_stats.iter().map(|s| s.size).sum::<u64>().max(1);
-    let mut spans = Vec::new();
-    let mut x = area.x + 1;
-    for (i, stat) in app.ext_stats.iter().take(5).enumerate() {
+    let inner_width = area.width.saturating_sub(2);
+
+    // Every category the `1`-`9` highlight keys can address gets a legend
+    // entry — capping this below 9 (as it once was, at 5) meant pressing
+    // a key for an unshown category silently highlighted something with
+    // no on-screen label to explain what just happened. Rows are packed
+    // by hand (rather than relying on `Paragraph`'s own word-wrap) so the
+    // click zone recorded for each entry is guaranteed to land exactly
+    // where that entry was actually drawn, on whichever row it wrapped
+    // to — a click zone computed independently of the real wrap points
+    // would silently drift out of sync with them.
+    let mut lines: Vec<Line> = Vec::new();
+    let mut row_spans: Vec<Span> = Vec::new();
+    let mut col = 0u16;
+    let mut row = 0u16;
+    for (i, stat) in app.ext_stats.iter().take(Category::COUNT).enumerate() {
         let pct = stat.size as f64 / total as f64 * 100.0;
         let color = dim_unless_matching(
             stat.category.color(),
             app.highlighted_category,
             Some(stat.category),
         );
-        let text = format!("{} ■ {}  {:.0}%   ", i + 1, stat.category.label(), pct);
+        let text = format!("{} ■ {}  {:.1}%   ", i + 1, stat.category.label(), pct);
         let w = text.chars().count() as u16;
-        spans.push(Span::styled(text, Style::default().fg(color)));
+        if col + w > inner_width && col > 0 {
+            lines.push(Line::from(std::mem::take(&mut row_spans)));
+            col = 0;
+            row += 1;
+        }
+        row_spans.push(Span::styled(text, Style::default().fg(color)));
         app.click_zones.push(ClickZone {
-            x,
-            y: area.y + 1,
+            x: area.x + 1 + col,
+            y: area.y + 1 + row,
             w,
             h: 1,
             action: Action::ToggleHighlight(stat.category),
         });
-        x += w;
+        col += w;
     }
-    let title = " File types — click to highlight in the treemap ";
+    if !row_spans.is_empty() {
+        lines.push(Line::from(row_spans));
+    }
+
+    // This groups files by *category* (a fixed, semantic bucket), not by
+    // the individual per-extension hue actually painted in the treemap
+    // above — clicking still highlights the right tiles, but the swatch
+    // color here is this button's own accent, not a literal preview of
+    // what you'll see highlighted.
+    let title = " File categories — click to highlight ";
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(theme::border_type())
         .border_style(theme::panel_border(false))
         .title(title);
-    let p = Paragraph::new(Line::from(spans))
-        .block(block)
-        .wrap(Wrap { trim: true });
+    let p = Paragraph::new(lines).block(block);
     f.render_widget(p, area);
 }
 
@@ -1367,14 +1467,14 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool,
     shadow(f, area);
     f.render_widget(Clear, area);
     let title = if permanent {
-        " permanently delete "
+        " Permanently Delete "
     } else {
-        " move to trash "
+        " Move to Trash "
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(theme::border_type())
-        .title(title)
+        .title(Span::styled(title, theme::danger_title_bar()))
         .border_style(Style::default().fg(theme::DANGER));
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -1420,8 +1520,8 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool,
     buttons.push(Span::styled(
         " [ N ]o ",
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Gray)
+            .fg(theme::BUTTON_NEUTRAL_FG)
+            .bg(theme::BUTTON_NEUTRAL_BG)
             .add_modifier(Modifier::BOLD),
     ));
     text.push(Line::from(buttons));

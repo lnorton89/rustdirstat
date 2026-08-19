@@ -16,6 +16,15 @@ pub const DANGER: Color = Color::Rgb(217, 83, 79);
 pub const DANGER_BG: Color = Color::Rgb(58, 30, 30);
 pub const WARNING: Color = Color::Rgb(230, 175, 46);
 pub const SHADOW: Color = Color::Rgb(18, 18, 22);
+/// The one "de-emphasize this" gray, used anywhere something needs to
+/// visually recede without going fully invisible (a treemap tile outside
+/// the active category highlight, an unselected legend entry, ...) — a
+/// single shared constant instead of several ad hoc grays scattered
+/// across call sites that don't agree with each other or with `MUTED`.
+pub const DIM: Color = Color::Rgb(55, 58, 66);
+pub const BUTTON_NEUTRAL_BG: Color = Color::Rgb(160, 165, 175);
+pub const BUTTON_NEUTRAL_FG: Color = Color::Rgb(20, 20, 24);
+pub const SELECTED_BORDER: Color = Color::Rgb(240, 244, 250);
 
 pub fn border_type() -> BorderType {
     BorderType::Rounded
@@ -26,6 +35,20 @@ pub fn title_bar() -> Style {
     Style::default()
         .bg(ACCENT)
         .fg(ACCENT_TEXT)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Like `title_bar`, but for dialogs that need to visually outrank a
+/// routine one — permanent delete, destructive system tools. Filled with
+/// `DANGER` rather than `ACCENT` so the highest-stakes confirmations in
+/// the app are the most visually assertive ones, not the least (a plain,
+/// unstyled title was the previous behavior for exactly these two
+/// dialogs, which read backwards next to every other popup's filled
+/// title bar).
+pub fn danger_title_bar() -> Style {
+    Style::default()
+        .bg(DANGER)
+        .fg(Color::Black)
         .add_modifier(Modifier::BOLD)
 }
 
