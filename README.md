@@ -84,6 +84,17 @@ surface):
   shortcuts" for the rest), or the **Yes/No buttons** in the delete
   confirmation popup.
 
+## Preferences
+
+Sort order, the treemap panel's visibility and width, the detail-row
+toggle, and the logical/physical size toggle are remembered across runs —
+saved to a small TOML file on quit (`$XDG_CONFIG_HOME/rustdirstat/config.toml`
+on Linux, the platform-equivalent config directory elsewhere) and reapplied
+on the next launch. Nothing tied to a specific scan (browse location,
+filters, search state) is persisted — only settings, not session state. A
+missing or unreadable config file is silent and harmless: it just means
+this run starts from the built-in defaults.
+
 ## Design
 
 The default view is deliberately spare — one accent color for navigation,

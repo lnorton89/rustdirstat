@@ -9,6 +9,7 @@ mod ui;
 use crate::scanner::{self, Progress};
 use anyhow::Result;
 use app::App;
+pub use app::SortMode;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
@@ -95,6 +96,7 @@ enum BrowseOutcome {
 
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, root: PathBuf) -> Result<()> {
     let mut restore_to: Option<PathBuf> = None;
+    let config = crate::config::load();
 
     loop {
         let tree = match scan_with_progress(terminal, &root)? {
@@ -103,12 +105,16 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, root: PathB
         };
 
         let mut app = App::new(tree);
+        app.apply_config(&config);
         if let Some(target) = restore_to.take() {
             app.restore_path(&target);
         }
 
         match browse(terminal, &mut app)? {
-            BrowseOutcome::Quit => return Ok(()),
+            BrowseOutcome::Quit => {
+                crate::config::save(&app.to_config());
+                return Ok(());
+            }
             BrowseOutcome::Refresh => {
                 restore_to = Some(app.current_path());
             }

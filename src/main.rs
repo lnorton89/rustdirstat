@@ -1,4 +1,5 @@
 mod color;
+mod config;
 mod duplicates;
 mod model;
 mod platform;

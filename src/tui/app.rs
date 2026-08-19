@@ -1,6 +1,7 @@
 use super::search::{self, SearchHit};
 use super::top_files::{self, TopFile};
 use crate::color::Category;
+use crate::config::Config;
 use crate::duplicates::DupGroup;
 use crate::model::{Node, Tree};
 use crate::stats::{self, ExtStat};
@@ -9,7 +10,7 @@ use crossterm::event::KeyCode;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SortMode {
     SizeDesc,
     SizeAsc,
@@ -214,6 +215,42 @@ impl App {
         };
         app.refresh_ext_stats();
         app
+    }
+
+    /// Applies persisted preferences loaded at startup. Every field is
+    /// optional, so a first run (no config file yet) or a config missing a
+    /// newer field just leaves that setting at its built-in default.
+    pub fn apply_config(&mut self, cfg: &Config) {
+        if let Some(sort) = cfg.sort {
+            self.sort = sort;
+        }
+        if let Some(show_treemap) = cfg.show_treemap {
+            self.show_treemap = show_treemap;
+        }
+        if let Some(split) = cfg.treemap_split {
+            self.treemap_split = split.clamp(TREEMAP_SPLIT_MIN, TREEMAP_SPLIT_MAX);
+        }
+        if let Some(detailed) = cfg.detailed {
+            self.detailed = detailed;
+        }
+        if let Some(use_physical) = cfg.use_physical {
+            self.use_physical = use_physical;
+        }
+    }
+
+    /// Snapshots the preferences worth persisting across runs. Deliberately
+    /// excludes anything tied to this specific scan (browse location,
+    /// filters, search state, highlighted category) — those are session
+    /// state, not preferences, and restoring them on an unrelated future
+    /// scan would be surprising rather than helpful.
+    pub fn to_config(&self) -> Config {
+        Config {
+            sort: Some(self.sort),
+            show_treemap: Some(self.show_treemap),
+            treemap_split: Some(self.treemap_split),
+            detailed: Some(self.detailed),
+            use_physical: Some(self.use_physical),
+        }
     }
 
     /// Restore browsing to whatever directory `target` was pointing at
