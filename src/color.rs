@@ -133,7 +133,21 @@ pub fn ext_color(name: &str) -> Color {
     if ext.is_empty() {
         return Category::NoExtension.color();
     }
-    let hue = (fnv1a(ext.as_bytes()) % 360) as f32;
+    // The hash is taken modulo 320 rather than the full 360° and then
+    // shifted past a 40°-wide gap centered on the directory tan's own
+    // hue (~41°) — without this, an ordinary extension (.wav, .csv, .mp4
+    // all land within ~10° of it) can hash to a color close enough to
+    // the directory tan that a file tile and a folder tile next to it at
+    // the same depth become hard to tell apart by color alone, defeating
+    // the whole reason directories get a dedicated, distinct hue.
+    const GAP_START: f32 = 21.0;
+    const GAP_WIDTH: f32 = 40.0;
+    let raw = (fnv1a(ext.as_bytes()) % 320) as f32;
+    let hue = if raw < GAP_START {
+        raw
+    } else {
+        raw + GAP_WIDTH
+    };
     hsv_to_rgb(hue, 0.55, 0.85)
 }
 

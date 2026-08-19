@@ -3,6 +3,7 @@ use super::nested::{self, TreemapItem};
 use super::theme;
 use crate::color::{self, Category};
 use crate::scanner::Progress;
+use crate::stats::ExtStat;
 use crate::util::{format_modified, human_bytes, thousands};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -103,13 +104,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.click_zones.clear();
 
     let area = f.area();
+    // Sized to fit however many rows the category legend actually needs
+    // at this width (up to all 9 categories, each entry width-dependent)
+    // rather than a fixed guess — a guess that happens to be too short
+    // silently clips whichever categories don't fit, with no on-screen
+    // sign anything is missing.
+    let ext_rows = ext_legend_row_count(&app.ext_stats, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header / title bar
-            Constraint::Min(6),    // body
-            Constraint::Length(4), // extension breakdown (2 rows: up to all 9 categories can wrap)
-            Constraint::Length(1), // footer / status bar
+            Constraint::Length(3),            // header / title bar
+            Constraint::Min(6),               // body
+            Constraint::Length(ext_rows + 2), // extension breakdown
+            Constraint::Length(1),            // footer / status bar
         ])
         .split(area);
 
@@ -195,7 +202,10 @@ fn draw_search_prompt(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_type(theme::border_type())
         .border_style(Style::default().fg(theme::ACCENT))
-        .title(Span::styled(" Search this subtree ", theme::title_bar()));
+        .title(Span::styled(
+            " Search this subtree (Esc to cancel) ",
+            theme::title_bar(),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -225,7 +235,7 @@ fn draw_move_prompt(f: &mut Frame, app: &mut App) {
         .border_type(theme::border_type())
         .border_style(Style::default().fg(theme::ACCENT))
         .title(Span::styled(
-            format!(" Move '{name}' to "),
+            format!(" Move '{name}' to (Esc to cancel) "),
             theme::title_bar(),
         ));
     let inner = block.inner(area);
@@ -343,8 +353,27 @@ fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // Pushed before the per-tool zones below (not after) — click zones
+    // are searched last-pushed-first, so this full-area background zone
+    // must come first or it would shadow every per-tool zone on top of
+    // it instead of only catching clicks that miss them all.
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::ToggleWinTools,
+    });
+
     let available = cfg!(windows);
     let mut lines: Vec<Line> = Vec::new();
+    // Click zones are built in the same pass as the lines themselves,
+    // tracking the real row each entry lands on (a name row, plus a
+    // variable number of wrapped description rows when selected) —
+    // computing them from a second, independent pass (as this used to)
+    // drifts out of sync the moment any entry's row count differs from
+    // "exactly one," which every selected entry's description does.
+    let mut row = 0u16;
     for (i, tool) in crate::wintools::TOOLS.iter().enumerate() {
         let selected = i == app.wintools_selected;
         let name_style = if !available {
@@ -361,11 +390,24 @@ fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
             format!("{marker}{}", tool.name),
             name_style,
         )));
+        if row < inner.height {
+            app.click_zones.push(ClickZone {
+                x: inner.x,
+                y: inner.y + row,
+                w: inner.width,
+                h: 1,
+                action: Action::SelectWinTool(i),
+            });
+        }
+        row += 1;
         if selected {
-            lines.push(Line::from(Span::styled(
-                format!("    {}", tool.description),
-                Style::default().fg(theme::MUTED),
-            )));
+            for desc_line in wrap_text(&format!("    {}", tool.description), inner.width as usize) {
+                lines.push(Line::from(Span::styled(
+                    desc_line,
+                    Style::default().fg(theme::MUTED),
+                )));
+                row += 1;
+            }
         }
     }
     if !available {
@@ -375,34 +417,7 @@ fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
             Style::default().fg(theme::MUTED),
         )));
     }
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-
-    app.click_zones.push(ClickZone {
-        x: area.x,
-        y: area.y,
-        w: area.width,
-        h: area.height,
-        action: Action::ToggleWinTools,
-    });
-    for (i, _) in crate::wintools::TOOLS.iter().enumerate() {
-        // Each entry is drawn as either one line (unselected) or two
-        // lines (selected, with its description) — approximate the
-        // click target as the single name row; good enough for a list
-        // this short, and selecting first before activating (arrow keys,
-        // or a first click to select then a second to open) is the same
-        // two-step interaction other apps use for a destructive menu.
-        let y = inner.y + i as u16;
-        if y >= inner.y + inner.height {
-            break;
-        }
-        app.click_zones.push(ClickZone {
-            x: inner.x,
-            y,
-            w: inner.width,
-            h: 1,
-            action: Action::SelectWinTool(i),
-        });
-    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
@@ -420,33 +435,40 @@ fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let text = vec![
-        Line::from(format!("Run '{}'?", tool.name)),
-        Line::from(""),
-        Line::from(Span::styled(
-            tool.description,
-            Style::default().fg(theme::DANGER),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                " [ Y ]es ",
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(theme::DANGER)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("   "),
-            Span::styled(
-                " [ N ]o ",
-                Style::default()
-                    .fg(theme::BUTTON_NEUTRAL_FG)
-                    .bg(theme::BUTTON_NEUTRAL_BG)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-    ];
-    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+    // The button row can't be a hardcoded line offset — either the
+    // question or (especially) the description can wrap onto more than
+    // one row depending on terminal width, and a fixed offset silently
+    // drifts out of sync with where the buttons actually render, so
+    // clicking what looks like Yes/No hits the wrong target (or nothing).
+    // Pre-wrapping by hand, the same width `Paragraph` will use, means
+    // the row math and the rendered text can never disagree.
+    let inner_w = inner.width as usize;
+    let question_lines = wrap_text(&format!("Run '{}'?", tool.name), inner_w);
+    let desc_lines = wrap_text(tool.description, inner_w);
+
+    let mut text: Vec<Line> = question_lines
+        .iter()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    text.push(Line::from(""));
+    text.extend(
+        desc_lines
+            .iter()
+            .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme::DANGER)))),
+    );
+    text.push(Line::from(""));
+    text.push(Line::from(vec![
+        Span::styled(" [ Y ]es ", theme::filled_button(theme::DANGER)),
+        Span::raw("   "),
+        Span::styled(
+            " [ N ]o ",
+            Style::default()
+                .fg(theme::BUTTON_NEUTRAL_FG)
+                .bg(theme::BUTTON_NEUTRAL_BG)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    f.render_widget(Paragraph::new(text), inner);
 
     app.click_zones.push(ClickZone {
         x: area.x,
@@ -455,7 +477,7 @@ fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
         h: area.height,
         action: Action::CancelWinTool,
     });
-    let button_row = inner.y + 4;
+    let button_row = inner.y + question_lines.len() as u16 + 1 + desc_lines.len() as u16 + 1;
     app.click_zones.push(ClickZone {
         x: inner.x,
         y: button_row,
@@ -1318,46 +1340,122 @@ fn truncate_middle(s: &str, max: usize) -> String {
     format!("{head_str}…{tail_str}")
 }
 
-fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
-    let total: u64 = app.ext_stats.iter().map(|s| s.size).sum::<u64>().max(1);
-    let inner_width = area.width.saturating_sub(2);
+/// Greedy word-wrap into lines of at most `width` characters. Used
+/// instead of `Paragraph::wrap` wherever a popup needs to know its own
+/// wrapped row count in advance — to place click zones exactly where
+/// text will land (as `draw_wintools_popup` does per-tool) or to size a
+/// button row below variable-length text (the confirm popups) — since
+/// computing that independently of whatever `Paragraph`'s own wrapping
+/// decides would drift out of sync with what's actually on screen.
+fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![s.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in s.split(' ') {
+        let candidate_len = if current.is_empty() {
+            word.chars().count()
+        } else {
+            current.chars().count() + 1 + word.chars().count()
+        };
+        if candidate_len > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    lines.push(current);
+    lines
+}
 
-    // Every category the `1`-`9` highlight keys can address gets a legend
-    // entry — capping this below 9 (as it once was, at 5) meant pressing
-    // a key for an unshown category silently highlighted something with
-    // no on-screen label to explain what just happened. Rows are packed
-    // by hand (rather than relying on `Paragraph`'s own word-wrap) so the
-    // click zone recorded for each entry is guaranteed to land exactly
-    // where that entry was actually drawn, on whichever row it wrapped
-    // to — a click zone computed independently of the real wrap points
-    // would silently drift out of sync with them.
-    let mut lines: Vec<Line> = Vec::new();
-    let mut row_spans: Vec<Span> = Vec::new();
+struct ExtLegendEntry {
+    row: u16,
+    col: u16,
+    width: u16,
+    text: String,
+    category: Category,
+}
+
+/// Packs the extension-category legend into rows of at most `width`
+/// columns. Shared by the vertical-layout pass (which needs only the
+/// resulting row count, to size the legend panel *before* anything is
+/// drawn into it) and `draw_ext_stats` itself (which needs the exact
+/// per-entry row/col to place click zones) — computing the row count
+/// one way and the actual positions another way is exactly how the
+/// panel ended up hard-capped at a height too short for its own worst
+/// case (9 categories can need 3 rows at a normal 80-column terminal,
+/// the panel was fixed at 2) with click zones for the clipped row still
+/// silently registered against the border underneath it.
+fn pack_ext_legend(ext_stats: &[ExtStat], width: u16) -> Vec<ExtLegendEntry> {
+    let total: u64 = ext_stats.iter().map(|s| s.size).sum::<u64>().max(1);
+    let mut entries = Vec::new();
     let mut col = 0u16;
     let mut row = 0u16;
-    for (i, stat) in app.ext_stats.iter().take(Category::COUNT).enumerate() {
+    for (i, stat) in ext_stats.iter().take(Category::COUNT).enumerate() {
         let pct = stat.size as f64 / total as f64 * 100.0;
-        let color = dim_unless_matching(
-            stat.category.color(),
-            app.highlighted_category,
-            Some(stat.category),
-        );
         let text = format!("{} ■ {}  {:.1}%   ", i + 1, stat.category.label(), pct);
         let w = text.chars().count() as u16;
-        if col + w > inner_width && col > 0 {
-            lines.push(Line::from(std::mem::take(&mut row_spans)));
+        if col + w > width && col > 0 {
             col = 0;
             row += 1;
         }
-        row_spans.push(Span::styled(text, Style::default().fg(color)));
-        app.click_zones.push(ClickZone {
-            x: area.x + 1 + col,
-            y: area.y + 1 + row,
-            w,
-            h: 1,
-            action: Action::ToggleHighlight(stat.category),
+        entries.push(ExtLegendEntry {
+            row,
+            col,
+            width: w,
+            text,
+            category: stat.category,
         });
         col += w;
+    }
+    entries
+}
+
+/// How many rows `pack_ext_legend` will need for the legend panel —
+/// called before the panel's own `Rect` exists, so the vertical layout
+/// can size it to fit rather than clipping a fixed guess.
+fn ext_legend_row_count(ext_stats: &[ExtStat], width: u16) -> u16 {
+    pack_ext_legend(ext_stats, width)
+        .last()
+        .map_or(0, |e| e.row + 1)
+}
+
+fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
+    let inner_width = area.width.saturating_sub(2);
+    let entries = pack_ext_legend(&app.ext_stats, inner_width);
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut row_spans: Vec<Span> = Vec::new();
+    let mut current_row = 0u16;
+    for entry in &entries {
+        if entry.row != current_row {
+            lines.push(Line::from(std::mem::take(&mut row_spans)));
+            current_row = entry.row;
+        }
+        let color = dim_unless_matching(
+            entry.category.color(),
+            app.highlighted_category,
+            Some(entry.category),
+        );
+        row_spans.push(Span::styled(entry.text.clone(), Style::default().fg(color)));
+        let y = area.y + 1 + entry.row;
+        // Defense in depth: the panel is sized by `ext_legend_row_count`
+        // to fit every entry, but layout constraints can still get
+        // squeezed smaller than requested on a very short terminal — a
+        // click zone drawn past the panel's actual bounds would be
+        // clickable on whatever's rendered underneath it instead.
+        if y < area.y + area.height.saturating_sub(1) {
+            app.click_zones.push(ClickZone {
+                x: area.x + 1 + entry.col,
+                y,
+                w: entry.width,
+                h: 1,
+                action: Action::ToggleHighlight(entry.category),
+            });
+        }
     }
     if !row_spans.is_empty() {
         lines.push(Line::from(row_spans));
@@ -1394,11 +1492,33 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     // delete) stays a keyboard shortcut discoverable via "? help" — a
     // dozen buttons crammed into one row was the single busiest part of
     // the whole interface.
-    let buttons: [(&str, Action); 3] = [
+    let full_buttons: [(&str, Action); 3] = [
         (" Enter  Open ", Action::OpenSelected),
         (" Backspace  Up ", Action::Back),
         (" d  Delete ", Action::RequestDelete),
     ];
+    let compact_buttons: [(&str, Action); 2] = [
+        (" Enter  Open ", Action::OpenSelected),
+        (" d  Delete ", Action::RequestDelete),
+    ];
+    let quit_label = " q  Quit ";
+    let help_label = "  ?  more shortcuts ";
+    let fixed_tail_width = quit_label.chars().count() as u16 + help_label.chars().count() as u16;
+    let full_width: u16 = full_buttons
+        .iter()
+        .map(|(l, _)| l.chars().count() as u16 + 2)
+        .sum::<u16>()
+        + fixed_tail_width;
+    // On a narrow terminal, "Backspace  Up" is the button to drop first
+    // — it's the one redundant affordance here (clicking the header does
+    // the same thing) — rather than silently clipping the row from the
+    // right, which previously lost the Quit button and the only
+    // on-screen pointer to the full shortcut list first.
+    let buttons: &[(&str, Action)] = if area.width >= full_width {
+        &full_buttons
+    } else {
+        &compact_buttons
+    };
 
     let mut spans = Vec::new();
     let mut x = area.x;
@@ -1479,41 +1599,48 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool,
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let action_desc = if permanent {
-        vec![Line::from(Span::styled(
-            "This bypasses the Recycle Bin/Trash and cannot be undone.",
-            Style::default().fg(theme::DANGER),
-        ))]
+    // As in draw_wintool_confirm_popup: the button row can't be a fixed
+    // line offset, since the item name or the description text can wrap
+    // onto more than one row depending on terminal width and how long
+    // the deleted item's name is — pre-wrapping by hand keeps the click
+    // zones honest about where the buttons actually render.
+    let inner_w = inner.width as usize;
+    let question_lines = wrap_text(&format!("Delete '{name}'?"), inner_w);
+    let desc_text = if permanent {
+        "This bypasses the Recycle Bin/Trash and cannot be undone."
     } else {
-        vec![Line::from(
-            "This can be undone from your OS Recycle Bin/Trash.",
-        )]
+        "This can be undone from your OS Recycle Bin/Trash."
     };
-    let mut text = vec![Line::from(format!("Delete '{name}'?")), Line::from("")];
-    text.extend(action_desc);
-    if is_dir {
-        text.push(Line::from(
+    let desc_lines = wrap_text(desc_text, inner_w);
+    let empty_lines: Vec<String> = if is_dir {
+        wrap_text(
             "Or empty it — delete its contents, keep the folder.",
-        ));
-    }
+            inner_w,
+        )
+    } else {
+        Vec::new()
+    };
+
+    let mut text: Vec<Line> = question_lines
+        .iter()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    text.push(Line::from(""));
+    text.extend(
+        desc_lines
+            .iter()
+            .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme::DANGER)))),
+    );
+    text.extend(empty_lines.iter().map(|l| Line::from(l.clone())));
     text.push(Line::from(""));
     let mut buttons = vec![
-        Span::styled(
-            " [ Y ]es ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(theme::DANGER)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(" [ Y ]es ", theme::filled_button(theme::DANGER)),
         Span::raw("   "),
     ];
     if is_dir {
         buttons.push(Span::styled(
             " [ E ]mpty ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(theme::WARNING)
-                .add_modifier(Modifier::BOLD),
+            theme::filled_button(theme::WARNING),
         ));
         buttons.push(Span::raw("   "));
     }
@@ -1525,7 +1652,7 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool,
             .add_modifier(Modifier::BOLD),
     ));
     text.push(Line::from(buttons));
-    let p = Paragraph::new(text).wrap(Wrap { trim: true });
+    let p = Paragraph::new(text);
     f.render_widget(p, inner);
 
     app.click_zones.push(ClickZone {
@@ -1535,7 +1662,12 @@ fn draw_confirm_popup(f: &mut Frame, app: &mut App, name: &str, permanent: bool,
         h: area.height,
         action: Action::CancelDelete,
     });
-    let button_row = inner.y + if is_dir { 5 } else { 4 };
+    let button_row = inner.y
+        + question_lines.len() as u16
+        + 1
+        + desc_lines.len() as u16
+        + empty_lines.len() as u16
+        + 1;
     app.click_zones.push(ClickZone {
         x: inner.x,
         y: button_row,

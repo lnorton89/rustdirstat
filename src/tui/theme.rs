@@ -77,3 +77,17 @@ pub fn panel_border(focused: bool) -> Style {
         PANEL_BORDER
     })
 }
+
+/// A filled, bold confirm-popup button in a given accent color (`DANGER`
+/// for "Yes" on a delete/destructive confirm, `WARNING` for "Empty") —
+/// centralized alongside `BUTTON_NEUTRAL_BG`/`FG` so all three buttons in
+/// these popups come from one place instead of three separate inline
+/// `Style` literals that could quietly drift apart (e.g. if `DANGER` is
+/// ever retuned darker, nothing would catch the fixed `Color::Black` text
+/// on it stopping being readable).
+pub fn filled_button(bg: Color) -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD)
+}
