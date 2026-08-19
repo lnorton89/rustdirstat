@@ -168,21 +168,42 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
         };
 
     let children: Vec<Node> = if entries.len() >= PAR_THRESHOLD {
-        entries
+        // `fold` accumulates files/bytes per rayon work chunk (each chunk
+        // covers many entries, processed on one worker thread without
+        // touching the shared atomics), and `reduce` merges chunks
+        // pairwise — so the whole directory's entries still add up to
+        // exactly one or two `fetch_add` calls each, same as the
+        // sequential branch below, rather than one per file. A version of
+        // this that reset a per-entry counter inside the `filter_map`
+        // closure (so every single file did its own `fetch_add`) would
+        // silently contradict `Progress`'s own "updated once per
+        // directory" doc comment and reintroduce the very atomic
+        // contention that comment says was avoided.
+        let (nodes, (lf, lb)) = entries
             .into_par_iter()
-            .filter_map(|entry| {
-                let mut lf = 0;
-                let mut lb = 0;
-                let node = scan_one(entry, &mut lf, &mut lb);
-                if let Some(p) = progress {
-                    if lf > 0 {
-                        p.files.fetch_add(lf, Ordering::Relaxed);
-                        p.bytes.fetch_add(lb, Ordering::Relaxed);
+            .fold(
+                || (Vec::new(), (0u64, 0u64)),
+                |(mut nodes, (mut lf, mut lb)), entry| {
+                    if let Some(node) = scan_one(entry, &mut lf, &mut lb) {
+                        nodes.push(node);
                     }
-                }
-                node
-            })
-            .collect()
+                    (nodes, (lf, lb))
+                },
+            )
+            .reduce(
+                || (Vec::new(), (0u64, 0u64)),
+                |(mut nodes_a, (lf_a, lb_a)), (nodes_b, (lf_b, lb_b))| {
+                    nodes_a.extend(nodes_b);
+                    (nodes_a, (lf_a + lf_b, lb_a + lb_b))
+                },
+            );
+        if let Some(p) = progress {
+            if lf > 0 {
+                p.files.fetch_add(lf, Ordering::Relaxed);
+                p.bytes.fetch_add(lb, Ordering::Relaxed);
+            }
+        }
+        nodes
     } else {
         let nodes: Vec<Node> = entries
             .into_iter()

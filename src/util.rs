@@ -154,15 +154,76 @@ pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::R
     if std::fs::rename(source, dest).is_ok() {
         return Ok(());
     }
+    // rename failed — most commonly because source and dest are on
+    // different volumes, which rename can never bridge — so fall back to
+    // copy-then-remove. `symlink_metadata` (never follows the link
+    // itself) so a symlink is recreated as a symlink at `dest` rather
+    // than silently resolved and copied as if it were its target
+    // (potentially huge, or entirely outside the scanned tree) —
+    // `copy_dir_recursive` below already makes this same distinction for
+    // a symlink nested *inside* a moved directory; this is the top-level
+    // single-item case that was missed.
     let meta = std::fs::symlink_metadata(source)?;
-    if meta.is_dir() {
-        copy_dir_recursive(source, dest)?;
-        std::fs::remove_dir_all(source)?;
+    let is_symlink = meta.file_type().is_symlink();
+    let is_dir = meta.is_dir();
+
+    let copy_result = if is_symlink {
+        recreate_symlink(source, dest)
+    } else if is_dir {
+        copy_dir_recursive(source, dest)
     } else {
-        std::fs::copy(source, dest)?;
-        std::fs::remove_file(source)?;
+        std::fs::copy(source, dest).map(|_| ())
+    };
+    if let Err(e) = copy_result {
+        // Whatever landed at `dest` (nothing, or a partial copy) is
+        // cleaned up so a retry isn't immediately blocked by the
+        // AlreadyExists check above, and a failed move doesn't silently
+        // double disk usage by leaving a copy sitting next to the
+        // still-intact original.
+        let _ = remove_path(dest, is_dir, is_symlink);
+        return Err(e);
     }
-    Ok(())
+
+    remove_path(source, is_dir, is_symlink)
+}
+
+/// Recreates `source` (a symlink) at `dest` rather than following it — see
+/// the comment in `move_path` for why.
+fn recreate_symlink(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    let link_target = std::fs::read_link(source)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&link_target, dest)
+    }
+    #[cfg(windows)]
+    {
+        if link_target.is_dir() {
+            std::os::windows::fs::symlink_dir(&link_target, dest)
+        } else {
+            std::os::windows::fs::symlink_file(&link_target, dest)
+        }
+    }
+}
+
+/// Removes whichever of a real directory, a symlink, or a plain file
+/// `path` is. Symlinks need special care on Windows only: a directory
+/// symlink/junction carries `FILE_ATTRIBUTE_DIRECTORY`, and Windows'
+/// `DeleteFileW` (what `remove_file` calls) refuses to touch anything with
+/// that attribute set — it has to go through `RemoveDirectoryW`
+/// (`remove_dir`) instead, same as an empty real directory, even though
+/// it's not one. `symlink_metadata` never resolves the link, so whether
+/// it points at a directory has to be checked here, by following it once,
+/// purely to pick the correct removal call. Unix has no such distinction
+/// (`remove_file`/`unlink` removes any symlink regardless of what it
+/// points to), so `cfg!(windows)` keeps this a no-op there.
+fn remove_path(path: &std::path::Path, is_dir: bool, is_symlink: bool) -> std::io::Result<()> {
+    if is_dir {
+        return std::fs::remove_dir_all(path);
+    }
+    if is_symlink && cfg!(windows) && std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false) {
+        return std::fs::remove_dir(path);
+    }
+    std::fs::remove_file(path)
 }
 
 fn copy_dir_recursive(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
@@ -190,4 +251,44 @@ fn copy_dir_recursive(source: &std::path::Path, dest: &std::path::Path) -> std::
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    // Unix-only: creating a symlink on Windows needs elevated privileges
+    // or developer mode, which a test environment can't assume. Exercises
+    // `recreate_symlink` directly rather than the full `move_path`, since
+    // reliably forcing a genuine cross-device rename failure (the only
+    // way `move_path` itself reaches this code) isn't something a test
+    // environment can depend on having two filesystems for.
+    #[test]
+    fn move_fallback_preserves_symlinks_instead_of_copying_target() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustdirstat_test_{}_{}",
+            std::process::id(),
+            "move_fallback_preserves_symlinks"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let target = dir.join("target.txt");
+        std::fs::write(&target, b"hello").unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let dest = dir.join("link_moved");
+        recreate_symlink(&link, &dest).unwrap();
+
+        let meta = std::fs::symlink_metadata(&dest).unwrap();
+        assert!(
+            meta.file_type().is_symlink(),
+            "moving a symlink across the fallback path should recreate a \
+             symlink at the destination, not copy the bytes it points to"
+        );
+        assert_eq!(std::fs::read_link(&dest).unwrap(), target);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

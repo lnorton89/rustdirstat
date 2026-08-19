@@ -56,7 +56,14 @@ pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> Vec<DupGr
         .into_iter()
         .filter(|(size, files)| *size > 0 && files.len() > 1)
         .collect();
-    size_groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    // Tie-broken by size (unique per group, since `by_size` is keyed by
+    // it) rather than left to land in whatever order `HashMap::into_iter`
+    // happened to produce — that order comes from `RandomState`'s
+    // per-process random seed, so without a deterministic tiebreaker,
+    // which same-file-count groups get truncated when `MAX_CANDIDATES` is
+    // actually hit (not just their display order) could differ between
+    // two runs of an identical scan.
+    size_groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| b.0.cmp(&a.0)));
 
     let mut candidates: Vec<(Vec<usize>, PathBuf, u64)> = Vec::new();
     'outer: for (size, files) in size_groups {
@@ -101,10 +108,25 @@ pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> Vec<DupGr
         .into_values()
         .filter(|g| g.files.len() > 1)
         .collect();
+    // Same determinism concern as the size_groups sort above — `by_hash`
+    // is also a `HashMap`, so ties on wasted space need an explicit,
+    // deterministic tiebreaker rather than inheriting random iteration
+    // order. Size and file count resolve all but a true tie on every
+    // displayed stat; the first file's index path (unique per file)
+    // resolves the rest, so the final order never depends on hashing.
     groups.sort_by(|a, b| {
         let wasted_a = a.size * (a.files.len() as u64 - 1);
         let wasted_b = b.size * (b.files.len() as u64 - 1);
-        wasted_b.cmp(&wasted_a)
+        wasted_b
+            .cmp(&wasted_a)
+            .then_with(|| b.size.cmp(&a.size))
+            .then_with(|| b.files.len().cmp(&a.files.len()))
+            .then_with(|| {
+                a.files
+                    .first()
+                    .map(|f| &f.index_path)
+                    .cmp(&b.files.first().map(|f| &f.index_path))
+            })
     });
     groups
 }
