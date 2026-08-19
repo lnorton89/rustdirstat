@@ -3,6 +3,13 @@ use crate::model::Node;
 
 pub struct ExtStat {
     pub category: Category,
+    /// The size to actually show — logical or physical, whichever
+    /// `extension_stats` was asked for. Kept as a single already-resolved
+    /// field (rather than both totals) so every consumer (the legend's
+    /// percentages, its sort order) automatically agrees with whichever
+    /// mode the rest of the screen — header, file list, treemap — is
+    /// currently showing, instead of a second place that could drift out
+    /// of sync with the `use_physical` toggle.
     pub size: u64,
     pub count: u64,
 }
@@ -11,16 +18,16 @@ pub struct ExtStat {
 /// of the totals precomputed bottom-up at scan time (see `scanner::scan_dir`)
 /// — no re-walking the subtree, so it stays instant even for a directory
 /// with millions of descendants.
-pub fn extension_stats(node: &Node) -> Vec<ExtStat> {
+pub fn extension_stats(node: &Node, use_physical: bool) -> Vec<ExtStat> {
     let mut v: Vec<ExtStat> = Category::ALL
         .iter()
         .enumerate()
         .filter_map(|(i, &category)| {
-            let (size, count) = *node.ext_totals.get(i)?;
+            let (logical, physical, count) = *node.ext_totals.get(i)?;
             if count > 0 {
                 Some(ExtStat {
                     category,
-                    size,
+                    size: if use_physical { physical } else { logical },
                     count,
                 })
             } else {

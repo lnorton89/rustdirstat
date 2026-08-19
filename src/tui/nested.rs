@@ -28,6 +28,15 @@ pub struct TreemapItem {
     /// True only for the synthetic "free space on this volume" tile —
     /// never a real file or directory.
     pub is_free_space: bool,
+    /// False only for a directory that recursed into its children without
+    /// reserving a row for its own label (tile too small to spare one) —
+    /// the render side must not draw a label there even if the tile would
+    /// otherwise be wide/tall enough on its own, since it would just be
+    /// painted over by (or paint over) the children occupying that same
+    /// space. True for files and for any directory that either didn't
+    /// recurse or reserved its own row, where there's nothing to conflict
+    /// with.
+    pub can_label: bool,
 }
 
 // Any directory with room for at least one sub-tile keeps recursing into
@@ -61,7 +70,9 @@ pub struct TreemapItem {
 // screen footprint, so one huge fanout can no longer starve everything
 // drawn after it.
 const MAX_DEPTH: u16 = 24;
-const MIN_LABEL_W: u16 = 4;
+// Matches the `item.w >= 6` legibility gate in ui.rs's render code — see
+// the comment on `reserve_label` below for why these can't drift apart.
+const MIN_LABEL_W: u16 = 6;
 const MIN_LABEL_H: u16 = 2;
 const MIN_RECURSE_AREA: u32 = 2;
 const MAX_CHILDREN_PER_LEVEL: usize = 60;
@@ -151,12 +162,25 @@ fn recurse(
                 category: None,
                 index_path: vec![],
                 is_free_space: true,
+                can_label: true,
             });
             continue;
         }
 
         let (orig_idx, child) = children[i];
         index_path.push(orig_idx);
+
+        let area_cells = u32::from(r.w) * u32::from(r.h);
+        let recurses = child.is_dir && depth + 1 < MAX_DEPTH && area_cells >= MIN_RECURSE_AREA;
+        // Only reserve a row for the directory's own label if the tile is
+        // big enough for that label to actually render (matches the w>=6
+        // render-time gate in ui.rs — MIN_LABEL_W here isn't an
+        // independent guess, since a mismatch either wastes a row
+        // reserved for a label that never gets drawn, or lets a label get
+        // drawn into a row children then recurse into and paint over)
+        // — otherwise give the whole tile to its children instead of
+        // wasting a row on text nobody could read anyway.
+        let reserve_label = r.w >= MIN_LABEL_W && r.h >= MIN_LABEL_H;
 
         out.push(TreemapItem {
             x: area.x + r.x,
@@ -169,15 +193,10 @@ fn recurse(
             category: child.category,
             index_path: index_path.clone(),
             is_free_space: false,
+            can_label: !recurses || reserve_label,
         });
 
-        let area_cells = u32::from(r.w) * u32::from(r.h);
-        if child.is_dir && depth + 1 < MAX_DEPTH && area_cells >= MIN_RECURSE_AREA {
-            // Only reserve a row for the directory's own label if the tile
-            // is big enough for that label to be legible — otherwise give
-            // the whole tile to its children instead of wasting a row on
-            // text nobody could read anyway.
-            let reserve_label = r.w >= MIN_LABEL_W && r.h >= MIN_LABEL_H;
+        if recurses {
             let inner = if reserve_label {
                 Rect {
                     x: area.x + r.x,

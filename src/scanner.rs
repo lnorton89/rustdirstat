@@ -101,7 +101,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
                 children: vec![],
                 error: true,
                 category: None,
-                ext_totals: vec![(0u64, 0u64); Category::COUNT],
+                ext_totals: vec![(0u64, 0u64, 0u64); Category::COUNT],
                 unreadable_count: 1,
             };
         }
@@ -207,7 +207,7 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
     let mut file_count = 0u64;
     let mut dir_count = 0u64;
     let mut unreadable_count = own_unreadable;
-    let mut ext_totals = vec![(0u64, 0u64); Category::COUNT];
+    let mut ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
 
     for c in &children {
         size += c.size;
@@ -216,14 +216,16 @@ fn scan_dir(path: &Path, name: String, progress: Option<&Progress>) -> Node {
         unreadable_count += c.unreadable_count;
         if c.is_dir {
             dir_count += c.dir_count + 1;
-            for (i, &(s, n)) in c.ext_totals.iter().enumerate() {
+            for (i, &(s, p, n)) in c.ext_totals.iter().enumerate() {
                 ext_totals[i].0 += s;
-                ext_totals[i].1 += n;
+                ext_totals[i].1 += p;
+                ext_totals[i].2 += n;
             }
         } else if let Some(cat) = c.category {
             let i = cat.index();
             ext_totals[i].0 += c.size;
-            ext_totals[i].1 += 1;
+            ext_totals[i].1 += c.physical_size;
+            ext_totals[i].2 += 1;
         }
     }
 

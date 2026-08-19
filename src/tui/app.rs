@@ -361,7 +361,7 @@ impl App {
     }
 
     fn refresh_ext_stats(&mut self) {
-        self.ext_stats = stats::extension_stats(self.current_node());
+        self.ext_stats = stats::extension_stats(self.current_node(), self.use_physical);
     }
 
     fn refresh_top_files(&mut self) {
@@ -399,9 +399,17 @@ impl App {
             }
             self.show_search = false;
         } else if self.show_duplicates {
-            if let Some(DupRow::Member { index_path }) = self.duplicate_rows.get(self.selected) {
-                let idx_path = index_path.clone();
-                self.navigate_to_absolute(idx_path);
+            // Unlike the top-files/search rows above, not every row here is
+            // a navigable item — group headers are rows too. Landing on one
+            // and leaving `selected` unchanged would carry a duplicates-list
+            // row index into the browse view's unrelated child list, so any
+            // non-member row resets it instead of leaving it stale.
+            match self.duplicate_rows.get(self.selected) {
+                Some(DupRow::Member { index_path }) => {
+                    let idx_path = index_path.clone();
+                    self.navigate_to_absolute(idx_path);
+                }
+                _ => self.selected = 0,
             }
             self.show_duplicates = false;
         }
@@ -849,7 +857,10 @@ impl App {
                 }
             }
             Action::ToggleDetails => self.detailed = !self.detailed,
-            Action::TogglePhysicalSize => self.use_physical = !self.use_physical,
+            Action::TogglePhysicalSize => {
+                self.use_physical = !self.use_physical;
+                self.refresh_ext_stats();
+            }
             Action::ToggleDuplicates => {
                 if self.show_duplicates {
                     self.show_duplicates = false;
@@ -1120,7 +1131,7 @@ impl App {
         node.file_count = 0;
         node.dir_count = 0;
         node.unreadable_count = 0;
-        node.ext_totals = vec![(0u64, 0u64); Category::COUNT];
+        node.ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
         node.children.clear();
 
         let len = self.display_children().len();
@@ -1138,7 +1149,7 @@ impl App {
 
 enum RemovedExt {
     File(Option<Category>),
-    Dir(Vec<(u64, u64)>),
+    Dir(Vec<(u64, u64, u64)>),
 }
 
 fn subtract_totals(
@@ -1159,13 +1170,15 @@ fn subtract_totals(
         RemovedExt::File(Some(cat)) => {
             let i = cat.index();
             n.ext_totals[i].0 -= size;
-            n.ext_totals[i].1 -= 1;
+            n.ext_totals[i].1 -= physical_size;
+            n.ext_totals[i].2 -= 1;
         }
         RemovedExt::File(None) => {}
         RemovedExt::Dir(totals) => {
-            for (i, &(s, c)) in totals.iter().enumerate() {
+            for (i, &(s, p, c)) in totals.iter().enumerate() {
                 n.ext_totals[i].0 -= s;
-                n.ext_totals[i].1 -= c;
+                n.ext_totals[i].1 -= p;
+                n.ext_totals[i].2 -= c;
             }
         }
     }

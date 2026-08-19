@@ -38,10 +38,15 @@ pub struct Node {
     /// `None` for directories. For files, the category their extension
     /// falls into — computed once at scan time.
     pub category: Option<Category>,
-    /// Per-category (size, count) totals across every file in this node's
-    /// subtree. Empty for files (no heap allocation); length
+    /// Per-category (logical size, physical size, count) totals across
+    /// every file in this node's subtree. Both size totals are tracked (not
+    /// just logical) so the extension/category legend can honor the
+    /// logical/physical toggle the same way the file list, header, and
+    /// treemap already do — otherwise the legend's percentages silently
+    /// stop matching the sizes the rest of the screen is showing whenever
+    /// physical mode is on. Empty for files (no heap allocation); length
     /// `Category::COUNT` for directories.
-    pub ext_totals: Vec<(u64, u64)>,
+    pub ext_totals: Vec<(u64, u64, u64)>,
     /// Count of filesystem entries in this node's subtree that were seen
     /// but couldn't be fully read — a directory listing that failed
     /// outright (also covered by `error`, counted here as 1), or an

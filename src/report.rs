@@ -41,7 +41,7 @@ fn build_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth:
 
     out.push('\n');
     out.push_str("Extension breakdown:\n");
-    let ext_stats = stats::extension_stats(root);
+    let ext_stats = stats::extension_stats(root, false);
     let total = root.size.max(1);
     for stat in ext_stats.iter().take(top) {
         let pct = stat.size as f64 / total as f64 * 100.0;

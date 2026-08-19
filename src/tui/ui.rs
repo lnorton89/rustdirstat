@@ -969,7 +969,12 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     let mut state = ListState::default();
     if disp_len > 0 {
-        state.select(Some(app.selected));
+        // Defense in depth, matching the other three list renderers
+        // (search/duplicates/top-files): `app.selected` is normally kept
+        // in range by whatever action changed it, but clamping here means
+        // a stale or out-of-range value can never desync the rendered
+        // selection/scroll offset from the actual number of rows.
+        state.select(Some(app.selected.min(disp_len - 1)));
     }
     f.render_stateful_widget(list, area, &mut state);
 
@@ -1296,7 +1301,7 @@ impl<'a> Widget for TreemapWidget<'a> {
             // their color. 6 cells is enough for a short full name (e.g.
             // "src/") or a handful of real characters before the ellipsis
             // — below that, skip the label rather than draw noise.
-            if item.w >= 6 && item.h >= 1 {
+            if item.can_label && item.w >= 6 && item.h >= 1 {
                 let label = truncate(&item.name, item.w as usize - 1);
                 let style = Style::default().fg(contrast_fg(bg)).bg(bg);
                 let style = if item.is_dir {
