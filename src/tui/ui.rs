@@ -166,6 +166,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_search_prompt(f, app);
     }
 
+    if app.move_mode {
+        draw_move_prompt(f, app);
+    }
+
+    if app.show_properties {
+        draw_properties_popup(f, app);
+    }
+
     if app.show_help {
         draw_help_popup(f, app);
     }
@@ -193,6 +201,123 @@ fn draw_search_prompt(f: &mut Frame, app: &mut App) {
         )),
     ];
     f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+}
+
+fn draw_move_prompt(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(60, 20, f.area());
+    shadow(f, area);
+    f.render_widget(Clear, area);
+    let name = app
+        .display_children()
+        .get(app.selected)
+        .map(|(_, n)| n.name.clone())
+        .unwrap_or_default();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(Span::styled(
+            format!(" Move '{name}' to "),
+            theme::title_bar(),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text = vec![
+        Line::from(vec![
+            Span::raw("> "),
+            Span::raw(&app.move_destination),
+            Span::raw("▌"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
+            Style::default().fg(theme::MUTED),
+        )),
+    ];
+    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+}
+
+fn draw_properties_popup(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(60, 40, f.area());
+    shadow(f, area);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(theme::border_type())
+        .border_style(Style::default().fg(theme::ACCENT))
+        .title(Span::styled(
+            " Properties (press any key to close) ",
+            theme::title_bar(),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some((_, node)) = app
+        .display_children()
+        .get(app.selected)
+        .map(|(i, n)| (*i, *n))
+    else {
+        f.render_widget(Paragraph::new("Nothing selected."), inner);
+        return;
+    };
+
+    let mut full_path = app.current_path();
+    full_path.push(&node.name);
+    let kind = if node.is_dir {
+        "Directory"
+    } else if node.is_symlink {
+        "Symlink"
+    } else {
+        "File"
+    };
+    let category =
+        node.category
+            .map(|c| c.label())
+            .unwrap_or(if node.is_dir { "-" } else { "Other" });
+
+    let mut rows: Vec<(&str, String)> = vec![
+        ("Path", full_path.display().to_string()),
+        ("Type", kind.to_string()),
+        ("Category", category.to_string()),
+        ("Size (logical)", human_bytes(node.size)),
+        ("Size (physical)", human_bytes(node.physical_size)),
+        ("Modified", format_modified(node.modified)),
+    ];
+    if node.is_dir {
+        rows.push(("Files", thousands(node.file_count)));
+        rows.push(("Subdirectories", thousands(node.dir_count)));
+    }
+    if node.unreadable_count > 0 {
+        rows.push(("Unreadable entries", thousands(node.unreadable_count)));
+    }
+    if node.error {
+        rows.push(("Access", "denied".to_string()));
+    }
+
+    let lines: Vec<Line> = rows
+        .iter()
+        .map(|(label, value)| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<17}", label),
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(value.clone()),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::ToggleProperties,
+    });
 }
 
 /// The recursive subtree search results — independent of the normal
@@ -1194,7 +1319,7 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows: [(&str, &str); 24] = [
+    let rows: [(&str, &str); 29] = [
         ("↑/↓, k/j", "Move selection"),
         ("→/l/Enter", "Open the selected directory"),
         ("←/h/Backspace", "Go up a directory"),
@@ -1209,12 +1334,20 @@ fn draw_help_popup(f: &mut Frame, app: &mut App) {
         ("u", "Find duplicate files (by content hash) across the whole scan"),
         ("1-9", "Highlight a file-type category in the treemap"),
         ("0", "Clear the highlight"),
-        ("o", "Open the selected item in the OS file manager"),
+        ("o", "Open the selected item (its default app, or the folder)"),
+        ("O", "Reveal the selected item in the OS file manager"),
+        ("y", "Copy the selected item's full path to the clipboard"),
+        ("M", "Move the selected item to another folder"),
+        ("i", "Show properties for the selected item"),
         ("r", "Rescan from the root (keeps your current location)"),
         ("e", "Export a text report of the current view to a file"),
         ("E", "Export a full CSV of the current view's subtree to a file"),
         ("d", "Delete the selected item (moves to Recycle Bin/Trash)"),
         ("D", "Delete PERMANENTLY (bypasses Recycle Bin/Trash)"),
+        (
+            "d, then e",
+            "In the delete popup, empty a folder instead (keep it, delete contents)",
+        ),
         ("?", "Toggle this help"),
         ("q, Esc", "Quit"),
         ("", ""),

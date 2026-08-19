@@ -57,6 +57,10 @@ pub enum Action {
     RequestDelete,
     RequestDeletePermanent,
     OpenInFileManager,
+    OpenItem,
+    CopyPath,
+    StartMove,
+    ToggleProperties,
     Quit,
     ToggleHighlight(Category),
     ClearHighlight,
@@ -171,6 +175,11 @@ pub struct App {
     pub duplicate_group_count: usize,
     pub duplicate_total_wasted: u64,
     pub duplicate_truncated: bool,
+    /// Text-entry state for "Move to" (`M`) — the destination folder,
+    /// entered the same way the search/filter prompts work.
+    pub move_mode: bool,
+    pub move_destination: String,
+    pub show_properties: bool,
 }
 
 const TREEMAP_SPLIT_MIN: u16 = 20;
@@ -218,6 +227,9 @@ impl App {
             duplicate_group_count: 0,
             duplicate_total_wasted: 0,
             duplicate_truncated: false,
+            move_mode: false,
+            move_destination: String::new(),
+            show_properties: false,
         };
         app.refresh_ext_stats();
         app
@@ -429,6 +441,10 @@ impl App {
             self.show_help = false;
             return Ok(());
         }
+        if self.show_properties {
+            self.show_properties = false;
+            return Ok(());
+        }
         if let Some(pending) = &self.pending_delete {
             let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                 Action::ConfirmDelete
@@ -471,6 +487,18 @@ impl App {
             }
             return Ok(());
         }
+        if self.move_mode {
+            match code {
+                KeyCode::Esc => self.move_mode = false,
+                KeyCode::Enter => self.perform_move(),
+                KeyCode::Backspace => {
+                    self.move_destination.pop();
+                }
+                KeyCode::Char(c) => self.move_destination.push(c),
+                _ => {}
+            }
+            return Ok(());
+        }
 
         let action = match code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
@@ -484,7 +512,11 @@ impl App {
             KeyCode::Char(']') => Action::GrowTreemap,
             KeyCode::Char('d') => Action::RequestDelete,
             KeyCode::Char('D') => Action::RequestDeletePermanent,
-            KeyCode::Char('o') => Action::OpenInFileManager,
+            KeyCode::Char('o') => Action::OpenItem,
+            KeyCode::Char('O') => Action::OpenInFileManager,
+            KeyCode::Char('y') => Action::CopyPath,
+            KeyCode::Char('M') => Action::StartMove,
+            KeyCode::Char('i') => Action::ToggleProperties,
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('f') => Action::ToggleTopFiles,
             KeyCode::Char('e') => Action::ExportReport,
@@ -513,6 +545,10 @@ impl App {
     pub fn handle_click(&mut self, x: u16, y: u16) -> Result<()> {
         if self.show_help {
             self.show_help = false;
+            return Ok(());
+        }
+        if self.show_properties {
+            self.show_properties = false;
             return Ok(());
         }
         if let Some(zone) = self.click_zones.iter().rev().find(|z| z.contains(x, y)) {
@@ -633,6 +669,39 @@ impl App {
                         self.message = Some(format!("Failed to open file manager: {e}"));
                     }
                 }
+            }
+            Action::OpenItem => {
+                self.exit_flat_view_if_needed();
+                if let Some((_, node)) = self.display_children().get(self.selected) {
+                    let mut target = self.current_path();
+                    target.push(&node.name);
+                    if let Err(e) = crate::util::open_path(&target) {
+                        self.message = Some(format!("Failed to open: {e}"));
+                    }
+                }
+            }
+            Action::CopyPath => {
+                self.exit_flat_view_if_needed();
+                if let Some((_, node)) = self.display_children().get(self.selected) {
+                    let mut target = self.current_path();
+                    target.push(&node.name);
+                    let text = target.display().to_string();
+                    match crate::util::copy_to_clipboard(&text) {
+                        Ok(()) => self.message = Some(format!("Copied path: {text}")),
+                        Err(e) => self.message = Some(format!("Failed to copy path: {e}")),
+                    }
+                }
+            }
+            Action::StartMove => {
+                self.exit_flat_view_if_needed();
+                if self.display_children().get(self.selected).is_some() {
+                    self.move_mode = true;
+                    self.move_destination.clear();
+                }
+            }
+            Action::ToggleProperties => {
+                self.exit_flat_view_if_needed();
+                self.show_properties = !self.show_properties;
             }
             Action::Quit => self.should_quit = true,
             Action::ToggleHighlight(cat) => {
@@ -767,6 +836,47 @@ impl App {
         ) {
             Ok(()) => self.message = Some(format!("CSV written to {filename}")),
             Err(e) => self.message = Some(format!("Failed to write CSV: {e}")),
+        }
+    }
+
+    /// Moves the selected item to the folder (or exact path) typed into
+    /// the move prompt. On success, triggers a full rescan rather than
+    /// patching totals in place the way delete does — unlike a delete,
+    /// the destination might land inside the currently scanned tree too
+    /// (or on a different volume entirely), and correctly reflecting
+    /// either case without a real re-scan isn't worth the complexity for
+    /// an action this infrequent.
+    fn perform_move(&mut self) {
+        self.move_mode = false;
+        let dest_input = self.move_destination.trim().to_string();
+        if dest_input.is_empty() {
+            return;
+        }
+        let Some((orig_idx, name)) = self
+            .display_children()
+            .get(self.selected)
+            .map(|(idx, n)| (*idx, n.name.clone()))
+        else {
+            return;
+        };
+
+        let mut full_index_path = self.path_indices.clone();
+        full_index_path.push(orig_idx);
+        let source = self.tree.path_for(&full_index_path);
+
+        let dest_base = std::path::PathBuf::from(&dest_input);
+        let dest = if dest_base.is_dir() {
+            dest_base.join(&name)
+        } else {
+            dest_base
+        };
+
+        match crate::util::move_path(&source, &dest) {
+            Ok(()) => {
+                self.message = Some(format!("Moved to {}", dest.display()));
+                self.refresh_requested = true;
+            }
+            Err(e) => self.message = Some(format!("Move failed: {e}")),
         }
     }
 

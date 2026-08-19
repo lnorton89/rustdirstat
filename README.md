@@ -53,12 +53,17 @@ rustdirstat --csv out.csv [PATH]  # scan and write a full CSV export instead
 | `p` | Toggle logical vs. physical (on-disk) size everywhere |
 | `1`-`9` | Highlight a file-type category in the treemap |
 | `0` | Clear the highlight |
-| `o` | Open the selected item in the OS file manager |
+| `o` | Open the selected item — its default app for a file, the file manager for a folder |
+| `O` | Reveal the selected item in the OS file manager |
+| `y` | Copy the selected item's full path to the clipboard |
+| `M` | Move the selected item to another folder |
+| `i` | Show properties (path, size, type, counts, modified) for the selected item |
 | `r` | Rescan from the root (keeps your current location) |
 | `e` | Export a text report of the current view to a file |
 | `E` | Export a full CSV of the current view's subtree to a file |
 | `d` | Delete the selected item — moves it to the Recycle Bin/Trash |
 | `D` | Delete **permanently**, bypassing the Recycle Bin/Trash |
+| `d`, then `e` | In the delete popup, empty a folder instead — keep it, delete its contents |
 | `?` | Toggle the in-app help screen |
 | `q`, `Esc` | Quit |
 
