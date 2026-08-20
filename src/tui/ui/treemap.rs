@@ -48,16 +48,15 @@ pub(super) fn draw_resize_handle(f: &mut Frame, x: u16, y: u16, height: u16) {
 }
 
 pub(super) fn draw_treemap(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(theme::panel_border(false))
-        .title(Span::styled(
+    let block = panel_block(
+        Line::from(Span::styled(
             " Treemap — click a tile to jump to it  ·  drag the left edge to resize ",
             Style::default()
                 .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
-        ));
+        )),
+        false,
+    );
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.click_zones.push(ClickZone {

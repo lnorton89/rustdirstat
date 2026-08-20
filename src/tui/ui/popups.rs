@@ -1,113 +1,51 @@
 // ============================================================================
 // Module:       tui::ui::popups
 // Description:  Every popup over the main view — prompts, confirmations,
-//               properties, tools, help — and the centring and shadow helpers
-//               they share.
+//               properties, tools, help — and the centring helpers they share.
 //
 // Dependencies: ratatui; super (the shared drawing imports)
 // ============================================================================
 
 //! Every popup the TUI puts over the main view: prompts,
 //! confirmations, properties, the tool list, and help — plus the
-//! centring and shadow helpers they share.
+//! centring helpers they share.
+//!
+//! The frames themselves come from [`super::widgets`]: `open_popup`
+//! draws the shadow, clears what is underneath, and returns the area
+//! inside the border, so a popup here is its contents and nothing else.
 
 use super::*;
 
 pub(super) fn draw_search_prompt(f: &mut Frame, app: &mut App) {
-    let full_area = f.area();
-    let inner_w = (full_area.width as u32 * 60 / 100).saturating_sub(2) as usize;
-    let hint_lines = wrap_text(
+    text_prompt(
+        f,
+        " Search this subtree (Esc to cancel) ".to_string(),
+        &app.search.query,
         "Enter to search, Esc to cancel. * and ? are wildcards; prefix with re: for a regex.",
-        inner_w,
     );
-    let content_rows = 2 + hint_lines.len() as u16;
-    let area = centered_rect_for_lines(60, content_rows, full_area);
-    shadow(f, area);
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(Span::styled(
-            " Search this subtree (Esc to cancel) ",
-            theme::title_bar(),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let mut text = vec![
-        Line::from(vec![
-            Span::raw("> "),
-            Span::raw(&app.search.query),
-            Span::raw("▌"),
-        ]),
-        Line::from(""),
-    ];
-    text.extend(
-        hint_lines
-            .into_iter()
-            .map(|l| Line::from(Span::styled(l, Style::default().fg(theme::MUTED)))),
-    );
-    f.render_widget(Paragraph::new(text), inner);
 }
 
 pub(super) fn draw_move_prompt(f: &mut Frame, app: &mut App) {
-    let full_area = f.area();
-    let inner_w = (full_area.width as u32 * 60 / 100).saturating_sub(2) as usize;
-    let hint_lines = wrap_text(
-        "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
-        inner_w,
-    );
-    let content_rows = 2 + hint_lines.len() as u16;
-    let area = centered_rect_for_lines(60, content_rows, full_area);
-    shadow(f, area);
-    f.render_widget(Clear, area);
     let name = app
         .display_children()
         .get(app.selected)
         .map(|(_, n)| n.name.clone())
         .unwrap_or_default();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(Span::styled(
-            format!(" Move '{name}' to (Esc to cancel) "),
-            theme::title_bar(),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let mut text = vec![
-        Line::from(vec![
-            Span::raw("> "),
-            Span::raw(&app.move_to.destination),
-            Span::raw("▌"),
-        ]),
-        Line::from(""),
-    ];
-    text.extend(
-        hint_lines
-            .into_iter()
-            .map(|l| Line::from(Span::styled(l, Style::default().fg(theme::MUTED)))),
+    text_prompt(
+        f,
+        format!(" Move '{name}' to (Esc to cancel) "),
+        &app.move_to.destination,
+        "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
     );
-    f.render_widget(Paragraph::new(text), inner);
 }
 
 pub(super) fn draw_properties_popup(f: &mut Frame, app: &mut App) {
     let area = centered_rect(60, 40, f.area());
-    shadow(f, area);
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(Span::styled(
-            " Properties (press any key to close) ",
-            theme::title_bar(),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = open_popup(
+        f,
+        area,
+        popup_block(" Properties (press any key to close) "),
+    );
 
     let Some((_, node)) = app
         .display_children()
@@ -178,18 +116,11 @@ pub(super) fn draw_properties_popup(f: &mut Frame, app: &mut App) {
 
 pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 60, f.area());
-    shadow(f, area);
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(Span::styled(
-            " Windows system tools (Esc/T to close) ",
-            theme::title_bar(),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = open_popup(
+        f,
+        area,
+        popup_block(" Windows system tools (Esc/T to close) "),
+    );
 
     // Pushed before the per-tool zones below (not after) — click zones
     // are searched last-pushed-first, so this full-area background zone
@@ -263,15 +194,7 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
         return;
     };
     let area = centered_rect(60, 24, f.area());
-    shadow(f, area);
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .title(Span::styled(" Confirm ", theme::danger_title_bar()))
-        .border_style(Style::default().fg(theme::DANGER));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = open_popup(f, area, danger_block(" Confirm "));
 
     // The button row can't be a hardcoded line offset — either the
     // question or (especially) the description can wrap onto more than
@@ -284,16 +207,7 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
     let question_lines = wrap_text(&format!("Run '{}'?", tool.name), inner_w);
     let desc_lines = wrap_text(tool.description, inner_w);
 
-    let mut text: Vec<Line> = question_lines
-        .iter()
-        .map(|l| Line::from(l.clone()))
-        .collect();
-    text.push(Line::from(""));
-    text.extend(
-        desc_lines
-            .iter()
-            .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme::DANGER)))),
-    );
+    let mut text = confirm_body(&question_lines, &desc_lines);
     text.push(Line::from(""));
     // Registered before the row is drawn so the whole-popup cancel zone
     // sits underneath the per-button ones.
@@ -382,24 +296,6 @@ pub(super) fn cancel_button(action: Action) -> ConfirmButton {
     }
 }
 
-pub(super) fn shadow(f: &mut Frame, area: Rect) {
-    let shadow_area = Rect {
-        x: area.x + 1,
-        y: area.y + 1,
-        width: area.width,
-        height: area.height,
-    };
-    let full = f.area();
-    if shadow_area.x + shadow_area.width <= full.width
-        && shadow_area.y + shadow_area.height <= full.height
-    {
-        f.render_widget(
-            Paragraph::new("").style(Style::default().bg(theme::SHADOW)),
-            shadow_area,
-        );
-    }
-}
-
 pub(super) fn draw_confirm_popup(
     f: &mut Frame,
     app: &mut App,
@@ -408,20 +304,12 @@ pub(super) fn draw_confirm_popup(
     is_dir: bool,
 ) {
     let area = centered_rect(60, 24, f.area());
-    shadow(f, area);
-    f.render_widget(Clear, area);
     let title = if permanent {
         " Permanently Delete "
     } else {
         " Move to Trash "
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .title(Span::styled(title, theme::danger_title_bar()))
-        .border_style(Style::default().fg(theme::DANGER));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = open_popup(f, area, danger_block(title));
 
     // As in draw_wintool_confirm_popup: the button row can't be a fixed
     // line offset, since the item name or the description text can wrap
@@ -445,16 +333,7 @@ pub(super) fn draw_confirm_popup(
         Vec::new()
     };
 
-    let mut text: Vec<Line> = question_lines
-        .iter()
-        .map(|l| Line::from(l.clone()))
-        .collect();
-    text.push(Line::from(""));
-    text.extend(
-        desc_lines
-            .iter()
-            .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme::DANGER)))),
-    );
+    let mut text = confirm_body(&question_lines, &desc_lines);
     text.extend(empty_lines.iter().map(|l| Line::from(l.clone())));
     text.push(Line::from(""));
     // The whole-popup cancel zone goes down first, so the per-button
@@ -493,18 +372,11 @@ pub(super) fn draw_confirm_popup(
 
 pub(super) fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 80, f.area());
-    shadow(f, area);
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(Style::default().fg(theme::ACCENT))
-        .title(Span::styled(
-            " rustdirstat — help (press any key to close) ",
-            theme::title_bar(),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let inner = open_popup(
+        f,
+        area,
+        popup_block(" rustdirstat — help (press any key to close) "),
+    );
 
     let rows: [(&str, &str); 30] = [
         ("↑/↓, k/j", "Move selection"),
@@ -720,6 +592,64 @@ mod tests {
                     covers,
                     "{label:?} is drawn at ({x},{y}) but its {action_name} zone does not \
                      cover that cell (is_dir={is_dir})"
+                );
+            }
+        }
+    }
+
+    /// Every row a list pane draws can be clicked where it is drawn,
+    /// and the pane heading above them carries its own action.
+    ///
+    /// The four list views each had their own copy of this wiring — the
+    /// `ListState`, the selection clamp, the heading zone, and the
+    /// per-row zone loop. They share one `pane_list` now, so this
+    /// exercises all four through it: a row zone that stopped lining up
+    /// with the row it covers would make clicking a file select a
+    /// different one.
+    #[test]
+    fn every_list_pane_puts_a_click_zone_on_the_rows_it_draws() {
+        /// Opens one of the four list panes on an `App`.
+        type OpenPane = fn(&mut App);
+
+        // Each of the four panes, and the heading action it advertises.
+        let views: [(OpenPane, &str); 4] = [
+            (|_| {}, "CycleSort"),
+            (|app| app.show_top_files = true, "ToggleTopFiles"),
+            (|app| app.search.visible = true, "StartSubtreeSearch"),
+            (|app| app.duplicates.visible = true, "ToggleDuplicates"),
+        ];
+
+        for (set_up, heading_action) in views {
+            let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+            set_up(&mut app);
+            let _ = render(&mut app, 100, 30);
+
+            let heading = app
+                .click_zones
+                .iter()
+                .find(|zone| format!("{:?}", zone.action) == heading_action);
+            assert!(
+                heading.is_some(),
+                "the pane heading should carry {heading_action}"
+            );
+            // The heading zone is one row tall and sits on the pane's own
+            // top border, never over the rows below it.
+            assert!(
+                heading.is_some_and(|zone| zone.h == 1),
+                "{heading_action} should claim the heading row only"
+            );
+
+            // No row zone may overlap the heading row, which is what
+            // would let a click on a file toggle the whole view instead.
+            let rows: Vec<_> = app
+                .click_zones
+                .iter()
+                .filter(|zone| format!("{:?}", zone.action).starts_with("SelectRow"))
+                .collect();
+            for row in &rows {
+                assert!(
+                    heading.is_some_and(|h| row.y > h.y),
+                    "a row zone sits on the heading row for {heading_action}"
                 );
             }
         }

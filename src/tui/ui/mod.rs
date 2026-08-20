@@ -19,6 +19,7 @@ mod lists;
 mod popups;
 mod text;
 mod treemap;
+mod widgets;
 
 use super::app::{Action, App, ClickZone, DupRow};
 use super::nested::{self, TreemapItem};
@@ -38,41 +39,16 @@ use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
-    let area = f.area();
     let files = progress.files.load(Ordering::Relaxed);
     let dirs = progress.dirs.load(Ordering::Relaxed);
     let bytes = progress.bytes.load(Ordering::Relaxed);
     let elapsed = started.elapsed().as_secs_f64();
 
-    let text = vec![
-        Line::from(Span::styled(
-            "rustdirstat",
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(format!("Scanning... {elapsed:.1}s")),
-        Line::from(format!(
-            "{dirs} directories, {files} files, {}",
-            human_bytes(bytes)
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "(press q to cancel)",
-            Style::default().fg(theme::MUTED),
-        )),
-    ];
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(theme::panel_border(true))
-        .title(" rustdirstat ");
-    let p = Paragraph::new(text)
-        .block(block)
-        .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(p, area);
+    progress_splash(
+        f,
+        format!("Scanning... {elapsed:.1}s"),
+        format!("{dirs} directories, {files} files, {}", human_bytes(bytes)),
+    );
 }
 
 pub(super) fn draw_duplicate_progress(
@@ -80,7 +56,6 @@ pub(super) fn draw_duplicate_progress(
     progress: &crate::duplicates::DupProgress,
     started: Instant,
 ) {
-    let area = f.area();
     let hashed = progress.hashed.load(Ordering::Relaxed);
     let total = progress.candidates_total.load(Ordering::Relaxed);
     let elapsed = started.elapsed().as_secs_f64();
@@ -95,32 +70,11 @@ pub(super) fn draw_duplicate_progress(
         "Finding same-size candidates...".to_string()
     };
 
-    let text = vec![
-        Line::from(Span::styled(
-            "rustdirstat",
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(format!("Scanning for duplicates... {elapsed:.1}s")),
-        Line::from(status),
-        Line::from(""),
-        Line::from(Span::styled(
-            "(press q to cancel)",
-            Style::default().fg(theme::MUTED),
-        )),
-    ];
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(theme::panel_border(true))
-        .title(" rustdirstat ");
-    let p = Paragraph::new(text)
-        .block(block)
-        .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(p, area);
+    progress_splash(
+        f,
+        format!("Scanning for duplicates... {elapsed:.1}s"),
+        status,
+    );
 }
 
 pub(super) fn draw(f: &mut Frame, app: &mut App) {
@@ -241,3 +195,4 @@ use lists::*;
 use popups::*;
 use text::*;
 use treemap::*;
+use widgets::*;

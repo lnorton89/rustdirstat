@@ -13,10 +13,7 @@ use super::*;
 
 pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     let node = app.current_node();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(theme::panel_border(true));
+    let block = panel_block(Line::default(), true);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -219,12 +216,7 @@ pub(super) fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
     // color here is this button's own accent, not a literal preview of
     // what you'll see highlighted.
     let title = " File categories — click to highlight ";
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(theme::border_type())
-        .border_style(theme::panel_border(false))
-        .title(title);
-    let p = Paragraph::new(lines).block(block);
+    let p = Paragraph::new(lines).block(panel_block(Line::from(title), false));
     f.render_widget(p, area);
 }
 

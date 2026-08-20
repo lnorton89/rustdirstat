@@ -11,6 +11,11 @@
 
 use super::*;
 
+/// Cells given to the proportional size bar in the file list and the
+/// biggest-files view. One value, because the two sit in the same pane
+/// and a reader flipping between them should see the same column.
+const BAR_WIDTH: usize = 10;
+
 /// The recursive subtree search results — independent of the normal
 /// directory browser, listing every match found anywhere below the
 /// current directory (not just its direct children).
@@ -64,40 +69,16 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let count = app.search.results.len();
-    let mut title = format!(" Search: \"{}\" — {} matches", app.search.query, count);
+    let mut title = format!(
+        " Search: \"{}\" — {} matches",
+        app.search.query,
+        app.search.results.len()
+    );
     if app.search.truncated {
         title.push_str(" (truncated)");
     }
     title.push_str(" — S to close ");
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(theme::border_type())
-                .border_style(theme::panel_border(true))
-                .title(Span::styled(
-                    title,
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .highlight_style(theme::selection());
-
-    let mut state = ListState::default();
-    if count > 0 {
-        state.select(Some(app.selected.min(count - 1)));
-    }
-    f.render_stateful_widget(list, area, &mut state);
-
-    app.click_zones.push(ClickZone {
-        x: area.x,
-        y: area.y,
-        w: area.width,
-        h: 1,
-        action: Action::StartSubtreeSearch,
-    });
+    pane_list(f, app, area, items, title, Action::StartSubtreeSearch);
 
     if let Some(err) = &app.search.error {
         let msg_area = Rect {
@@ -113,20 +94,6 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
             )),
             msg_area,
         );
-    }
-
-    let inner_y = area.y + 1;
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let offset = state.offset();
-    for row in offset..(offset + inner_h).min(count) {
-        let y = inner_y + (row - offset) as u16;
-        app.click_zones.push(ClickZone {
-            x: area.x + 1,
-            y,
-            w: area.width.saturating_sub(2),
-            h: 1,
-            action: Action::SelectRow(row),
-        });
     }
 }
 
@@ -164,7 +131,6 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let count = app.duplicates.rows.len();
     let mut title = if app.duplicates.group_count == 0 {
         " No duplicate files found".to_string()
     } else {
@@ -184,53 +150,11 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         ));
     }
     title.push_str(" — u to close ");
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(theme::border_type())
-                .border_style(theme::panel_border(true))
-                .title(Span::styled(
-                    title,
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .highlight_style(theme::selection());
-
-    let mut state = ListState::default();
-    if count > 0 {
-        state.select(Some(app.selected.min(count - 1)));
-    }
-    f.render_stateful_widget(list, area, &mut state);
-
-    app.click_zones.push(ClickZone {
-        x: area.x,
-        y: area.y,
-        w: area.width,
-        h: 1,
-        action: Action::ToggleDuplicates,
-    });
-
-    let inner_y = area.y + 1;
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let offset = state.offset();
-    for row in offset..(offset + inner_h).min(count) {
-        let y = inner_y + (row - offset) as u16;
-        app.click_zones.push(ClickZone {
-            x: area.x + 1,
-            y,
-            w: area.width.saturating_sub(2),
-            h: 1,
-            action: Action::SelectRow(row),
-        });
-    }
+    pane_list(f, app, area, items, title, Action::ToggleDuplicates);
 }
 
 pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let disp = app.display_children();
-    let disp_len = disp.len();
     let phys = app.use_physical;
     let total = app.current_node().effective_size(phys).max(1);
     let max_sibling = disp
@@ -239,7 +163,6 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .max()
         .unwrap_or(1)
         .max(1);
-    let bar_width: usize = 10;
     let show_details = app.detailed;
 
     let items: Vec<ListItem> = disp
@@ -247,9 +170,6 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(_, node)| {
             let shown_size = node.effective_size(phys);
             let pct = shown_size as f64 / total as f64 * 100.0;
-            let filled =
-                ((shown_size as f64 / max_sibling as f64) * bar_width as f64).round() as usize;
-            let filled = filled.min(bar_width);
 
             let cat = category_of(node);
             let muted = app.highlighted_category.is_some_and(|h| Some(h) != cat);
@@ -285,12 +205,8 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ""
             };
 
-            let mut spans = vec![
-                Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
-                Span::styled(
-                    "░".repeat(bar_width - filled),
-                    Style::default().fg(theme::PANEL_BORDER),
-                ),
+            let mut spans = size_bar(shown_size, max_sibling, BAR_WIDTH, bar_color);
+            spans.extend([
                 Span::raw("  "),
                 Span::styled(
                     format!("{:>9}", human_bytes(shown_size)),
@@ -301,7 +217,7 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(format!("{}{}", node.name, suffix), name_style),
                 Span::styled(err, Style::default().fg(theme::DANGER)),
                 Span::styled(warn, Style::default().fg(theme::WARNING)),
-            ];
+            ]);
             if show_details {
                 let count = if node.is_dir {
                     format!(
@@ -328,53 +244,7 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         app.sort.label(),
         size_label
     );
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(theme::border_type())
-                .border_style(theme::panel_border(true))
-                .title(Span::styled(
-                    title,
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .highlight_style(theme::selection());
-
-    let mut state = ListState::default();
-    if disp_len > 0 {
-        // Defense in depth, matching the other three list renderers
-        // (search/duplicates/top-files): `app.selected` is normally kept
-        // in range by whatever action changed it, but clamping here means
-        // a stale or out-of-range value can never desync the rendered
-        // selection/scroll offset from the actual number of rows.
-        state.select(Some(app.selected.min(disp_len - 1)));
-    }
-    f.render_stateful_widget(list, area, &mut state);
-
-    app.click_zones.push(ClickZone {
-        x: area.x,
-        y: area.y,
-        w: area.width,
-        h: 1,
-        action: Action::CycleSort,
-    });
-
-    let inner_y = area.y + 1;
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let offset = state.offset();
-    for row in offset..(offset + inner_h).min(disp_len) {
-        let y = inner_y + (row - offset) as u16;
-        app.click_zones.push(ClickZone {
-            x: area.x + 1,
-            y,
-            w: area.width.saturating_sub(2),
-            h: 1,
-            action: Action::SelectRow(row),
-        });
-    }
+    pane_list(f, app, area, items, title, Action::CycleSort);
 }
 
 /// The "biggest files anywhere in this subtree" flat view — independent of
@@ -390,7 +260,6 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|t| if phys { t.physical_size } else { t.size })
         .unwrap_or(1)
         .max(1);
-    let bar_width: usize = 10;
     let show_details = app.detailed;
 
     let items: Vec<ListItem> = app
@@ -398,9 +267,6 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|tf| {
             let shown_size = if phys { tf.physical_size } else { tf.size };
-            let filled =
-                ((shown_size as f64 / max_size as f64) * bar_width as f64).round() as usize;
-            let filled = filled.min(bar_width);
             let muted = app
                 .highlighted_category
                 .is_some_and(|h| Some(h) != tf.category);
@@ -412,12 +278,8 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
             let full_path = app.tree.path_for(&full_idx);
             let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
 
-            let mut spans = vec![
-                Span::styled("█".repeat(filled), Style::default().fg(color)),
-                Span::styled(
-                    "░".repeat(bar_width - filled),
-                    Style::default().fg(theme::PANEL_BORDER),
-                ),
+            let mut spans = size_bar(shown_size, max_size, BAR_WIDTH, color);
+            spans.extend([
                 Span::raw("  "),
                 Span::styled(
                     format!("{:>9}", human_bytes(shown_size)),
@@ -425,7 +287,7 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled(rel.display().to_string(), Style::default().fg(name_color)),
-            ];
+            ]);
             if show_details {
                 spans.push(Span::styled(
                     format!("  {}", format_modified(tf.modified)),
@@ -438,46 +300,5 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
 
     let count = app.top_files_cache.len();
     let title = format!(" Biggest files in this subtree (top {count}) — f to close ");
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(theme::border_type())
-                .border_style(theme::panel_border(true))
-                .title(Span::styled(
-                    title,
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .highlight_style(theme::selection());
-
-    let mut state = ListState::default();
-    if count > 0 {
-        state.select(Some(app.selected.min(count - 1)));
-    }
-    f.render_stateful_widget(list, area, &mut state);
-
-    app.click_zones.push(ClickZone {
-        x: area.x,
-        y: area.y,
-        w: area.width,
-        h: 1,
-        action: Action::ToggleTopFiles,
-    });
-
-    let inner_y = area.y + 1;
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let offset = state.offset();
-    for row in offset..(offset + inner_h).min(count) {
-        let y = inner_y + (row - offset) as u16;
-        app.click_zones.push(ClickZone {
-            x: area.x + 1,
-            y,
-            w: area.width.saturating_sub(2),
-            h: 1,
-            action: Action::SelectRow(row),
-        });
-    }
+    pane_list(f, app, area, items, title, Action::ToggleTopFiles);
 }
