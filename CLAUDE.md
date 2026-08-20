@@ -228,6 +228,55 @@ button at the bottom. Use `allocate_ui_with_layout` with an explicit
 width and a zero desired height for each column instead.
 `maintenance_rows_stay_row_sized_and_do_not_overlap` guards it.
 
+**A `Frame` does not wrap.** It measures itself against the space left
+on the current line and *then* allocates what it measured, so inside a
+`horizontal_wrapped` a frame that does not fit overflows the row rather
+than moving to the next line. Nine category chips did exactly that and
+pinned the extensions pane at nearly the window's width. Measure first
+and place with `allocate_exact_size` — an exact allocation is what a
+wrapped layout wraps on — then paint into the rect it returns, the way
+`sortable_header`, `view_tab` and `category_chip` all do.
+
+**A side panel stores its content's width as its own.** So content that
+overflows ratchets the panel wider and the divider will not come back:
+the panel reopens at the stored width on the next frame, and a drag
+springs back. Anything in a resizable pane must fit the width it is
+given. `the_extensions_pane_takes_the_width_it_is_given` drags a real
+divider against a realistic pane and guards it — the version of that
+test using three extensions and two categories passed throughout,
+because with that little in the pane nothing overflows.
+
+**Table columns start at stated widths, never `Column::auto()`.** An
+`auto` column makes the table's first frame a *sizing pass*, which egui
+lays out with an unbounded width; the content comes back as wide as the
+window and, in a side panel, ratchets it open on frame one.
+
+**Exactly one column absorbs the pane's slack, and it is a spacer.**
+Only a non-resizable `remainder()` re-fits to the pane each frame, and a
+`remainder()` cannot also be resizable — dragging one gives it a stored
+width, after which it absorbs nothing and the table stops filling the
+pane. So the absorbing column is the one column that cannot be dragged,
+which is why it is a trailing spacer with nothing in it rather than a
+real column. Making it a real column stretched that column to hundreds
+of pixels of empty cell *and* meant the table could never exceed its
+pane, so the horizontal scrollbar had nothing to do at any width anyone
+uses.
+
+**A header that allocates its whole cell pins that column's minimum.**
+`egui_extras` records the widest thing a column ever allocated and will
+not shrink a `remainder()` below it, so a full-width heading is a floor
+the column can never come back under — widen the window, narrow it, and
+the table keeps the old width with a scrollbar over space it gave back.
+`sortable_header` takes `claims_width` for this. Paint and sense across
+the whole cell; allocate only what the text needs.
+
+**No column ever disappears.** The file list used to drop all but Name,
+Size and % of total below 760px. A column that vanishes cannot be
+scrolled to, resized, or even known to exist — it reads as the app
+having lost them. Narrow panes scroll instead;
+`no_column_disappears_when_the_pane_narrows` walks the pane down to
+120px.
+
 **Menu and toolbar layout is column-based, not space-padded.** Do not
 build a menu label like `"     Open     Ctrl+O"`. The UI font is
 proportional, so padding with spaces aligns nothing. Use `menu_action`,
