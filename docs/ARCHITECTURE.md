@@ -21,7 +21,8 @@ Two front ends over one scanning core. Nothing UI-shaped lives below
               └──────────┬──────────────┘
                          │
               shared: treemap.rs (squarify), color.rs,
-              duplicates.rs, csv_export.rs, config.rs, util.rs
+              duplicates.rs, csv_export.rs, config.rs, util.rs,
+              search.rs, top_files.rs
 ```
 
 ## Core (front-end agnostic)
@@ -29,10 +30,11 @@ Two front ends over one scanning core. Nothing UI-shaped lives below
 | File | What it owns |
 | --- | --- |
 | `src/scanner.rs` | The parallel filesystem walk. Falls back to single-threaded below `PAR_THRESHOLD` entries per directory. Reports live counts through a lock-free `Progress`. |
-| `src/model.rs` | `Node` and `Tree`. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` stop at the deepest node that exists rather than indexing off the end. |
+| `src/model.rs` | `Node`, `Tree`, and `SortMode`/`sort_nodes` — the order siblings are listed in, which lives here because both front ends and the persisted config need it. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` stop at the deepest node that exists rather than indexing off the end. |
 | `src/treemap.rs` | The squarified treemap algorithm (Bruls/Huizing/van Wijk), on an abstract integer grid. Rounds rectangle *edges*, not width/height, so siblings cannot round into a gap or an overlap. |
 | `src/color.rs` | Extension → `Category` mapping, the category palette, and `extension_hue` — the one place an extension's colour is decided, so a file is the same colour in the terminal and in the window. It normalises its input, since the GUI holds `.mkv` and the TUI holds `mkv`. |
 | `src/duplicates.rs` | Size-bucketed, blake3-hashed duplicate detection. |
+| `src/search.rs`, `src/top_files.rs` | Name search across a subtree (glob, or regex behind `re:`) and the k largest files in one. Both walk iteratively and answer in index paths, so neither front end has an opinion about them. |
 | `src/platform.rs`, `src/wintools.rs` | Volume free/total space; Windows maintenance tool shell-outs. |
 | `src/gui/shell_icons.rs` | The icon the OS shows for a file type, cached per extension. Windows-only; elsewhere it reports nothing and callers fall back to the drawn set. |
 | `src/config.rs` | Persisted preferences. Every field is `Option`; a missing or corrupt file means "use defaults", never an error. |
@@ -142,8 +144,9 @@ way `gui/ui/` is — `mod.rs` lays the panes out, then `chrome.rs`
 (header, footer, extension legend), `lists.rs` (directory listing,
 largest files, search, duplicates), `treemap.rs`, `popups.rs` (every
 prompt, confirmation and help screen) and `text.rs` (width-aware
-trimming). `nested.rs`/`top_files.rs`/`search.rs`/`theme.rs` carry the
-pieces the renderer needs.
+trimming). `nested.rs`/`theme.rs` carry the pieces the renderer needs, and
+`widgets.rs` holds the framed surfaces the panes and popups are built
+from — the counterpart of `gui/ui/widgets.rs`.
 
 `nested.rs` is the terminal-cell counterpart of `gui::treemap_layout` —
 same shared squarify call underneath, different recursion floors,
@@ -170,4 +173,5 @@ group it belongs to rather than to the top level.
 | How tiles are chosen or sized | `gui/treemap_layout.rs` |
 | The tiling math itself | `treemap.rs` (shared with the TUI — check both) |
 | Anything scanned or aggregated | `scanner.rs` + `model.rs` |
+| A shared TUI pane, popup frame, or list | `tui/ui/widgets.rs` |
 | A new persisted preference | `config.rs`, then both halves of `ViewOptions::from_config`/`to_config` (or `GuiApp::new`/`save_preferences` for anything outside the view toggles) |

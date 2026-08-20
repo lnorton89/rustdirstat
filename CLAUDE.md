@@ -210,9 +210,12 @@ margin shows as a gap it cannot reach.
 
 **Nothing tree-sized may recurse, and that includes `Drop`.** A path
 that walks the tree once per level puts the tree's depth on the call
-stack, and depth is user-supplied. `Node`'s drop, the CSV export, and
-`Tree::path_for`/`node_for` are all iterative or bounded for this
-reason; `report.rs` takes an explicit `max_depth`. If you add a walk,
+stack, and depth is user-supplied. `Node`'s drop, the CSV export,
+`search.rs`, `top_files.rs`, and `Tree::path_for`/`node_for` are all
+iterative or bounded for this reason; `report.rs` takes an explicit
+`max_depth`. The two searches were the stragglers — both recursed once
+per directory level until `a_tree_far_deeper_than_the_stack_is_still_searched`
+in each of them started failing the build. If you add a walk,
 make it iterative — and note that `Node`'s `Drop` is written so that the
 outermost drop drains the whole tree, leaving every node below it
 childless and costing one allocation for the tree rather than one per
@@ -225,6 +228,23 @@ and the TUI holds `mkv`, which are unrelated strings to a hash. Only
 saturation and value are per-front-end. The reserved hue band around the
 directory tan is load-bearing: without it an ordinary `.wav` tile is
 hard to tell from a folder tile beside it.
+
+**Neither front end may reach into the other.** Anything both need
+lives at the crate root: `search`, `top_files`, `color`, `stats`,
+`util`, and `SortMode`/`sort_nodes` on `model`. The GUI used to import
+`crate::tui::{search, top_files, SortMode}` and `config.rs` — core —
+imported `SortMode` from the TUI, which is how the terminal's copy of
+the sort quietly drifted into ignoring `use_physical`.
+
+**Every TUI pane and popup frame comes from `tui/ui/widgets.rs`**, the
+counterpart of `gui/ui/widgets.rs`: `panel_block` / `popup_block` /
+`danger_block` for frames, `open_popup` for the shadow-clear-frame
+sequence every popup opens with, `pane_list` for a titled scrolling list
+with its click zones, `text_prompt`, `progress_splash`, `size_bar`. Do
+not hand-build a `Block` — four list renderers each carried their own
+copy of the same forty-line tail, so the clamp that keeps a stale
+`selected` from desyncing the scroll offset had to be right in four
+places.
 
 **State lives in the struct that owns the view.** `App` has
 `SearchState` / `DuplicatesState` / `MoveState` / `WinToolsState`;
