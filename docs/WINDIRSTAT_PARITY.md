@@ -44,7 +44,7 @@ These are additive and do not replace the installed-version core:
   streaming implementation shared with the TUI.
 - **Duplicate Files**: byte-identical groups found by size prefilter plus
   BLAKE3 content hashing, with reclaimable space shown per group.
-- **Search Results**: whole-tree glob search, or regular expressions prefixed
+- **Search Results**: whole-tree glob search (`*`, `?`, `[a-z]`, `{jpg,png}`), or regular expressions prefixed
   with `re:`, capped at 2,000 visible results.
 
 ## Reference material

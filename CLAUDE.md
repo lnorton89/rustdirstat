@@ -186,6 +186,36 @@ margin shows as a gap it cannot reach.
 (`src/gui/ui/actions.rs`). The menus advertise `Ctrl+O`, `F5`, `Ctrl+C`,
 `Ctrl+F`, `Del`, `Shift+Del`, `+`, `-`, and `Home`; all are implemented.
 
+**Nothing tree-sized may recurse, and that includes `Drop`.** A path
+that walks the tree once per level puts the tree's depth on the call
+stack, and depth is user-supplied. `Node`'s drop, the CSV export, and
+`Tree::path_for`/`node_for` are all iterative or bounded for this
+reason; `report.rs` takes an explicit `max_depth`. If you add a walk,
+make it iterative — and note that `Node`'s `Drop` is written so that the
+outermost drop drains the whole tree, leaving every node below it
+childless and costing one allocation for the tree rather than one per
+node. `scanner.rs` is the deliberate exception: it recurses through
+rayon, bounded by what a real path can express.
+
+**One extension, one colour.** `color::extension_hue` decides it, for
+both front ends, and normalises its input first — the GUI holds `.mkv`
+and the TUI holds `mkv`, which are unrelated strings to a hash. Only
+saturation and value are per-front-end. The reserved hue band around the
+directory tan is load-bearing: without it an ordinary `.wav` tile is
+hard to tell from a folder tile beside it.
+
+**State lives in the struct that owns the view.** `App` has
+`SearchState` / `DuplicatesState` / `MoveState` / `WinToolsState`;
+`GuiApp` has `SearchState` / `ToolsState` / `ViewOptions`. A new field
+goes in its group, not at the top level — that is what forty-odd flat
+fields prefixed `duplicate_` and `search_` turned into.
+
+**A destructive confirmation only answers to the keys it offers.** The
+delete and Windows-tool prompts advertise `[Y]es`, `[E]mpty`, `[N]o`;
+anything else — an arrow key, F5, a stray modifier — leaves the dialog
+standing. Treating every unrecognised key as a cancel meant the next
+keystroke, aimed at the dialog, went to the file list instead.
+
 ## Testing an immediate-mode UI
 
 There is no retained widget tree to query, so the drawing code records the

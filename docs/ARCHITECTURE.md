@@ -29,14 +29,14 @@ Two front ends over one scanning core. Nothing UI-shaped lives below
 | File | What it owns |
 | --- | --- |
 | `src/scanner.rs` | The parallel filesystem walk. Falls back to single-threaded below `PAR_THRESHOLD` entries per directory. Reports live counts through a lock-free `Progress`. |
-| `src/model.rs` | `Node` and `Tree`. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. |
+| `src/model.rs` | `Node` and `Tree`. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` stop at the deepest node that exists rather than indexing off the end. |
 | `src/treemap.rs` | The squarified treemap algorithm (Bruls/Huizing/van Wijk), on an abstract integer grid. Rounds rectangle *edges*, not width/height, so siblings cannot round into a gap or an overlap. |
-| `src/color.rs` | Extension → `Category` mapping and the category palette, shared so both front ends color the same file the same way. |
+| `src/color.rs` | Extension → `Category` mapping, the category palette, and `extension_hue` — the one place an extension's colour is decided, so a file is the same colour in the terminal and in the window. It normalises its input, since the GUI holds `.mkv` and the TUI holds `mkv`. |
 | `src/duplicates.rs` | Size-bucketed, blake3-hashed duplicate detection. |
 | `src/platform.rs`, `src/wintools.rs` | Volume free/total space; Windows maintenance tool shell-outs. |
 | `src/gui/shell_icons.rs` | The icon the OS shows for a file type, cached per extension. Windows-only; elsewhere it reports nothing and callers fall back to the drawn set. |
 | `src/config.rs` | Persisted preferences. Every field is `Option`; a missing or corrupt file means "use defaults", never an error. |
-| `src/report.rs`, `src/csv_export.rs`, `src/stats.rs` | Non-interactive output modes. |
+| `src/report.rs`, `src/csv_export.rs`, `src/stats.rs` | Non-interactive output modes. The CSV export streams and walks iteratively — it has no depth or count limit by design, so a drive-sized scan must not be buffered whole or put the tree's depth on the stack. |
 
 ### Talking to the platform
 
@@ -137,12 +137,23 @@ never looks like a failed launch.
 
 ## TUI (`src/tui/`)
 
-`app.rs` holds state and the event loop, `ui.rs` renders, and
-`nested.rs`/`top_files.rs`/`search.rs`/`theme.rs` split out the pieces the
-renderer needs. `nested.rs` is the terminal-cell counterpart of
-`gui::treemap_layout` — same shared squarify call underneath, different
-recursion floors, because a terminal cell is roughly four orders of
-magnitude larger than a pixel.
+`app.rs` holds state and the event loop; `ui/` renders, split the same
+way `gui/ui/` is — `mod.rs` lays the panes out, then `chrome.rs`
+(header, footer, extension legend), `lists.rs` (directory listing,
+largest files, search, duplicates), `treemap.rs`, `popups.rs` (every
+prompt, confirmation and help screen) and `text.rs` (width-aware
+trimming). `nested.rs`/`top_files.rs`/`search.rs`/`theme.rs` carry the
+pieces the renderer needs.
+
+`nested.rs` is the terminal-cell counterpart of `gui::treemap_layout` —
+same shared squarify call underneath, different recursion floors,
+because a terminal cell is roughly four orders of magnitude larger than
+a pixel.
+
+`App`'s state is grouped by the view that owns it: `SearchState`,
+`DuplicatesState`, `MoveState`, `WinToolsState`. `GuiApp` does the same
+with `SearchState`, `ToolsState` and `ViewOptions`. Add a field to the
+group it belongs to rather than to the top level.
 
 ## Where a change usually goes
 
@@ -159,4 +170,4 @@ magnitude larger than a pixel.
 | How tiles are chosen or sized | `gui/treemap_layout.rs` |
 | The tiling math itself | `treemap.rs` (shared with the TUI — check both) |
 | Anything scanned or aggregated | `scanner.rs` + `model.rs` |
-| A new persisted preference | `config.rs`, then `GuiApp::new` and `save_preferences` |
+| A new persisted preference | `config.rs`, then both halves of `ViewOptions::from_config`/`to_config` (or `GuiApp::new`/`save_preferences` for anything outside the view toggles) |

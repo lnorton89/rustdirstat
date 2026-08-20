@@ -100,7 +100,7 @@ to a compact column set in narrow panes.
 | `[` / `]` | Resize the treemap panel (or drag its left edge with the mouse) |
 | `f` | Toggle the "biggest files in this subtree" flat view |
 | `/` | Search/filter the current directory's direct children by name |
-| `S` | Search the entire current subtree by name (glob, or `re:` for regex) |
+| `S` | Search the entire current subtree by name — glob (`*`, `?`, `[a-z]`, `{jpg,png}`), or `re:` for a regular expression |
 | `u` | Find duplicate files (by content hash) across the whole scan |
 | `p` | Toggle logical vs. physical (on-disk) size everywhere |
 | `1`-`9` | Highlight a file-type category in the treemap |
