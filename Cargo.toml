@@ -2,7 +2,7 @@
 name = "rustdirstat"
 version = "0.1.0"
 edition = "2021"
-description = "A cross-platform, terminal-based clone of WinDirStat for visualizing disk usage."
+description = "A cross-platform WinDirStat clone for visualizing disk usage, with both a native desktop GUI and a terminal UI."
 license = "MIT"
 repository = "https://github.com/lnorton89/rustdirstat"
 

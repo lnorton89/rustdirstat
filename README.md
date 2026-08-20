@@ -1,14 +1,23 @@
 # rustdirstat
 
-A cross-platform, terminal-based clone of [WinDirStat](https://windirstat.net/), written in Rust.
+A cross-platform clone of [WinDirStat](https://windirstat.net/), written in
+Rust, with both a native desktop GUI and a terminal UI.
 
 It scans a directory tree and gives you the same "why is my disk full" workflow
 WinDirStat is known for: a sortable size-ranked file list, a squarified,
 recursively-nested treemap for spotting the few things eating all your space
-at a glance, and a breakdown by file type — all in a fast terminal UI, styled
-like an application rather than a bare terminal listing, and fully driven by
-either the keyboard or the mouse. It runs anywhere Rust does: Linux, macOS,
-and Windows.
+at a glance, and a breakdown by file type. Two front ends share one scanning
+core:
+
+- **`rustdirstat-gui`** — a native desktop window (egui/wgpu) with resizable
+  panes, pixel-shaded treemap cushions, drag-to-reorder columns, and native
+  file dialogs. This is the closest match to WinDirStat itself.
+- **`rustdirstat`** — the same three coupled views in a fast terminal UI,
+  styled like an application rather than a bare terminal listing, and fully
+  driven by either the keyboard or the mouse. Also does one-shot text and CSV
+  reports for scripting.
+
+Both run anywhere Rust does: Linux, macOS, and Windows.
 
 ## Install / build
 
@@ -123,6 +132,10 @@ this run starts from the built-in defaults.
 
 ## Design
 
+Both front ends draw the same three coupled views. The notes below are
+about the TUI, where screen space is scarcest; the GUI follows the same
+principles with a real window to spend.
+
 The default view is deliberately spare — one accent color for navigation,
 plain text for file names, a handful of footer buttons — because a screen
 that colors and labels everything ends up highlighting nothing. Anything
@@ -179,6 +192,29 @@ multi-million-file, multi-hundred-GB drives):
 - **Bounded "biggest files" search.** Finding the largest files across a
   huge subtree uses a streaming bounded min-heap, not collect-then-sort, so
   it costs O(k) memory instead of O(n).
+
+The GUI is immediate mode, so it rebuilds the whole window every frame.
+That adds three constraints the TUI doesn't have:
+
+- **Derived views are cached, not recomputed per frame.** The flattened
+  row list and the treemap tile list are rebuilt only when something they
+  depend on actually changes. Both caches are keyed off observed state
+  rather than invalidated by hand, so they can't go stale.
+- **Trees are freed off-thread.** Dropping a whole-drive scan means
+  returning millions of allocations and takes over a second even with
+  everything resident — far longer once it's been paged out. Rescans and
+  exit hand the old tree to a background thread instead of walking it on
+  the UI thread, which is what kept closing the window after a full C:
+  scan from looking like a hang.
+- **The treemap tile budget is spent level by level.** Spending it
+  depth-first lets the leftmost subtree consume the whole budget before
+  its siblings are reached, which on a large volume left the right-hand
+  side of the treemap blank. Working level-order makes full coverage an
+  invariant instead.
+
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) has the measurements and the
+reasoning; [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has the module
+map.
 
 ## How it works
 
