@@ -1,2 +1,4 @@
 /target
 /rustdirstat-report-*.txt
+/result
+/result-*
