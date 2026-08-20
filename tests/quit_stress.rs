@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       quit_stress (integration test)
+// Description:  Drives the compiled TUI binary inside a real pty, floods it
+//               with buffered input, and asserts it still quits. Unix only.
+//
+// Dependencies: libc (openpty, setsid, TIOCSCTTY); the compiled rustdirstat
+//               binary
+// ============================================================================
+
 //! Regression test for "leave it open for a while and it won't quit" /
 //! "quit still feels stuck": drives the real compiled TUI binary inside an
 //! actual pty (so crossterm's raw-mode/event parsing runs for real, not

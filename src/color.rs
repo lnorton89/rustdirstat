@@ -1,3 +1,27 @@
+// ============================================================================
+// Module:       color
+// Description:  File-type categories and the colours they are drawn in — the
+//               single source of truth for extension colouring in both front
+//               ends.
+//
+// Dependencies: ratatui::style::Color
+// ============================================================================
+
+//! File-type categories and the colours they are drawn in — the single
+//! source of truth for both front ends.
+//!
+//! [`Category`] is a `Copy` enum rather than a `String` so classifying a
+//! file costs nothing at render time: it is computed once per node during
+//! the scan and only read back afterwards.
+//!
+//! [`extension_hue`] is shared rather than duplicated per front end, and
+//! normalises its input first — the GUI holds `.mkv` and the TUI holds
+//! `mkv`, which are unrelated strings to a hash, so sharing the function
+//! is not by itself enough to make the colours agree. Only saturation and
+//! value differ between the two. The reserved hue band around the
+//! directory tan is load-bearing: without it an ordinary `.wav` tile is
+//! hard to tell from a folder tile beside it.
+
 use ratatui::style::Color;
 
 /// A file-type bucket, used for both the extension breakdown table and

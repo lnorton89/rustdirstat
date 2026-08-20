@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       tui::ui::popups
+// Description:  Every popup over the main view — prompts, confirmations,
+//               properties, tools, help — and the centring and shadow helpers
+//               they share.
+//
+// Dependencies: ratatui; super (the shared drawing imports)
+// ============================================================================
+
 //! Every popup the TUI puts over the main view: prompts,
 //! confirmations, properties, the tool list, and help — plus the
 //! centring and shadow helpers they share.

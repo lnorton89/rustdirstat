@@ -1,3 +1,31 @@
+// ============================================================================
+// Module:       tui
+// Description:  Terminal front end (ratatui/crossterm): entry point, terminal
+//               setup and restoration, and the scan and browse event loops.
+//
+// Dependencies: ratatui + crossterm (terminal control), anyhow; crate::scanner
+// ============================================================================
+
+//! Terminal front end (ratatui/crossterm): the entry point, terminal
+//! setup and restoration, and the scan and browse event loops.
+//!
+//! Two things here exist because a terminal is not a window.
+//!
+//! Raw mode turns off the line discipline, so Ctrl+C becomes this
+//! module's responsibility rather than the shell's — `is_ctrl_c` is
+//! checked ahead of every other key binding in both loops, so it works as
+//! an immediate quit whatever modal state is open.
+//!
+//! Mouse capture is written as escape sequences by hand rather than
+//! through crossterm's `EnableMouseCapture`, which also enables motion
+//! reporting. Left idle, that streams an event per pixel of pointer
+//! travel and buries whatever the user types next under the backlog.
+//!
+//! `restore_terminal` runs on both the ordinary exit path and the panic
+//! hook. Without the latter, a crash leaves the terminal in raw mode on
+//! the alternate screen, where neither `q` nor Ctrl+C appear to do
+//! anything afterwards.
+
 mod app;
 mod nested;
 pub(crate) mod search;

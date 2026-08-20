@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui::ui::treemap
+// Description:  Paints the treemap panel from the tiles GuiApp has already
+//               laid out, including the cushion shading.
+//
+// Dependencies: eframe::egui; crate::gui::treemap_layout::Tile, crate::color
+// ============================================================================
+
 //! Paints the treemap panel from the tiles `GuiApp` has laid out.
 //!
 //! Layout itself lives in `gui::treemap_layout`; this module only

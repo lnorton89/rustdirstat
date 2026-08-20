@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::shell_icons
+// Description:  The icon the operating system itself uses for a file type, on
+//               Windows; falls back to the drawn set everywhere else.
+//
+// Dependencies: windows-sys (SHGetFileInfoW, GDI bitmap access), eframe::egui;
+//               crate::platform
+// ============================================================================
+
 //! The icon the operating system itself uses for a file type.
 //!
 //! A `.docx` should look like whatever Word looks like on this machine,

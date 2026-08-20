@@ -1,3 +1,23 @@
+// ============================================================================
+// Module:       stats
+// Description:  The per-category size and count breakdown for a subtree, read
+//               straight out of the totals the scan already rolled up.
+//
+// Dependencies: crate::model::Node, crate::color::Category
+// ============================================================================
+
+//! The per-category size and count breakdown for a subtree.
+//!
+//! A direct read of the totals [`crate::scanner`] already rolled up
+//! bottom-up, not a fresh walk — which is what keeps it instant at the
+//! root of a whole drive.
+//!
+//! [`ExtStat`] carries a single already-resolved `size` rather than both
+//! the logical and physical totals, so every consumer of it — the
+//! legend's percentages, its sort order — automatically agrees with
+//! whichever mode the rest of the screen is showing, instead of being a
+//! second place that can drift out of sync with the physical-size toggle.
+
 use crate::color::Category;
 use crate::model::Node;
 

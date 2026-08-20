@@ -53,6 +53,28 @@ check` there is another way to exercise the Linux build.
 
 ## Rules this codebase actually enforces
 
+**Every source file opens with the header banner.** A ruled block naming
+`Module:`, `Description:`, and `Dependencies:`, then a blank line, then
+the module's `//!` docs. `every_source_file_carries_a_module_header` in
+`src/header_check.rs` walks `src/` and `tests/` and fails the build for a
+file that is missing one — so a new file needs its header in the same
+commit that adds it.
+
+`Module:` is checked against the path the file actually sits at
+(`src/gui/ui/theme.rs` → `gui::ui::theme`, `src/gui/mod.rs` → `gui`,
+`src/lib.rs` → `rustdirstat (library crate root)`), which is what catches
+a header copied off a neighbour and never re-read. The rest is checked
+structurally: the fields have to be present and filled in, and an
+unedited `[Brief description...]` placeholder is rejected. Nothing judges
+whether the prose is any good — that is what review is for.
+
+The banner is plain `//`, not `//!`, and is deliberately *not* rustdoc.
+It is the orientation a person gets on opening the file cold; the `//!`
+block below it is the documentation, and that is where the reasoning
+belongs. Do not restate one in the other, and keep `Dependencies:` to
+what a reader actually needs to know is in play — the crates and modules
+the file leans on, not a transcription of every `use`.
+
 **No `unwrap`, `expect`, or `panic!` anywhere — including tests.** Denied
 by lint, so a violation is a build failure, not a warning. In library
 code use `let ... else`, `?`, or an explicit fallback. In tests, return

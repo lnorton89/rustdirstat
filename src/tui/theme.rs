@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       tui::theme
+// Description:  The terminal palette and the ratatui styles built from it, so
+//               the app reads as one designed surface rather than as a
+//               terminal.
+//
+// Dependencies: ratatui::style, ratatui::widgets::BorderType
+// ============================================================================
+
 //! A small, consistent color/style palette so the app reads as one designed
 //! surface — a title bar, a status bar, a selection color, panel chrome —
 //! instead of ad hoc per-widget colors, which is what makes a TUI look and

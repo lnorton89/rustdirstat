@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       csv_export
+// Description:  Streaming CSV export of a scanned tree, one row per node, for
+//               spreadsheet and scripting use.
+//
+// Dependencies: crate::model::Node, crate::util::format_modified
+// ============================================================================
+
 //! Structured CSV export of a scanned tree, for scripting/spreadsheet use
 //! — distinct from the human-oriented text report (`report.rs`), which is
 //! depth- and count-limited for readability. This dumps every node with no

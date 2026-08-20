@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui
+// Description:  Desktop front end (egui/eframe) and its entry point, over the
+//               same scanning and layout core as the TUI.
+//
+// Dependencies: eframe (window and event loop), anyhow
+// ============================================================================
+
 //! Native desktop GUI front end (egui/eframe), reusing the same scanning,
 //! model, and treemap-layout core as the TUI. WinDirStat is a desktop
 //! app — a terminal UI can approximate its look with block characters and

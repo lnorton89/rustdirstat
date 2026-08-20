@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       tui::search
+// Description:  Recursive name search across a whole subtree: glob by default,
+//               full regex behind an re: prefix.
+//
+// Dependencies: regex; crate::model::Node, crate::color::Category
+// ============================================================================
+
 //! Recursive name search across an entire subtree (distinct from the
 //! quick '/' filter, which only narrows the current directory's direct
 //! children). Supports glob (`*`, `?`) by default, or a full regex when

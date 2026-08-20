@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::themes
+// Description:  The theme catalog: parsing assets/themes.toml, and deriving a
+//               full Palette from the twelve colours a theme states.
+//
+// Dependencies: serde + toml (catalog format), dirs (user theme directory),
+//               eframe::egui::Color32
+// ============================================================================
+
 //! The theme catalog: loading `assets/themes.toml`, and the rules for
 //! deriving a full [`Palette`] from the handful of colors a theme states.
 //!

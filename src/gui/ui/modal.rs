@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui::ui::modal
+// Description:  The one modal surface: blurred backdrop, centered card,
+//               navigation rail, and the confirmations that layer above it.
+//
+// Dependencies: eframe::egui; crate::gui::app::{Backdrop, GuiApp}
+// ============================================================================
+
 //! The one modal surface: a dimmed, blurred backdrop and a single
 //! centered card with a navigation rail down its left side.
 //!

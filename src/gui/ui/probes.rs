@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui::ui::probes
+// Description:  Test-only geometry probes: the rects the drawing code actually
+//               painted, recorded so tests can click real coordinates.
+//
+// Dependencies: eframe::egui, std::sync::Mutex (the probe statics are global)
+// ============================================================================
+
 //! Test-only geometry probes.
 //!
 //! An immediate-mode UI has no retained widget tree to query after

@@ -1,3 +1,13 @@
+// ============================================================================
+// Module:       tui::nested
+// Description:  Flattens a subtree into absolutely-positioned terminal-cell
+//               rects, recursing squarify into each directory's own allotted
+//               area.
+//
+// Dependencies: crate::treemap (squarify), crate::model::Node,
+//               crate::color::Category
+// ============================================================================
+
 //! Flattens a directory's *entire* subtree (not just its direct children)
 //! into absolutely-positioned rectangles, recursing the squarified treemap
 //! layout into each directory's own allotted rectangle. This is what makes

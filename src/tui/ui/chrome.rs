@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       tui::ui::chrome
+// Description:  The frame around the main pane: header, footer, and the
+//               extension legend along the bottom.
+//
+// Dependencies: ratatui; super (the shared drawing imports)
+// ============================================================================
+
 //! The frame around the main pane — header, footer, and the extension
 //! legend along the bottom.
 

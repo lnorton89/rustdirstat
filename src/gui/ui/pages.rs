@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::pages
+// Description:  The contents of each modal page, and the two destructive-
+//               action confirmations that layer above them.
+//
+// Dependencies: eframe::egui; crate::gui::app::GuiApp, super::{modal, themes,
+//               widgets}
+// ============================================================================
+
 //! The contents of each modal page, and the two confirmations that
 //! layer above them.
 //!

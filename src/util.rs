@@ -1,3 +1,22 @@
+// ============================================================================
+// Module:       util
+// Description:  Cross-cutting helpers: byte and timestamp formatting, display-
+//               safe paths, the clipboard, and the platform open/move shims.
+//
+// Dependencies: std::process::Command (platform launchers and clipboard),
+//               trash
+// ============================================================================
+
+//! Cross-cutting helpers with no better home: byte and timestamp
+//! formatting, display-safe paths, the clipboard, and the platform shims
+//! for opening and moving a file.
+//!
+//! "Display-safe" is the non-obvious one. `Path::canonicalize` on Windows
+//! returns an extended-length path — `\\?\C:\Users\...` — which is the
+//! correct thing to hand the filesystem and the wrong thing to put in a
+//! title bar. [`display_path`] strips that prefix for display only; the
+//! canonical path is still what reaches the OS.
+
 /// Format a byte count the way WinDirStat does: base-1024 units with one
 /// decimal place beyond bytes.
 /// A path as a person would write it, for showing on screen.

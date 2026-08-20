@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::chrome
+// Description:  The frame around the workspace: menu bar, toolbar, and status
+//               bar.
+//
+// Dependencies: eframe::egui; crate::gui::app::GuiApp, super::{actions, theme,
+//               widgets}
+// ============================================================================
+
 //! The frame around the workspace: menu bar, toolbar, status bar.
 
 use super::modal::ModalPage;

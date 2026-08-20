@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       tui::top_files
+// Description:  The k largest files anywhere in a subtree, streamed through a
+//               bounded min-heap rather than collected and sorted.
+//
+// Dependencies: std::collections::BinaryHeap; crate::model::Node
+// ============================================================================
+
 //! Finds the `k` largest files anywhere in a subtree without ever
 //! materializing the full file list — a directory can hold millions of
 //! files, so this streams through with a bounded min-heap (O(k) memory,

@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       tui::ui::treemap
+// Description:  The TUI treemap widget, the cushion shading that gives tiles
+//               their rounded look, and the splitter handle beside it.
+//
+// Dependencies: ratatui; super (the shared drawing imports),
+//               crate::tui::nested
+// ============================================================================
+
 //! The TUI treemap: its widget, the cushion shading that gives tiles
 //! their rounded look, and the splitter handle beside it.
 

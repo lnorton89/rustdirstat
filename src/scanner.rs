@@ -1,3 +1,32 @@
+// ============================================================================
+// Module:       scanner
+// Description:  The parallel filesystem walk that builds a Tree, rolling each
+//               directory's aggregates up bottom-up as it goes.
+//
+// Dependencies: rayon (dedicated scan pool), anyhow; crate::model::{Node,
+//               Tree}, crate::platform
+// ============================================================================
+
+//! The parallel filesystem walk that builds a [`Tree`], rolling each
+//! directory's aggregates up bottom-up as it goes.
+//!
+//! This is the one place in the crate that recurses over something
+//! tree-sized, and it recurses through rayon rather than the call stack —
+//! bounded by what a real path can express, which is the only reason it
+//! is acceptable here and nowhere else.
+//!
+//! Two tuning decisions are worth knowing before changing anything.
+//! Directories below `PAR_THRESHOLD` entries are walked on the current
+//! thread, because scheduling parallel tasks for a three-entry folder
+//! costs more than it saves and most directories are small. And the scan
+//! runs on a dedicated pool one thread short of the machine: rayon's
+//! global pool takes every core, which left the UI thread fighting the
+//! scan for one and made dragging a splitter stutter for the whole of it.
+//!
+//! Entries that cannot be read are omitted from every total and counted
+//! in `unreadable_count` instead, so a partial scan is distinguishable
+//! from a small one.
+
 use crate::color::Category;
 use crate::model::{category_for_name, Node, Tree};
 use anyhow::Result;

@@ -1,3 +1,22 @@
+// ============================================================================
+// Module:       report
+// Description:  The plain-text report behind --no-tui: a depth- and count-
+//               limited outline of a scanned tree.
+//
+// Dependencies: crate::model::Node, crate::stats, crate::util::human_bytes
+// ============================================================================
+
+//! The plain-text report behind `--no-tui`: a depth- and count-limited
+//! outline of a scanned tree, for terminals, pipes, and CI logs.
+//!
+//! Limited on purpose, which is what separates it from
+//! [`crate::csv_export`] — that dumps every node with no cap for other
+//! tools to sort and filter, while this is meant to be read by a person.
+//!
+//! `max_depth` is an explicit parameter rather than something the walk
+//! decides for itself, so the output stays bounded and a user-supplied
+//! depth never reaches the call stack.
+
 use crate::model::Node;
 use crate::stats;
 use crate::util::human_bytes;

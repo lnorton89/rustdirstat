@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::categories
+// Description:  The file-category breakdown pane: one proportional bar for the
+//               whole of it, then a row per category.
+//
+// Dependencies: eframe::egui; crate::stats::ExtStat, crate::color::Category,
+//               crate::gui::app::GuiApp
+// ============================================================================
+
 //! The file-category breakdown: what kinds of thing are taking up the
 //! space, as opposed to which individual files.
 //!

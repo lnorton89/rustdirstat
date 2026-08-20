@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui::icons
+// Description:  The DPI-independent outline icon set, painted as egui vector
+//               primitives rather than glyphs.
+//
+// Dependencies: eframe::egui; crate::color::Category
+// ============================================================================
+
 //! Small DPI-independent outline icon set for the native GUI.
 //!
 //! These are painted as egui vector primitives instead of Unicode/emoji,

@@ -1,3 +1,18 @@
+// ============================================================================
+// Module:       rustdirstat-gui (binary crate root)
+// Description:  Command-line entry point for the desktop build; validates the
+//               requested path and hands it to the GUI front end.
+//
+// Dependencies: clap (argument parsing), anyhow; rustdirstat::gui
+// ============================================================================
+
+//! Entry point for `rustdirstat-gui`, the desktop build.
+//!
+//! Deliberately thin: it validates and canonicalises the requested path,
+//! then hands off to `rustdirstat::gui::run`. The window, the event loop,
+//! and the scan all belong to the library, so the two binaries differ
+//! only in which front end they start.
+
 use anyhow::{bail, Result};
 use clap::Parser;
 use std::path::PathBuf;

@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       duplicates
+// Description:  Exact-duplicate file detection: a same-size prefilter, then
+//               BLAKE3 hashing of whatever survives it.
+//
+// Dependencies: blake3 (content hashing), rayon (parallel hashing);
+//               crate::model::{Node, Tree}
+// ============================================================================
+
 //! Duplicate file detection: files with a matching size are hashed
 //! (BLAKE3) and grouped so exact-duplicate groups can be shown, the way
 //! WinDirStat's Duplicate Files view does. Two-phase because hashing is
@@ -36,7 +45,7 @@ pub struct DupGroup {
 /// The result of a duplicate scan, and what it had to leave out.
 pub struct DupScan {
     pub groups: Vec<DupGroup>,
-    /// Files never hashed because [`MAX_CANDIDATES`] was reached.
+    /// Files never hashed because `MAX_CANDIDATES` was reached.
     ///
     /// Reported rather than dropped in silence: "no more duplicates"
     /// and "we stopped looking" are very different answers to give

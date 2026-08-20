@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       config
+// Description:  Persisted user preferences, loaded once at startup and saved
+//               on a normal quit.
+//
+// Dependencies: serde + toml (on-disk format), dirs (config location);
+//               crate::tui::SortMode
+// ============================================================================
+
 //! Persisted user preferences (sort order, treemap visibility/split,
 //! detail level, physical-size toggle) — loaded once at startup and saved
 //! on a normal quit, so the app reopens the way it was left, the way a GUI

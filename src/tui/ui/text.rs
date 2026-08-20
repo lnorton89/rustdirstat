@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       tui::ui::text
+// Description:  Width-aware text trimming, measured in terminal cells rather
+//               than chars so wide glyphs count as the two columns they
+//               occupy.
+//
+// Dependencies: unicode-width; super (the shared drawing imports)
+// ============================================================================
+
 //! Width-aware text trimming. Terminal cells are counted with
 //! `unicode-width` rather than by `char`, so wide glyphs measure as the
 //! two columns they actually occupy.

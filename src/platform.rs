@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       platform
+// Description:  The few operations that genuinely need a platform syscall: on-
+//               disk (physical) file size, and volume free/total space.
+//
+// Dependencies: windows-sys (GetDiskFreeSpaceExW) on Windows; std::os::unix
+//               (st_blocks, statvfs) elsewhere
+// ============================================================================
+
 //! The handful of things that genuinely need a platform-specific syscall:
 //! on-disk (physical) file size, and volume free/total space.
 //!

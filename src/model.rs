@@ -1,3 +1,30 @@
+// ============================================================================
+// Module:       model
+// Description:  The scanned filesystem hierarchy every other module reads, and
+//               the index-path addressing that stands in for storing paths.
+//
+// Dependencies: crate::color::Category
+// ============================================================================
+
+//! The scanned filesystem hierarchy: [`Node`], [`Tree`], and the index
+//! paths that stand in for storing a path per node.
+//!
+//! Two properties drive the shape of everything here, and both follow
+//! from one fact — a real volume is millions of nodes.
+//!
+//! Nodes do not store their own path. A `PathBuf` per node duplicates its
+//! entire ancestor chain and dominates memory on a large scan, so a node
+//! keeps only its own `name` and [`Tree::path_for`] rebuilds the rest
+//! from child indices on demand. Selections are therefore `Vec<usize>`
+//! index paths, not paths.
+//!
+//! Directory aggregates — size, counts, per-category totals — are rolled
+//! up bottom-up during the scan and kept current as entries are deleted,
+//! so answering "how big is this and what is in it" is a field read
+//! rather than a walk. `Node`'s `Drop` is iterative for the same reason
+//! nothing else here recurses: depth is user-supplied, and a tree-sized
+//! recursion puts it on the call stack.
+
 use crate::color::Category;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

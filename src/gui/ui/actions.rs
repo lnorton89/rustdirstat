@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::actions
+// Description:  Every command the menus, toolbar, context menus, and keyboard
+//               funnel into, plus keyboard shortcut dispatch.
+//
+// Dependencies: eframe::egui, rfd (native file dialogs);
+//               crate::gui::app::GuiApp
+// ============================================================================
+
 //! The commands the menu bar, toolbar, context menus, and keyboard
 //! all funnel into, plus the keyboard shortcut handling.
 //!

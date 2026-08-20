@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       wintools
+// Description:  Windows-only system-maintenance tools, launched as the real OS
+//               utilities; reports every tool as unavailable elsewhere.
+//
+// Dependencies: windows-sys (ShellExecuteW, for elevation),
+//               std::process::Command
+// ============================================================================
+
 //! Windows-only system-maintenance tools (Disk Cleanup, component store
 //! cleanup, defrag, shadow copies, ...) — the kind of thing WinDirStat
 //! itself links out to from its "Clean up" menu. These have no equivalent

@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       tui::ui::lists
+// Description:  The scrolling lists that can occupy the main pane: directory
+//               listing, largest files, search results, and duplicate groups.
+//
+// Dependencies: ratatui; super (the shared drawing imports), super::app::App
+// ============================================================================
+
 //! The scrolling lists that can occupy the main pane: the directory
 //! listing, largest files, search results, and duplicate groups.
 

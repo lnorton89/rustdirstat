@@ -1,3 +1,13 @@
+// ============================================================================
+// Module:       gui::treemap_layout
+// Description:  Flattens a subtree into absolutely-positioned pixel tiles
+//               under a fixed budget, spent level-order so coverage stays
+//               complete.
+//
+// Dependencies: crate::treemap (squarify), crate::model::Node,
+//               crate::color::Category
+// ============================================================================
+
 //! Flattens a directory's entire subtree into absolutely-positioned pixel
 //! rectangles, the same way `tui::nested` does for terminal cells — see
 //! that module's doc comment for why recursion happens down to whatever

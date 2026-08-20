@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::lists
+// Description:  The three flat file views: largest files, search results, and
+//               duplicate groups.
+//
+// Dependencies: eframe::egui, egui_extras (TableBuilder);
+//               crate::gui::app::GuiApp
+// ============================================================================
+
 //! The three flat file views: largest files, search results, and
 //! duplicate groups. Unlike the directory tree these are already
 //! flat lists computed on `GuiApp`, so they only have to be

@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui::ui
+// Description:  The egui drawing code, split by the region of the window each
+//               submodule paints; draw is the per-frame entry point.
+//
+// Dependencies: eframe::egui; crate::gui::app::GuiApp
+// ============================================================================
+
 //! The egui front end, split by what part of the window each
 //! module paints.
 //!

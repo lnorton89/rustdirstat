@@ -1,3 +1,29 @@
+// ============================================================================
+// Module:       tui::app
+// Description:  App: the terminal front end's state, grouped by the view that
+//               owns it, and the action dispatch every key and click funnels
+//               into.
+//
+// Dependencies: crossterm (key codes), trash (delete to recycle bin), anyhow;
+//               crate::{model, config, stats}
+// ============================================================================
+
+//! `App`: the terminal front end's state, and the action dispatch that
+//! every key and click funnels into.
+//!
+//! State is grouped by the view that owns it — `SearchState`,
+//! `DuplicatesState`, `MoveState`, `WinToolsState` — rather than sitting
+//! flat on `App`. A new field belongs in its group; forty-odd flat fields
+//! prefixed `search_` and `duplicate_` is what that convention replaced.
+//!
+//! Keyboard and mouse both resolve to an `Action` rather than each
+//! carrying its own copy of the behaviour, so the two cannot drift apart.
+//!
+//! Destructive confirmations answer only to the keys they advertise. An
+//! unrecognised key leaves the prompt standing rather than counting as a
+//! cancel — treating everything else as a cancel meant the next
+//! keystroke, aimed at the dialog, landed in the file list instead.
+
 use super::search::{self, SearchHit};
 use super::top_files::{self, TopFile};
 use crate::color::Category;

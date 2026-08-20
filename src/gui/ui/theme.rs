@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       gui::ui::theme
+// Description:  The active palette, the egui style derived from it, the shared
+//               spacing scale, and the colour maths the panes need.
+//
+// Dependencies: eframe::egui; super::themes (the palette catalog)
+// ============================================================================
+
 //! The active palette, the egui style derived from it, and the color
 //! math the treemap and tables need.
 //!

@@ -1,3 +1,11 @@
+// ============================================================================
+// Module:       treemap
+// Description:  The squarified treemap layout (Bruls, Huizing, van Wijk) over
+//               an abstract integer grid, shared by both front ends.
+//
+// Dependencies: None; std only.
+// ============================================================================
+
 //! A squarified treemap layout (Bruls, Huizing, van Wijk), operating on
 //! an abstract integer grid — terminal cells for the TUI, pixels for the
 //! GUI. Given a list of relative sizes and a target width/height, returns

@@ -1,3 +1,19 @@
+// ============================================================================
+// Module:       rustdirstat (binary crate root)
+// Description:  Command-line entry point for the terminal build; parses
+//               arguments and dispatches to one of the three output modes.
+//
+// Dependencies: clap (argument parsing), anyhow; crate::{scanner, tui, report,
+//               csv_export}
+// ============================================================================
+
+//! Entry point for `rustdirstat`, the terminal build.
+//!
+//! Three mutually exclusive modes: the interactive TUI (the default), a
+//! plain-text report (`--no-tui`), and a full CSV export (`--csv`). The
+//! two non-interactive modes exist so the same scan can be piped into
+//! something else — a terminal UI is no use at all from a script.
+
 use anyhow::{bail, Result};
 use clap::Parser;
 use rustdirstat::{csv_export, report, scanner, tui};

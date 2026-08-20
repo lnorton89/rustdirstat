@@ -1,3 +1,13 @@
+// ============================================================================
+// Module:       tui::ui
+// Description:  The TUI drawing code, split by the region of the screen each
+//               submodule owns; keeps the progress screens and the pane
+//               layout.
+//
+// Dependencies: ratatui, unicode-width (cell-accurate measurement);
+//               crate::tui::app::App, crate::tui::nested
+// ============================================================================
+
 //! The TUI's drawing code, split by what part of the screen it owns.
 //!
 //! This module keeps the top-level frame — the scanning and duplicate

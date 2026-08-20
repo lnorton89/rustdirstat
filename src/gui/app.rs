@@ -1,3 +1,32 @@
+// ============================================================================
+// Module:       gui::app
+// Description:  GuiApp: all state the desktop window owns, the caches derived
+//               from it, and the background operations it drives.
+//
+// Dependencies: eframe::egui, trash (delete to recycle bin); crate::{model,
+//               duplicates, color}, crate::tui::{search, top_files}
+// ============================================================================
+
+//! `GuiApp`: everything the desktop window owns — the scanned tree, the
+//! view state over it, the caches derived from both, and the background
+//! scan, duplicate-search, and delete operations it drives.
+//!
+//! The window is immediate mode: `gui::ui::draw` rebuilds it in full
+//! every frame. A scan of a whole drive is roughly nine million nodes, so
+//! anything O(tree) on a draw path freezes the window outright. Derived
+//! data therefore lives in caches here — `refresh_visible_rows`,
+//! `refresh_treemap` — keyed off observed state through `RowKey` and
+//! `TreemapKey` rather than invalidated by hand. A new field that affects
+//! rows or tiles has to join the matching key, or the cache will go on
+//! serving results that no longer match what is on screen.
+//!
+//! Freeing a tree is tree-sized too, which is why it goes through
+//! `drop_in_background` rather than happening on the UI thread.
+//!
+//! State is grouped by the view that owns it (`SearchState`,
+//! `ToolsState`, `ViewOptions`); a new field belongs in its group rather
+//! than flat on `GuiApp`.
+
 use crate::color::Category;
 use crate::duplicates::DupGroup;
 use crate::model::{category_for_name, Node, Tree};
