@@ -1,0 +1,16 @@
+# One rule for line endings, enforced by git rather than by whoever edits
+# next.
+#
+# Every text file is stored with LF and checked out with LF, on every
+# platform. Without this the repo had a mix — some files CRLF, some LF,
+# one with both — and any tool that rewrote a file whole normalized it to
+# whatever it felt like, so a two-line change arrived as a nine-hundred
+# line diff and the real edit was impossible to see in review.
+#
+# LF rather than CRLF because that is what CI builds and lints with, and
+# what every Rust toolchain emits; git for Windows and every editor in
+# use here read LF without complaint.
+* text=auto eol=lf
+
+# Images are binary: never touch their bytes.
+*.png binary
