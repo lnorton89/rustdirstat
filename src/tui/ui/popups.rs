@@ -295,19 +295,8 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
             .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme::DANGER)))),
     );
     text.push(Line::from(""));
-    text.push(Line::from(vec![
-        Span::styled(" [ Y ]es ", theme::filled_button(theme::DANGER)),
-        Span::raw("   "),
-        Span::styled(
-            " [ N ]o ",
-            Style::default()
-                .fg(theme::BUTTON_NEUTRAL_FG)
-                .bg(theme::BUTTON_NEUTRAL_BG)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-    f.render_widget(Paragraph::new(text), inner);
-
+    // Registered before the row is drawn so the whole-popup cancel zone
+    // sits underneath the per-button ones.
     app.click_zones.push(ClickZone {
         x: area.x,
         y: area.y,
@@ -315,21 +304,82 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
         h: area.height,
         action: Action::CancelWinTool,
     });
-    let button_row = inner.y + question_lines.len() as u16 + 1 + desc_lines.len() as u16 + 1;
-    app.click_zones.push(ClickZone {
-        x: inner.x,
-        y: button_row,
-        w: 9,
-        h: 1,
-        action: Action::ConfirmWinTool,
-    });
-    app.click_zones.push(ClickZone {
-        x: inner.x + 12,
-        y: button_row,
-        w: 8,
-        h: 1,
-        action: Action::CancelWinTool,
-    });
+    let row_y = inner.y + text.len() as u16;
+    let buttons = [
+        ConfirmButton {
+            label: " [ Y ]es ",
+            style: theme::filled_button(theme::DANGER),
+            action: Action::ConfirmWinTool,
+        },
+        cancel_button(Action::CancelWinTool),
+    ];
+    let row = button_row(app, &buttons, inner.x, row_y);
+    text.push(row);
+    f.render_widget(Paragraph::new(text), inner);
+}
+
+/// One button in a confirmation popup's button row.
+pub(super) struct ConfirmButton {
+    /// The drawn text, padding included. The click zone is exactly this
+    /// wide, because both come from this one string.
+    pub label: &'static str,
+    pub style: Style,
+    pub action: Action,
+}
+
+/// Draws a row of buttons and registers a click zone for each.
+///
+/// Each popup used to write these out twice — once as styled spans, once
+/// as click zones placed with hand-written offsets (`inner.x + 12`,
+/// `w: 9`, `next_x += 14`) that had to match the label widths by eye.
+/// Change a label and the zone slid off it silently: the button still
+/// drew, and clicking it did nothing, or did its neighbour's job. Widths
+/// now come from the labels themselves, so the two cannot disagree.
+///
+/// `y` is the row the returned line will occupy. Callers pass
+/// `inner.y + text.len() as u16` *before* pushing it, rather than adding
+/// up section line counts by hand — that sum was the other half of the
+/// same arithmetic, re-derived in every popup that had a button row.
+pub(super) fn button_row(
+    app: &mut App,
+    buttons: &[ConfirmButton],
+    x: u16,
+    y: u16,
+) -> Line<'static> {
+    /// Blank columns between buttons.
+    const GAP: u16 = 3;
+
+    let mut spans = Vec::new();
+    let mut cursor = x;
+    for (index, button) in buttons.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" ".repeat(GAP as usize)));
+            cursor += GAP;
+        }
+        let width = UnicodeWidthStr::width(button.label) as u16;
+        spans.push(Span::styled(button.label, button.style));
+        app.click_zones.push(ClickZone {
+            x: cursor,
+            y,
+            w: width,
+            h: 1,
+            action: button.action.clone(),
+        });
+        cursor += width;
+    }
+    Line::from(spans)
+}
+
+/// The neutral "No" button both confirmations end with.
+pub(super) fn cancel_button(action: Action) -> ConfirmButton {
+    ConfirmButton {
+        label: " [ N ]o ",
+        style: Style::default()
+            .fg(theme::BUTTON_NEUTRAL_FG)
+            .bg(theme::BUTTON_NEUTRAL_BG)
+            .add_modifier(Modifier::BOLD),
+        action,
+    }
 }
 
 pub(super) fn shadow(f: &mut Frame, area: Rect) {
@@ -407,28 +457,8 @@ pub(super) fn draw_confirm_popup(
     );
     text.extend(empty_lines.iter().map(|l| Line::from(l.clone())));
     text.push(Line::from(""));
-    let mut buttons = vec![
-        Span::styled(" [ Y ]es ", theme::filled_button(theme::DANGER)),
-        Span::raw("   "),
-    ];
-    if is_dir {
-        buttons.push(Span::styled(
-            " [ E ]mpty ",
-            theme::filled_button(theme::WARNING),
-        ));
-        buttons.push(Span::raw("   "));
-    }
-    buttons.push(Span::styled(
-        " [ N ]o ",
-        Style::default()
-            .fg(theme::BUTTON_NEUTRAL_FG)
-            .bg(theme::BUTTON_NEUTRAL_BG)
-            .add_modifier(Modifier::BOLD),
-    ));
-    text.push(Line::from(buttons));
-    let p = Paragraph::new(text);
-    f.render_widget(p, inner);
-
+    // The whole-popup cancel zone goes down first, so the per-button
+    // zones registered below sit on top of it.
     app.click_zones.push(ClickZone {
         x: area.x,
         y: area.y,
@@ -436,37 +466,29 @@ pub(super) fn draw_confirm_popup(
         h: area.height,
         action: Action::CancelDelete,
     });
-    let button_row = inner.y
-        + question_lines.len() as u16
-        + 1
-        + desc_lines.len() as u16
-        + empty_lines.len() as u16
-        + 1;
-    app.click_zones.push(ClickZone {
-        x: inner.x,
-        y: button_row,
-        w: 9,
-        h: 1,
+
+    let mut buttons = vec![ConfirmButton {
+        label: " [ Y ]es ",
+        style: theme::filled_button(theme::DANGER),
         action: Action::ConfirmDelete,
-    });
-    let mut next_x = inner.x + 12;
+    }];
     if is_dir {
-        app.click_zones.push(ClickZone {
-            x: next_x,
-            y: button_row,
-            w: 11,
-            h: 1,
+        buttons.push(ConfirmButton {
+            label: " [ E ]mpty ",
+            style: theme::filled_button(theme::WARNING),
             action: Action::ConfirmEmpty,
         });
-        next_x += 14;
     }
-    app.click_zones.push(ClickZone {
-        x: next_x,
-        y: button_row,
-        w: 8,
-        h: 1,
-        action: Action::CancelDelete,
-    });
+    buttons.push(cancel_button(Action::CancelDelete));
+
+    // Measured from the lines already in `text`, so the row and its
+    // click zones cannot land on different lines — the hand-summed
+    // version had to be updated whenever a section was added, and the
+    // "Empty" option is exactly such a section.
+    let row_y = inner.y + text.len() as u16;
+    let row = button_row(app, &buttons, inner.x, row_y);
+    text.push(row);
+    f.render_widget(Paragraph::new(text), inner);
 }
 
 pub(super) fn draw_help_popup(f: &mut Frame, app: &mut App) {
@@ -592,5 +614,131 @@ pub(super) fn centered_rect_for_lines(percent_x: u16, content_rows: u16, r: Rect
         y,
         width: x_rect.width,
         height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Tree;
+    use crate::tui::app::PendingDelete;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::path::PathBuf;
+
+    /// Renders the whole TUI to an off-screen buffer and returns what
+    /// each cell holds, so a test can ask what is actually on screen
+    /// rather than what the drawing code intended.
+    fn render(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let terminal = Terminal::new(backend);
+        assert!(terminal.is_ok(), "the test terminal should initialise");
+        let mut terminal = match terminal {
+            Ok(t) => t,
+            Err(_) => return Vec::new(),
+        };
+        let drawn = terminal.draw(|f| super::super::draw(f, app));
+        assert!(drawn.is_ok(), "drawing should not fail");
+
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer.cell((x, y)).map_or(" ", |c| c.symbol()).to_owned())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect()
+    }
+
+    fn app_with_delete_prompt(is_dir: bool) -> App {
+        let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+        app.pending_delete = Some(PendingDelete {
+            orig_idx: 0,
+            name: "doomed.txt".to_owned(),
+            permanent: false,
+            is_dir,
+        });
+        app
+    }
+
+    /// Every button the delete prompt draws is clickable where it is
+    /// drawn.
+    ///
+    /// The labels and the click zones used to be written out separately,
+    /// the zones placed with offsets (`inner.x + 12`, `w: 9`,
+    /// `next_x += 14`) that had to match the label widths by eye and the
+    /// row found by summing section line counts by hand. Nothing checked
+    /// the two agreed, so a changed label or an added section moved the
+    /// button out from under its own target — the button drew, and
+    /// clicking it did nothing.
+    ///
+    /// This reads the rendered buffer, so it fails if either half moves.
+    #[test]
+    fn every_delete_button_is_clickable_where_it_is_drawn() {
+        for is_dir in [false, true] {
+            let mut app = app_with_delete_prompt(is_dir);
+            let screen = render(&mut app, 100, 30);
+
+            let expected: &[(&str, &str)] = if is_dir {
+                &[
+                    ("Y ]es", "ConfirmDelete"),
+                    ("E ]mpty", "ConfirmEmpty"),
+                    ("N ]o", "CancelDelete"),
+                ]
+            } else {
+                &[("Y ]es", "ConfirmDelete"), ("N ]o", "CancelDelete")]
+            };
+
+            for (label, action_name) in expected {
+                // Where the label actually landed on screen.
+                let mut found = None;
+                for (y, row) in screen.iter().enumerate() {
+                    if let Some(x) = row.find(label) {
+                        found = Some((x as u16, y as u16));
+                        break;
+                    }
+                }
+                assert!(
+                    found.is_some(),
+                    "the {label:?} button should be drawn (is_dir={is_dir})"
+                );
+                let (x, y) = found.unwrap_or_default();
+
+                // And the zone that claims to cover it.
+                let zone = app
+                    .click_zones
+                    .iter()
+                    .rev()
+                    .find(|zone| format!("{:?}", zone.action) == *action_name);
+                assert!(
+                    zone.is_some(),
+                    "there should be a click zone for {action_name} (is_dir={is_dir})"
+                );
+                let covers = zone.is_some_and(|zone| zone.contains(x, y));
+                assert!(
+                    covers,
+                    "{label:?} is drawn at ({x},{y}) but its {action_name} zone does not \
+                     cover that cell (is_dir={is_dir})"
+                );
+            }
+        }
+    }
+
+    /// The "Empty" button exists only for directories.
+    #[test]
+    fn a_file_gets_no_empty_button() {
+        let mut app = app_with_delete_prompt(false);
+        let screen = render(&mut app, 100, 30);
+        assert!(
+            !screen.iter().any(|row| row.contains("E ]mpty")),
+            "emptying a file makes no sense, so the button should not be offered"
+        );
+        assert!(
+            !app.click_zones
+                .iter()
+                .any(|zone| format!("{:?}", zone.action) == "ConfirmEmpty"),
+            "and there should be no zone for it either"
+        );
     }
 }

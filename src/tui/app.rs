@@ -1360,24 +1360,35 @@ fn subtract_totals(
     unreadable_count: u64,
     ext: &RemovedExt,
 ) {
-    n.size -= size;
-    n.physical_size -= physical_size;
-    n.file_count -= file_count;
-    n.dir_count -= dir_count;
-    n.unreadable_count -= unreadable_count;
+    // Saturating throughout. These aggregates are maintained by hand as
+    // deletions come in, so a disagreement between them and the delta
+    // being applied is possible in a way it is not for a freshly scanned
+    // tree — and plain `-=` turns that into an underflow panic in debug
+    // and a wrapped, enormous total in release. Clamping at zero is
+    // wrong by whatever the discrepancy was; the alternatives are wrong
+    // by 18 quintillion or not running at all.
+    n.size = n.size.saturating_sub(size);
+    n.physical_size = n.physical_size.saturating_sub(physical_size);
+    n.file_count = n.file_count.saturating_sub(file_count);
+    n.dir_count = n.dir_count.saturating_sub(dir_count);
+    n.unreadable_count = n.unreadable_count.saturating_sub(unreadable_count);
     match ext {
         RemovedExt::File(Some(cat)) => {
-            let i = cat.index();
-            n.ext_totals[i].0 -= size;
-            n.ext_totals[i].1 -= physical_size;
-            n.ext_totals[i].2 -= 1;
+            if let Some(total) = n.ext_totals.get_mut(cat.index()) {
+                total.0 = total.0.saturating_sub(size);
+                total.1 = total.1.saturating_sub(physical_size);
+                total.2 = total.2.saturating_sub(1);
+            }
         }
         RemovedExt::File(None) => {}
         RemovedExt::Dir(totals) => {
             for (i, &(s, p, c)) in totals.iter().enumerate() {
-                n.ext_totals[i].0 -= s;
-                n.ext_totals[i].1 -= p;
-                n.ext_totals[i].2 -= c;
+                let Some(total) = n.ext_totals.get_mut(i) else {
+                    break;
+                };
+                total.0 = total.0.saturating_sub(s);
+                total.1 = total.1.saturating_sub(p);
+                total.2 = total.2.saturating_sub(c);
             }
         }
     }
