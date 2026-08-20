@@ -105,18 +105,33 @@ fn directory_column_initial_width(column: DirectoryColumn) -> f32 {
 /// resizing before: columns were `auto().range(min..=max)` with ranges as
 /// narrow as `75..=110`, so a drag hit its stop within a few pixels and
 /// looked like it had done nothing at all.
-pub(super) fn directory_column_spec(column: DirectoryColumn, is_last: bool) -> Column {
-    let minimum = directory_column_min_width(column);
-    if is_last {
-        return Column::remainder()
-            .at_least(minimum)
-            .clip(true)
-            .resizable(false);
-    }
+pub(super) fn directory_column_spec(column: DirectoryColumn) -> Column {
     Column::initial(directory_column_initial_width(column))
-        .at_least(minimum)
+        .at_least(directory_column_min_width(column))
         .clip(true)
         .resizable(true)
+}
+
+/// A trailing column with nothing in it, holding whatever width the real
+/// columns do not want.
+///
+/// Something has to absorb the pane's slack or the table sits at its
+/// natural width with dead space beside it. Making that job a *real*
+/// column — the last one — worked, but stretched it: on a wide pane the
+/// last column grew to several hundred pixels of empty cell, and because
+/// it soaked up every spare pixel the table could never be wider than
+/// its pane, so the horizontal scrollbar had nothing to do at any width
+/// anyone actually uses.
+///
+/// A spacer absorbs instead. Real columns keep the width they were
+/// given, every one of them can be dragged, the table still reaches the
+/// pane's edge, and when the columns genuinely need more room than the
+/// pane has, the scroll area is there for it.
+///
+/// `resizable(false)` is load-bearing: a resizable `remainder()` takes a
+/// stored width and stops absorbing.
+pub(super) fn slack_column() -> Column {
+    Column::remainder().at_least(0.0).resizable(false)
 }
 
 pub(super) fn directory_column_label(column: DirectoryColumn) -> &'static str {
@@ -309,25 +324,21 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                 .vscroll(true)
                 .sense(Sense::click())
                 .cell_layout(Layout::left_to_right(Align::Center));
-            let last = columns.len().saturating_sub(1);
-            for (index, column) in columns.iter().enumerate() {
-                table = table.column(directory_column_spec(*column, index == last));
+            for column in &columns {
+                table = table.column(directory_column_spec(*column));
             }
+            table = table.column(slack_column());
             table
                 .header(TABLE_HEADER_HEIGHT, |mut h| {
-                    for (index, column) in columns.iter().enumerate() {
+                    for column in &columns {
                         let column = *column;
                         h.col(|ui| {
                             let label = directory_column_label(column);
-                            // The last heading does not claim its cell's
-                            // width; see `sortable_header`. It is the
-                            // `remainder()` column, and a claim there
-                            // becomes a floor it can never shrink below.
                             let response = sortable_header(
                                 ui,
                                 label,
                                 directory_sort_icon(app.sort, column),
-                                index != last,
+                                true,
                             );
                             response.dnd_set_drag_payload(column);
                             if response.dnd_hover_payload::<DirectoryColumn>().is_some() {
@@ -368,6 +379,8 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                                 }
                             });
                         }
+                        // The spacer's cell, so the row spans the table.
+                        row.col(|_| {});
                         let response = row.response();
                         // Keyed off the row's path, not its index: rows
                         // are virtualized, so index 0 is a different file

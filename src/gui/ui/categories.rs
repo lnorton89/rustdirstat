@@ -113,49 +113,102 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
     );
 }
 
-/// One clickable category summary. Returns whether it was clicked.
+/// One category chip: icon, name, size and share, in a rounded pill.
+///
+/// Hand-laid rather than built from an `egui::Frame`, because a `Frame`
+/// does not wrap. A frame measures itself against the space remaining on
+/// the current line and *then* allocates what it measured, so in a
+/// `horizontal_wrapped` row a chip that does not fit overflows the row
+/// instead of moving to the next line. The row's width then exceeds the
+/// pane's, a side panel stores its content's width as its own, and the
+/// divider cannot be dragged back — nine chips in a row pinned the
+/// extensions pane at nearly the full window width.
+///
+/// Measuring first and calling `allocate_exact_size` puts the decision
+/// where the layout can act on it: an exact allocation is what
+/// `horizontal_wrapped` wraps on. Painting then happens into the rect it
+/// gave back, the same way [`sortable_header`] and [`view_tab`] work.
 fn category_chip(ui: &mut egui::Ui, stat: &ExtStat, total: u64, selected: bool) -> bool {
+    const ICON: f32 = 15.0;
+    const ICON_GAP: f32 = 2.0;
+    let margin = egui::vec2(SPACE_SM, SPACE_XS + 2.0);
+
     let percent = stat.size as f64 / total as f64 * 100.0;
     let color = to_color32(stat.category.color());
-    // A chip is a `Frame`, and a frame paints its fill before its
-    // contents are laid out — so this one cannot know it is hovered until
-    // after it has already been painted. The hover state therefore comes
-    // from the previous frame; see [`remembered_hover`].
+
+    let name = egui::WidgetText::from(RichText::new(stat.category.label()).strong()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let detail = egui::WidgetText::from(
+        RichText::new(format!("{}  ·  {percent:.1}%", human_bytes(stat.size)))
+            .small()
+            .color(palette().secondary_text),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Small,
+    );
+
+    let gap = ui.spacing().item_spacing.x;
+    let width = margin.x * 2.0 + ICON + ICON_GAP + name.size().x + gap + detail.size().x;
+    let height = margin.y * 2.0 + name.size().y.max(detail.size().y).max(ICON);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+
+    // A chip is painted before its own response exists in the frame
+    // where it first appears, so the hover ramp reads the previous
+    // frame's state; see [`remembered_hover`].
     let id = ui.id().with(("category_chip", stat.category.label()));
     let t = remembered_hover(ui, id);
-    let rest = if selected {
-        palette().accent_muted
-    } else {
-        palette().raised
-    };
-    let response = egui::Frame::none()
-        .fill(blend(rest, palette().hover, t))
-        .stroke(egui::Stroke::new(
+    remember_hover(ui, id, response.hovered());
+
+    if ui.is_rect_visible(rect) {
+        let rest = if selected {
+            palette().accent_muted
+        } else {
+            palette().raised
+        };
+        let stroke = egui::Stroke::new(
             1.0_f32,
             if selected {
                 palette().accent
             } else {
                 blend(palette().border, palette().border_strong, t)
             },
-        ))
-        .rounding(egui::Rounding::same(6.0))
-        .inner_margin(egui::Margin::symmetric(SPACE_SM, SPACE_XS + 2.0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                paint_inline_icon(ui, Icon::for_category(stat.category), 15.0, color);
-                ui.add_space(2.0);
-                ui.label(RichText::new(stat.category.label()).strong());
-                ui.label(
-                    RichText::new(format!("{}  ·  {percent:.1}%", human_bytes(stat.size)))
-                        .small()
-                        .color(palette().secondary_text),
-                );
-            });
-        })
-        .response;
+        );
+        ui.painter().rect(
+            rect,
+            egui::Rounding::same(6.0),
+            blend(rest, palette().hover, t),
+            stroke,
+        );
 
-    let response = response.interact(Sense::click());
-    remember_hover(ui, id, response.hovered());
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + margin.x + ICON * 0.5, rect.center().y),
+            Vec2::splat(ICON),
+        );
+        Icon::for_category(stat.category).paint(ui.painter(), icon_rect, color);
+
+        let name_x = icon_rect.right() + ICON_GAP;
+        ui.painter().galley(
+            egui::pos2(name_x, rect.center().y - name.size().y * 0.5),
+            name.clone(),
+            palette().primary_text,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                name_x + name.size().x + gap,
+                rect.center().y - detail.size().y * 0.5,
+            ),
+            detail,
+            palette().secondary_text,
+        );
+    }
+
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

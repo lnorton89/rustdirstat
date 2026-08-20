@@ -56,16 +56,27 @@ pub(super) fn extension_table_min_width(columns: &[ExtensionColumn], item_spacin
 /// here pinned in exactly the way it was in the directory table.
 ///
 /// [`directory_column_spec`]: super::directory::directory_column_spec
-pub(super) fn extension_column_spec(column: ExtensionColumn, is_last: bool) -> Column {
-    let minimum = extension_column_min_width(column);
-    if is_last {
-        return Column::remainder()
-            .at_least(minimum)
-            .clip(true)
-            .resizable(false);
+/// Where each extension column starts before anyone drags it.
+///
+/// Stated, rather than left to `Column::auto()`. An `auto` column makes
+/// the table's first frame a *sizing pass*, which egui lays out with an
+/// unbounded width — the content came back as wide as the whole window,
+/// and a side panel stores its content's width, so the pane ratcheted
+/// open on frame one and the divider could never be dragged back.
+fn extension_column_initial_width(column: ExtensionColumn) -> f32 {
+    match column {
+        ExtensionColumn::Extension => 130.0,
+        ExtensionColumn::Color => 60.0,
+        ExtensionColumn::Description => 120.0,
+        ExtensionColumn::Bytes => 90.0,
+        ExtensionColumn::PercentBytes => 72.0,
+        ExtensionColumn::Files => 72.0,
     }
-    Column::auto()
-        .range(minimum..=f32::INFINITY)
+}
+
+pub(super) fn extension_column_spec(column: ExtensionColumn) -> Column {
+    Column::initial(extension_column_initial_width(column))
+        .at_least(extension_column_min_width(column))
         .clip(true)
         .resizable(true)
 }
@@ -336,22 +347,21 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             // label. The directory table has always set it.
             .cell_layout(Layout::left_to_right(Align::Center))
             .sense(Sense::click());
-        let last = columns.len().saturating_sub(1);
-        for (index, column) in columns.iter().enumerate() {
-            table = table.column(extension_column_spec(*column, index == last));
+        for column in &columns {
+            table = table.column(extension_column_spec(*column));
         }
+        table = table.column(super::directory::slack_column());
         table
             .header(TABLE_HEADER_HEIGHT, |mut h| {
-                for (index, column) in columns.iter().enumerate() {
+                for column in &columns {
                     h.col(|ui| {
-                        // The last heading does not claim its cell's
-                        // width; see `sortable_header`.
-                        let (new_sort, new_reorder) =
-                            draw_extension_header(ui, app, *column, index != last);
+                        let (new_sort, new_reorder) = draw_extension_header(ui, app, *column, true);
                         sort = new_sort.or(sort);
                         reorder = new_reorder.or(reorder);
                     });
                 }
+                // The spacer's own cell, empty so it claims no width.
+                h.col(|_| {});
             })
             .body(|mut body| {
                 let painter = body.ui_mut().painter().clone();
@@ -373,6 +383,8 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                             );
                         });
                     }
+                    // The spacer's cell, so the row spans the table.
+                    row.col(|_| {});
                     let response = row.response();
                     row_hover_edge(
                         &painter,

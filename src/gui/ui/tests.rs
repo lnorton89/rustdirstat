@@ -1316,30 +1316,77 @@ fn the_extension_table_resizes_its_columns_including_the_first() {
     }
 }
 
+/// Renders the extensions pane in a resizable side panel and reports the
+/// width the panel actually took.
+fn extension_panel_width(
+    ctx: &egui::Context,
+    app: &mut GuiApp,
+    screen: f32,
+    events: Vec<egui::Event>,
+) -> (f32, f32) {
+    let mut rect = egui::Rect::ZERO;
+    let _ = ctx.run(raw_input_at_width(events, screen), |ctx| {
+        let response = egui::SidePanel::right("test_extension_panel")
+            .resizable(true)
+            .min_width(0.0)
+            .default_width(1200.0)
+            .frame(panel_frame())
+            .show(ctx, |ui| draw_extension_list(app, ui));
+        rect = response.response.rect;
+    });
+    (rect.width(), rect.left())
+}
+
+/// The extensions pane takes the width it is given, and can be dragged
+/// narrower.
+///
+/// A side panel stores *its content's* width as its own, so content that
+/// overflows ratchets the panel wider and the divider will not come back.
+/// Two things did that: the category chips are `egui::Frame`s, and a
+/// frame measures itself against the space left on the line and then
+/// allocates that, so in a wrapped row it overflows rather than wrapping
+/// — nine chips pinned the pane at nearly the whole window. The
+/// extension columns were `Column::auto()`, which makes the table's first
+/// frame a sizing pass laid out unbounded, ratcheting it open on frame
+/// one.
+///
+/// A realistic fixture on purpose: with three extensions and two
+/// categories everything fits and nothing is pinned, which is why the
+/// version of this test that used one passed throughout.
 #[test]
-fn the_extension_panel_can_be_dragged_narrower_than_its_columns() {
+fn the_extensions_pane_takes_the_width_it_is_given() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
-    let mut app = app_with_sortable_extensions();
-
-    const REQUESTED: f32 = 200.0;
-    let mut panel_width = f32::INFINITY;
+    let mut app = app_with_many_extensions();
     apply_style(&ctx, app.palette);
+
+    const SCREEN: f32 = 1900.0;
+    const ASKED: f32 = 1200.0;
+
+    let mut width = 0.0;
+    let mut left = 0.0;
     for _ in 0..4 {
-        let _ = ctx.run(raw_input_at_width(Vec::new(), 1400.0), |ctx| {
-            let response = egui::SidePanel::right("test_extension_panel")
-                .resizable(true)
-                .min_width(0.0)
-                .default_width(REQUESTED)
-                .show(ctx, |ui| draw_extension_list(&mut app, ui));
-            panel_width = response.response.rect.width();
-        });
+        (width, left) = extension_panel_width(&ctx, &mut app, SCREEN, Vec::new());
     }
+    assert!(
+        width <= ASKED + 1.0,
+        "the pane settled at {width:.0}px when asked for {ASKED:.0}px, so its contents are \
+         setting a floor the divider cannot be dragged past"
+    );
+
+    // Now drag the divider right, which narrows a right-hand panel.
+    let grab = egui::pos2(left, 400.0);
+    let target = egui::pos2(SCREEN - 300.0, 400.0);
+    let _ = extension_panel_width(&ctx, &mut app, SCREEN, pointer_button(grab, true));
+    for step in 1..=6 {
+        let to = egui::pos2(grab.x + (target.x - grab.x) * step as f32 / 6.0, grab.y);
+        let _ = extension_panel_width(&ctx, &mut app, SCREEN, pointer_move(to));
+    }
+    (width, _) = extension_panel_width(&ctx, &mut app, SCREEN, pointer_button(target, false));
 
     assert!(
-        panel_width <= REQUESTED + 1.0,
-        "the panel came out {panel_width:.0}px wide when asked for {REQUESTED:.0}px, so its \
-         contents are setting a floor the divider cannot be dragged past"
+        width <= 320.0,
+        "after dragging the divider to leave 300px, the pane is still {width:.0}px wide"
     );
 }
 
@@ -1468,10 +1515,14 @@ fn the_directory_table_fills_resizes_and_scrolls() {
         let viewport = probe(&TEST_DIRECTORY_SCROLL)
             .last()
             .map_or(0.0, |&(_, visible)| visible);
+        // The table reserves a gutter for its own vertical scrollbar, so
+        // the columns legitimately stop short of the viewport by that
+        // much. That strip is a scrollbar, not dead space.
+        let gutter = ctx.style().spacing.scroll.allocated_width();
         assert!(
-            row + 1.0 >= viewport,
+            row + gutter + 1.0 >= viewport,
             "in a {width:.0}px pane the table is {row:.0}px wide inside a {viewport:.0}px \
-             viewport, leaving {:.0}px of dead space beside it",
+             viewport, leaving {:.0}px beside it that its scrollbar gutter ({gutter:.0}px)              does not account for",
             viewport - row
         );
     }
@@ -2699,4 +2750,46 @@ fn a_table_gives_back_width_when_its_pane_shrinks() {
         "after being 1500px wide, a 1400px pane still reports {content:.0}px of content \
          in {viewport:.0}px of viewport — the table kept width it no longer has"
     );
+}
+
+/// A tree with a realistic spread of extensions and categories, so the
+/// extension pane has as much in it as it does after a real scan.
+fn app_with_many_extensions() -> GuiApp {
+    let names = [
+        "a.rlib", "b.rmeta", "c.bin", "d.pdb", "e.o", "f.exe", "g.dll", "h.d", "i", "j.html",
+        "k.json", "l.woff2", "m.rs", "n.lib", "o.png", "p.jpg", "q.txt", "r.md", "s.toml",
+        "t.lock", "u.zip", "v.mp4", "w.wav", "x.csv", "y.pdf", "z.docx", "aa.xlsx", "bb.iso",
+        "cc.tar", "dd.gz", "ee.7z", "ff.svg", "gg.ico",
+    ];
+    let mut totals = vec![(0, 0, 0); Category::COUNT];
+    let mut children = Vec::new();
+    for (n, name) in names.iter().enumerate() {
+        let size = ((n as u64) + 1) * 1_000_000;
+        let index = category_index(name);
+        totals[index].0 += size;
+        totals[index].1 += size;
+        totals[index].2 += 1;
+        children.push(file(name, size));
+    }
+    let total: u64 = children.iter().map(|c| c.size).sum();
+    GuiApp::new(Tree {
+        root_path: PathBuf::from("C:\\test-root"),
+        volume_free: None,
+        volume_total: None,
+        root: Node {
+            name: "test-root".to_string(),
+            is_dir: true,
+            is_symlink: false,
+            size: total,
+            physical_size: total,
+            file_count: names.len() as u64,
+            dir_count: 0,
+            modified: None,
+            children,
+            error: false,
+            category: None,
+            ext_totals: totals,
+            unreadable_count: 0,
+        },
+    })
 }
