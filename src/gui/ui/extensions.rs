@@ -39,16 +39,17 @@ pub(super) fn extension_table_min_width(columns: &[ExtensionColumn], item_spacin
     widths + item_spacing * columns.len().saturating_sub(1) as f32
 }
 
-/// See the directory table's equivalent for the reasoning: `Extension`
-/// flexes to fill the pane, the rest are auto-sized with a floor and no
-/// ceiling, so a resize drag has somewhere to go.
-pub(super) fn extension_column_spec(column: ExtensionColumn) -> Column {
+/// See [`directory_column_spec`] for the reasoning: the last column on
+/// screen absorbs the pane's slack and so cannot be dragged, and every
+/// column before it is resizable with a floor and no ceiling.
+///
+/// `Extension` used to be the one absorbing, which left the first column
+/// here pinned in exactly the way it was in the directory table.
+///
+/// [`directory_column_spec`]: super::directory::directory_column_spec
+pub(super) fn extension_column_spec(column: ExtensionColumn, is_last: bool) -> Column {
     let minimum = extension_column_min_width(column);
-    if column == ExtensionColumn::Extension {
-        // `resizable(false)` is load-bearing: the table sets
-        // `resizable(true)` as the default, and a resizable remainder
-        // column gets a stored width instead of absorbing the slack, so
-        // the table stops growing with the pane entirely.
+    if is_last {
         return Column::remainder()
             .at_least(minimum)
             .clip(true)
@@ -325,8 +326,9 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             // label. The directory table has always set it.
             .cell_layout(Layout::left_to_right(Align::Center))
             .sense(Sense::click());
-        for column in &columns {
-            table = table.column(extension_column_spec(*column));
+        let last = columns.len().saturating_sub(1);
+        for (index, column) in columns.iter().enumerate() {
+            table = table.column(extension_column_spec(*column, index == last));
         }
         table
             .header(TABLE_HEADER_HEIGHT, |mut h| {

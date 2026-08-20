@@ -78,25 +78,27 @@ fn directory_column_initial_width(column: DirectoryColumn) -> f32 {
     }
 }
 
-/// `Name` flexes to fill the pane; every other column is auto-sized with
-/// a floor but **no ceiling**.
+/// How a column is sized, given whether it is the last one on screen.
 ///
-/// The ceilings are what broke resizing. Every column used to be
-/// `auto().range(min..=max)` with ranges as narrow as `75..=110`, so a
-/// drag on the border hit its stop within a few pixels and looked like it
-/// had done nothing at all.
+/// Exactly one column has to absorb the pane's slack, or the table sits
+/// at its natural width with dead space beside it and stops growing when
+/// the pane does. Only a `remainder()` does that, and a `remainder()`
+/// cannot also be resizable: dragging one gives it a stored width, after
+/// which it absorbs nothing and the table stops filling the pane. So the
+/// column that absorbs is the one column that cannot be dragged.
 ///
-/// `Name` has to stay a `remainder()`: giving every column a fixed
-/// `initial` width was tried, and the table then sat at its natural width
-/// with dead space beside it on any pane wider than that — which on a
-/// narrower pane also pushed the last column off the edge.
-pub(super) fn directory_column_spec(column: DirectoryColumn) -> Column {
+/// That used to be `Name` — the first column, the widest, and the one
+/// most worth dragging. It is now the *last* column instead, wherever the
+/// user has dragged that column to. A drag handle on the trailing edge is
+/// the one handle nobody misses: there is no neighbour past it to push.
+///
+/// The others get a floor and **no ceiling**. Ceilings are what broke
+/// resizing before: columns were `auto().range(min..=max)` with ranges as
+/// narrow as `75..=110`, so a drag hit its stop within a few pixels and
+/// looked like it had done nothing at all.
+pub(super) fn directory_column_spec(column: DirectoryColumn, is_last: bool) -> Column {
     let minimum = directory_column_min_width(column);
-    if column == DirectoryColumn::Name {
-        // `resizable(false)` is load-bearing: the table sets
-        // `resizable(true)` as the default, and a resizable remainder
-        // column gets a stored width instead of absorbing the slack, so
-        // the table stops growing with the pane entirely.
+    if is_last {
         return Column::remainder()
             .at_least(minimum)
             .clip(true)
@@ -290,13 +292,6 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
         // to distribute anyway, which is exactly when the scroll area
         // earns its place.
         let available = ui.available_width();
-        // Always scrolled. Rendering the table straight into the pane
-        // lets its minimum width propagate outwards, which stops the
-        // *panel* being dragged any narrower than its own columns — and
-        // then, because the pane can never get narrow, the scroll area
-        // never appears either. Wrapping unconditionally and stating the
-        // width explicitly breaks that circle.
-        let scrolled = true;
 
         let mut render_table = |ui: &mut egui::Ui| {
             let mut table = TableBuilder::new(ui)
@@ -305,8 +300,9 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                 .vscroll(true)
                 .sense(Sense::click())
                 .cell_layout(Layout::left_to_right(Align::Center));
-            for column in &columns {
-                table = table.column(directory_column_spec(*column));
+            let last = columns.len().saturating_sub(1);
+            for (index, column) in columns.iter().enumerate() {
+                table = table.column(directory_column_spec(*column, index == last));
             }
             table
                 .header(TABLE_HEADER_HEIGHT, |mut h| {
@@ -412,7 +408,16 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                 });
         };
 
-        let extents = if scrolled {
+        // Always wrapped, never conditionally. Rendering the table
+        // straight into the pane lets its minimum width propagate
+        // outwards, which stops the *panel* from being dragged any
+        // narrower than its own columns — and then, because the pane can
+        // never get narrow, the scroll area never appears either.
+        // Wrapping unconditionally and stating the width explicitly
+        // breaks that circle. The `else` arm this used to have was
+        // unreachable, and reading it cost time during an unrelated
+        // layout hunt.
+        let extents = {
             let scroll = egui::ScrollArea::horizontal()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -425,9 +430,6 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                     render_table(ui);
                 });
             (scroll.content_size.x, scroll.inner_rect.width())
-        } else {
-            render_table(ui);
-            (available, available)
         };
         #[cfg(test)]
         probe(&TEST_DIRECTORY_SCROLL).push(extents);

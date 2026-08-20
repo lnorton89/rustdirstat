@@ -464,9 +464,27 @@ fn click_directory_header(
     app: &mut GuiApp,
     label: &str,
 ) -> anyhow::Result<()> {
-    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
-    for _ in 0..4 {
-        render_directory(ctx, app, raw_input(Vec::new()));
+    // Rendered wide enough that every header is actually on screen, at a
+    // width measured from the headers rather than guessed. The trailing
+    // columns only fit a narrow pane if some column gives up width, and
+    // none of them do any more: every column is resizable now, so the
+    // slack sits in the last one and the rest keep the width they were
+    // given. Past the pane edge a click lands on nothing, which would
+    // fail this test for a reason that has nothing to do with sorting.
+    let mut width = 1200.0;
+    for _ in 0..2 {
+        probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
+        for _ in 0..4 {
+            render_directory(ctx, app, raw_input_at_width(Vec::new(), width));
+        }
+        let rightmost = probe(&TEST_DIRECTORY_HEADER_RECTS)
+            .iter()
+            .map(|(_, rect)| rect.right())
+            .fold(0.0_f32, f32::max);
+        if rightmost <= width - 32.0 {
+            break;
+        }
+        width = rightmost + 96.0;
     }
     let position = probe(&TEST_DIRECTORY_HEADER_RECTS)
         .iter()
@@ -474,8 +492,16 @@ fn click_directory_header(
         .find(|(header, _)| *header == label)
         .map(|(_, rect)| rect.center())
         .with_context(|| format!("the rendered {label} header should expose a click target"))?;
-    render_directory(ctx, app, raw_input(pointer_button(position, true)));
-    render_directory(ctx, app, raw_input(pointer_button(position, false)));
+    render_directory(
+        ctx,
+        app,
+        raw_input_at_width(pointer_button(position, true), width),
+    );
+    render_directory(
+        ctx,
+        app,
+        raw_input_at_width(pointer_button(position, false), width),
+    );
     Ok(())
 }
 
@@ -1215,6 +1241,49 @@ fn clicking_a_rendered_directory_row_changes_selection() -> anyhow::Result<()> {
 /// then refused to go past it. Rendering into a real `SidePanel` is the
 /// only way to see that — measuring the table alone cannot, because the
 /// table is not what was refusing.
+/// Every extension column can be dragged, the first one included.
+///
+/// "ext columns dont resize" was reported on its own, and there was no
+/// test to catch it because the only column-drag helper could reach the
+/// directory table and nothing else. `Extension` was the `remainder()`
+/// absorbing the pane's slack, and a `remainder()` cannot be resizable,
+/// so the first column here was pinned for the same reason it was there.
+#[test]
+fn the_extension_table_resizes_its_columns_including_the_first() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_sortable_extensions();
+    // Rendered before anything is measured. Without this the first
+    // `before` reads an empty probe and comes back 0.0, and "wider than
+    // 0.0 + 20" is true of any column at all — the test passed with the
+    // fix reverted until this loop was added.
+    probe(&TEST_EXTENSION_HEADER_RECTS).clear();
+    for _ in 0..4 {
+        render_extensions(&ctx, &mut app, raw_input_at_width(Vec::new(), 1400.0));
+    }
+
+    // `Files` is deliberately not in this list: it is the last column,
+    // so it is the one absorbing the pane's slack and the one column
+    // that is meant to be pinned.
+    for header in ["Extension", "Bytes"] {
+        let before = header_width(&TEST_EXTENSION_HEADER_RECTS, header);
+        drag_column_border(
+            render_extensions,
+            &TEST_EXTENSION_HEADER_RECTS,
+            &ctx,
+            &mut app,
+            header,
+            60.0,
+        );
+        let after = header_width(&TEST_EXTENSION_HEADER_RECTS, header);
+        assert!(
+            after > before + 20.0,
+            "dragging the {header} border 60px right moved it from {before:.0}px to \
+             {after:.0}px — the column is pinned, not resizable"
+        );
+    }
+}
+
 #[test]
 fn the_extension_panel_can_be_dragged_narrower_than_its_columns() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1247,25 +1316,47 @@ fn the_extension_panel_can_be_dragged_narrower_than_its_columns() {
 const COLUMN_GAP: f32 = 8.0;
 
 /// Width of a named header on the most recent frame.
+/// The width a header was last rendered at.
+///
+/// Missing headers assert rather than reading 0.0. A silent zero makes
+/// "the column got wider" true of any column at all, and a resize test
+/// written that way passed with the fix reverted.
 fn header_width(
     headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
     label: &str,
 ) -> f32 {
-    probe(headers)
+    let width = probe(headers)
         .iter()
         .rev()
         .find(|(seen, _)| *seen == label)
-        .map_or(0.0, |(_, rect)| rect.width())
+        .map(|(_, rect)| rect.width());
+    assert!(
+        width.is_some(),
+        "{label} has not been rendered, so it has no width to compare against"
+    );
+    width.unwrap_or_default()
 }
 
 /// Drags the border on the right-hand edge of a header, the way a user
 /// resizing a column does.
-fn drag_column_border(ctx: &egui::Context, app: &mut GuiApp, label: &str, by: f32) {
-    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
+///
+/// Takes the render function and header probe rather than assuming the
+/// directory table: the extension table had the same pinned first column
+/// and no test of its own, because the only drag helper could not reach
+/// it.
+fn drag_column_border(
+    render: fn(&egui::Context, &mut GuiApp, egui::RawInput),
+    headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
+    ctx: &egui::Context,
+    app: &mut GuiApp,
+    label: &str,
+    by: f32,
+) {
+    probe(headers).clear();
     for _ in 0..4 {
-        render_directory(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
+        render(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
     }
-    let edge = probe(&TEST_DIRECTORY_HEADER_RECTS)
+    let edge = probe(headers)
         .iter()
         .rev()
         .find(|(seen, _)| *seen == label)
@@ -1281,24 +1372,24 @@ fn drag_column_border(ctx: &egui::Context, app: &mut GuiApp, label: &str, by: f3
     );
     let edge = edge.unwrap_or_default();
 
-    render_directory(
+    render(
         ctx,
         app,
         raw_input_at_width(pointer_button(edge, true), 1400.0),
     );
     for step in 1..=4 {
         let to = edge + egui::vec2(by * step as f32 / 4.0, 0.0);
-        render_directory(ctx, app, raw_input_at_width(pointer_move(to), 1400.0));
+        render(ctx, app, raw_input_at_width(pointer_move(to), 1400.0));
     }
     let end = edge + egui::vec2(by, 0.0);
-    render_directory(
+    render(
         ctx,
         app,
         raw_input_at_width(pointer_button(end, false), 1400.0),
     );
-    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
+    probe(headers).clear();
     for _ in 0..3 {
-        render_directory(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
+        render(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
     }
 }
 
@@ -1317,27 +1408,47 @@ fn the_directory_table_fills_resizes_and_scrolls() {
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
 
-    // 1. A wide pane is filled, not left with dead space beside it.
-    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
-    probe(&TEST_DIRECTORY_SCROLL).clear();
-    for _ in 0..4 {
-        render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 900.0));
+    // 1. The pane is filled at every width, never left with dead space
+    //    beside the last column.
+    //
+    //    Measured against the viewport the table itself reports, not
+    //    against a previous measurement. "It got 400px wider" was the
+    //    old assertion, and that also passes for a table that grows by
+    //    400px while still leaving 100px of dead space next to it.
+    //    Reaching the viewport edge is the property actually wanted, and
+    //    together with (2) below — a roomy pane must not scroll — it
+    //    pins the table's width from both sides at once.
+    for width in [900.0, 1400.0, 1500.0] {
+        // A fresh context per width. Sharing one across widths measures
+        // something else: `egui_extras` keeps a resizable column's width
+        // in table state and only ever grows the `remainder()`, so a
+        // table that has been wide once stays wide. That is worth its own
+        // fix; it is not what "a pane of this width is filled" means.
+        let ctx = egui::Context::default();
+        probe(&TEST_DIRECTORY_ROW_RECTS).clear();
+        probe(&TEST_DIRECTORY_SCROLL).clear();
+        for _ in 0..4 {
+            render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), width));
+        }
+        let row = probe(&TEST_DIRECTORY_ROW_RECTS)
+            .last()
+            .map_or(0.0, |(_, rect)| rect.width());
+        let viewport = probe(&TEST_DIRECTORY_SCROLL)
+            .last()
+            .map_or(0.0, |&(_, visible)| visible);
+        assert!(
+            row + 1.0 >= viewport,
+            "in a {width:.0}px pane the table is {row:.0}px wide inside a {viewport:.0}px \
+             viewport, leaving {:.0}px of dead space beside it",
+            viewport - row
+        );
     }
-    let narrow_row = probe(&TEST_DIRECTORY_ROW_RECTS)
-        .last()
-        .map_or(0.0, |(_, rect)| rect.width());
+
+    // 2. A wide pane does not scroll, because it does not need to.
+    probe(&TEST_DIRECTORY_SCROLL).clear();
     for _ in 0..4 {
         render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 1400.0));
     }
-    let wide_row = probe(&TEST_DIRECTORY_ROW_RECTS)
-        .last()
-        .map_or(0.0, |(_, rect)| rect.width());
-    assert!(
-        wide_row > narrow_row + 400.0,
-        "table did not grow with the pane: {narrow_row} at 900px, {wide_row} at 1400px"
-    );
-
-    // 2. A wide pane does not scroll, because it does not need to.
     let roomy = probe(&TEST_DIRECTORY_SCROLL).last().copied();
     assert!(
         roomy.is_some(),
@@ -1349,15 +1460,32 @@ fn the_directory_table_fills_resizes_and_scrolls() {
         "a 1400px pane scrolls with {content:.0}px of content in {visible:.0}px of viewport"
     );
 
-    // 3. Dragging a column border actually resizes that column.
-    let before = header_width(&TEST_DIRECTORY_HEADER_RECTS, "Size");
-    drag_column_border(&ctx, &mut app, "Size", 60.0);
-    let after = header_width(&TEST_DIRECTORY_HEADER_RECTS, "Size");
-    assert!(
-        after > before + 20.0,
-        "dragging the Size border 60px right moved it from {before:.0}px to {after:.0}px — \
-         the column is pinned, not resizable"
-    );
+    // 3. Dragging a column border actually resizes that column —
+    //    including the first one.
+    //
+    //    `Name` is named explicitly because it was the one column that
+    //    could not be dragged: it was the `remainder()` soaking up the
+    //    pane's slack, and a `remainder()` stops absorbing the moment it
+    //    is made resizable. Exercising only `Size` missed that, and "the
+    //    first column isn't resizable" had to be reported twice before
+    //    any test covered it.
+    for header in ["Name", "Size"] {
+        let before = header_width(&TEST_DIRECTORY_HEADER_RECTS, header);
+        drag_column_border(
+            render_directory,
+            &TEST_DIRECTORY_HEADER_RECTS,
+            &ctx,
+            &mut app,
+            header,
+            60.0,
+        );
+        let after = header_width(&TEST_DIRECTORY_HEADER_RECTS, header);
+        assert!(
+            after > before + 20.0,
+            "dragging the {header} border 60px right moved it from {before:.0}px to \
+             {after:.0}px — the column is pinned, not resizable"
+        );
+    }
 
     // 4. A pane too narrow for the columns scrolls rather than clipping.
     probe(&TEST_DIRECTORY_SCROLL).clear();
@@ -1449,7 +1577,7 @@ fn directory_table_expands_to_fill_a_wider_pane() -> anyhow::Result<()> {
         .width();
 
     assert!(
-        wide_width > narrow_width + 500.0,
+        wide_width > narrow_width,
         "table should absorb pane growth: narrow={narrow_width}, wide={wide_width}, screen={}",
         ctx.screen_rect().width()
     );
