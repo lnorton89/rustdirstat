@@ -299,28 +299,38 @@ fn remove_path(path: &std::path::Path, is_dir: bool, is_symlink: bool) -> std::i
     std::fs::remove_file(path)
 }
 
+/// Copies a directory tree, iteratively.
+///
+/// The name is now a small lie, kept because it says what it does. It
+/// used to call itself once per directory level, which put the depth of
+/// whatever the user was moving on the call stack — and depth is theirs
+/// to choose, not ours. The worklist holds one entry per directory still
+/// to visit, which is heap and can simply be large.
 fn copy_dir_recursive(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dest)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let dest_path = dest.join(entry.file_name());
-        if ty.is_symlink() {
-            let link_target = std::fs::read_link(entry.path())?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&link_target, &dest_path)?;
-            #[cfg(windows)]
-            {
-                if link_target.is_dir() {
-                    std::os::windows::fs::symlink_dir(&link_target, &dest_path)?;
-                } else {
-                    std::os::windows::fs::symlink_file(&link_target, &dest_path)?;
+    let mut pending = vec![(source.to_path_buf(), dest.to_path_buf())];
+    while let Some((source, dest)) = pending.pop() {
+        std::fs::create_dir_all(&dest)?;
+        for entry in std::fs::read_dir(&source)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let dest_path = dest.join(entry.file_name());
+            if ty.is_symlink() {
+                let link_target = std::fs::read_link(entry.path())?;
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&link_target, &dest_path)?;
+                #[cfg(windows)]
+                {
+                    if link_target.is_dir() {
+                        std::os::windows::fs::symlink_dir(&link_target, &dest_path)?;
+                    } else {
+                        std::os::windows::fs::symlink_file(&link_target, &dest_path)?;
+                    }
                 }
+            } else if ty.is_dir() {
+                pending.push((entry.path(), dest_path));
+            } else {
+                std::fs::copy(entry.path(), &dest_path)?;
             }
-        } else if ty.is_dir() {
-            copy_dir_recursive(&entry.path(), &dest_path)?;
-        } else {
-            std::fs::copy(entry.path(), &dest_path)?;
         }
     }
     Ok(())
@@ -402,5 +412,83 @@ mod clipboard_tests {
         // ASCII is not passed through as bytes either: two 16-bit units
         // behind the mark, which is what catches a plain byte copy.
         assert_eq!(utf16le_with_bom("ab").len(), 2 + 4);
+    }
+}
+
+/// Cross-platform, unlike the symlink tests above: nothing here needs
+/// privileges to create.
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "rustdirstat_copy_{}_{name}_{unique}",
+            std::process::id()
+        ))
+    }
+
+    /// A copied tree keeps its shape and its contents.
+    ///
+    /// The walk was rewritten from one call per directory level to a
+    /// worklist, because the depth being walked is whatever the user
+    /// asked to move rather than anything this code chooses. Nesting is
+    /// the part a worklist gets wrong when it gets it wrong: a flat
+    /// result, or children copied to the wrong parent.
+    #[test]
+    fn a_copied_tree_keeps_its_nesting_and_contents() -> anyhow::Result<()> {
+        let root = scratch("nesting");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        fs::create_dir_all(source.join("a").join("deep"))?;
+        fs::create_dir_all(source.join("b"))?;
+        fs::write(source.join("top.txt"), b"top")?;
+        fs::write(source.join("a").join("mid.txt"), b"mid")?;
+        fs::write(source.join("a").join("deep").join("leaf.txt"), b"leaf")?;
+        fs::write(source.join("b").join("other.txt"), b"other")?;
+
+        // Nested well past one level, so a walk that loses track of which
+        // destination a directory belongs under cannot pass.
+        let mut chain = source.join("chain");
+        for i in 0..40 {
+            chain = chain.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&chain)?;
+        fs::write(chain.join("bottom.txt"), b"bottom")?;
+
+        let dest = root.join("dest");
+        copy_dir_recursive(&source, &dest)?;
+
+        for (relative, expected) in [
+            ("top.txt", "top"),
+            ("a/mid.txt", "mid"),
+            ("a/deep/leaf.txt", "leaf"),
+            ("b/other.txt", "other"),
+        ] {
+            let mut path = dest.clone();
+            for part in relative.split('/') {
+                path = path.join(part);
+            }
+            let found = fs::read_to_string(&path);
+            assert!(found.is_ok(), "{relative} should exist under the copy");
+            assert_eq!(found.unwrap_or_default(), expected, "{relative}");
+        }
+
+        let mut copied_chain = dest.join("chain");
+        for i in 0..40 {
+            copied_chain = copied_chain.join(format!("d{i}"));
+        }
+        let bottom = fs::read_to_string(copied_chain.join("bottom.txt"));
+        assert!(
+            bottom.is_ok(),
+            "the deeply nested file should be copied to the same depth"
+        );
+        assert_eq!(bottom.unwrap_or_default(), "bottom");
+
+        fs::remove_dir_all(&root)?;
+        Ok(())
     }
 }
