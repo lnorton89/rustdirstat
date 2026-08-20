@@ -146,6 +146,72 @@ fn reorder_column<T: Copy + Eq>(columns: &mut Vec<T>, source: T, target: T) {
     columns.insert(target_index, source);
 }
 
+/// One row of the directory table, flattened out of the tree.
+///
+/// Lives here rather than with the table-painting code because it is
+/// derived model state that gets cached across frames — see
+/// [`GuiApp::refresh_visible_rows`].
+#[derive(Clone)]
+pub struct TreeRow {
+    pub path: Vec<usize>,
+    pub depth: usize,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub parent_size: u64,
+    pub files: u64,
+    pub dirs: u64,
+    pub modified: Option<std::time::SystemTime>,
+    pub unreadable: u64,
+    pub symlink: bool,
+}
+
+/// Everything the flattened row list depends on.
+///
+/// This is compared against per frame rather than invalidated by hand at
+/// each mutation site. The set of things that can change the row list is
+/// large and spread across the UI code — every expand/collapse, every
+/// sort click, the size-mode toggle, and every rescan — so hand-written
+/// invalidation is one missed call away from painting a stale tree, a bug
+/// that would look like the app ignoring input. Deriving the key from
+/// observable state instead cannot go stale by construction.
+#[derive(PartialEq)]
+struct RowKey {
+    tree: usize,
+    sort: SortMode,
+    physical: bool,
+    expanded: u64,
+}
+
+/// Everything the treemap tile list depends on.
+#[derive(PartialEq)]
+struct TreemapKey {
+    tree: usize,
+    zoom_path: Vec<usize>,
+    rect: [i32; 4],
+    physical: bool,
+    free_space: bool,
+}
+
+/// Order-independent fingerprint of the expanded-directory set.
+///
+/// A `HashSet` has no stable iteration order, so the paths are folded
+/// together commutatively. XOR alone would cancel a pair of equal
+/// hashes, so a wrapping sum and the element count are mixed in too.
+fn expanded_fingerprint(expanded: &HashSet<Vec<usize>>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut xor = 0_u64;
+    let mut sum = 0_u64;
+    for path in expanded {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        path.hash(&mut hasher);
+        let hash = hasher.finish();
+        xor ^= hash;
+        sum = sum.wrapping_add(hash);
+    }
+    xor ^ sum.rotate_left(17) ^ (expanded.len() as u64)
+}
+
 pub struct PendingDelete {
     pub index_path: Vec<usize>,
     pub name: String,
@@ -187,6 +253,18 @@ pub struct GuiApp {
     pub search_results: Vec<search::SearchHit>,
     pub search_error: Option<String>,
     pub scan_progress: Option<Arc<crate::scanner::Progress>>,
+    /// Directory rows currently on screen, rebuilt only when something
+    /// they depend on changes rather than on every frame. On a
+    /// whole-drive scan with a wide directory expanded, rebuilding this
+    /// per frame means hundreds of thousands of string and path
+    /// allocations per frame, which is enough on its own to stop the
+    /// window responding to input.
+    pub visible_rows: Vec<TreeRow>,
+    visible_rows_key: Option<RowKey>,
+    /// Treemap tiles for the current panel rect, cached on the same
+    /// terms and for the same reason.
+    pub treemap_tiles: Vec<treemap_layout::Tile>,
+    treemap_key: Option<TreemapKey>,
     scan_rx: Option<mpsc::Receiver<Result<Tree, String>>>,
     scan_resets_workspace: bool,
     duplicate_rx: Option<mpsc::Receiver<Vec<DupGroup>>>,
@@ -197,36 +275,7 @@ pub struct GuiApp {
 
 impl GuiApp {
     pub fn loading(root: PathBuf) -> Self {
-        let name = root
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| root.display().to_string());
-        let is_dir = root.is_dir();
-        let placeholder = Tree {
-            root_path: root.clone(),
-            root: Node {
-                name,
-                is_dir,
-                is_symlink: false,
-                size: 0,
-                physical_size: 0,
-                file_count: 0,
-                dir_count: 0,
-                modified: None,
-                children: Vec::new(),
-                error: false,
-                category: None,
-                ext_totals: if is_dir {
-                    vec![(0, 0, 0); Category::COUNT]
-                } else {
-                    Vec::new()
-                },
-                unreadable_count: 0,
-            },
-            volume_free: None,
-            volume_total: None,
-        };
-        let mut app = Self::new(placeholder);
+        let mut app = Self::new(Tree::placeholder(root.clone()));
         app.start_scan(root, true);
         app
     }
@@ -272,6 +321,10 @@ impl GuiApp {
             search_results: Vec::new(),
             search_error: None,
             scan_progress: None,
+            visible_rows: Vec::new(),
+            visible_rows_key: None,
+            treemap_tiles: Vec::new(),
+            treemap_key: None,
             scan_rx: None,
             scan_resets_workspace: false,
             duplicate_rx: None,
@@ -555,6 +608,32 @@ impl GuiApp {
         self.show_windows_tools = false;
     }
 
+    /// Swaps in a freshly scanned tree, retiring the old one off-thread.
+    /// See [`drop_in_background`] for why the old tree is not just dropped
+    /// where it stands.
+    fn replace_tree(&mut self, tree: Tree) {
+        drop_in_background(std::mem::replace(&mut self.tree, Arc::new(tree)));
+    }
+
+    /// Gives up the scanned tree without paying to tear it down, for use
+    /// on the way out of the process. Everything the UI derives from the
+    /// tree is dropped alongside it, so nothing is left pointing at data
+    /// that is no longer there.
+    fn release_tree(&mut self) {
+        self.visible_rows = Vec::new();
+        self.visible_rows_key = None;
+        self.treemap_tiles = Vec::new();
+        self.treemap_key = None;
+        self.largest_files = Vec::new();
+        self.duplicate_groups = Vec::new();
+        self.search_results = Vec::new();
+        let root_path = self.tree.root_path.clone();
+        drop_in_background(std::mem::replace(
+            &mut self.tree,
+            Arc::new(Tree::placeholder(root_path)),
+        ));
+    }
+
     pub fn poll_background(&mut self, ctx: &egui::Context) {
         let scan_result = self.scan_rx.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
@@ -569,7 +648,7 @@ impl GuiApp {
             match result {
                 Ok(tree) => {
                     let reset = self.scan_resets_workspace;
-                    self.tree = Arc::new(tree);
+                    self.replace_tree(tree);
                     if reset {
                         self.zoom_path.clear();
                         self.selected_path = None;
@@ -719,24 +798,160 @@ impl GuiApp {
         self.refresh_scan()
     }
 
-    pub fn treemap_tiles(&self, x: f32, y: f32, w: f32, h: f32) -> Vec<treemap_layout::Tile> {
-        let free_space =
-            if self.show_free_space && self.zoom_path.is_empty() && self.tree.is_volume_root() {
-                self.tree.volume_free
-            } else {
-                None
-            };
+    /// Rebuilds [`Self::treemap_tiles`] if the panel rect or anything the
+    /// layout depends on has changed since the last frame, and otherwise
+    /// leaves the existing tiles in place.
+    pub fn refresh_treemap(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let show_free_space =
+            self.show_free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
+        let free_space = if show_free_space {
+            self.tree.volume_free
+        } else {
+            None
+        };
+        let key = TreemapKey {
+            tree: Arc::as_ptr(&self.tree) as usize,
+            zoom_path: self.zoom_path.clone(),
+            // Rounded to whole pixels because that is the resolution the
+            // layout itself quantizes to: a sub-pixel change in the
+            // splitter position cannot change a single tile.
+            rect: [
+                x.round() as i32,
+                y.round() as i32,
+                w.round() as i32,
+                h.round() as i32,
+            ],
+            physical: self.use_physical,
+            free_space: free_space.is_some(),
+        };
+        if self.treemap_key.as_ref() == Some(&key) {
+            return;
+        }
+
         let mut tiles =
             treemap_layout::build(self.zoom_node(), x, y, w, h, self.use_physical, free_space);
         for tile in &mut tiles {
-            if !tile.is_free_space {
+            if tile.is_node() {
                 let mut absolute = self.zoom_path.clone();
                 absolute.extend_from_slice(&tile.index_path);
                 tile.index_path = absolute;
             }
         }
-        tiles
+        self.treemap_tiles = tiles;
+        self.treemap_key = Some(key);
     }
+
+    /// Rebuilds [`Self::visible_rows`] if the tree, sort order, size mode,
+    /// or expanded set has changed since the last frame.
+    pub fn refresh_visible_rows(&mut self) {
+        let key = RowKey {
+            tree: Arc::as_ptr(&self.tree) as usize,
+            sort: self.sort,
+            physical: self.use_physical,
+            expanded: expanded_fingerprint(&self.expanded),
+        };
+        if self.visible_rows_key.as_ref() == Some(&key) {
+            return;
+        }
+
+        let mut rows = Vec::new();
+        let root_name = self.tree.root_path.display().to_string();
+        push_tree_rows(
+            &self.tree.root,
+            Vec::new(),
+            0,
+            self.tree.root.effective_size(self.use_physical).max(1),
+            root_name,
+            self,
+            &mut rows,
+        );
+        self.visible_rows = rows;
+        self.visible_rows_key = Some(key);
+    }
+}
+
+fn push_tree_rows(
+    node: &Node,
+    path: Vec<usize>,
+    depth: usize,
+    parent_size: u64,
+    display_name: String,
+    app: &GuiApp,
+    out: &mut Vec<TreeRow>,
+) {
+    out.push(TreeRow {
+        path: path.clone(),
+        depth,
+        name: display_name,
+        is_dir: node.is_dir,
+        size: node.effective_size(app.use_physical),
+        parent_size,
+        files: node.file_count,
+        dirs: node.dir_count,
+        modified: node.modified,
+        unreadable: node.unreadable_count,
+        symlink: node.is_symlink,
+    });
+    if !node.is_dir || !app.expanded.contains(&path) {
+        return;
+    }
+    let mut children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
+    sort_nodes(&mut children, app.sort, app.use_physical);
+    let node_size = node.effective_size(app.use_physical).max(1);
+    for (idx, child) in children {
+        let mut child_path = path.clone();
+        child_path.push(idx);
+        push_tree_rows(
+            child,
+            child_path,
+            depth + 1,
+            node_size,
+            child.name.clone(),
+            app,
+            out,
+        );
+    }
+}
+
+pub fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) {
+    match sort {
+        SortMode::SizeDesc => nodes.sort_by(|a, b| {
+            b.1.effective_size(physical)
+                .cmp(&a.1.effective_size(physical))
+        }),
+        SortMode::SizeAsc => nodes.sort_by(|a, b| {
+            a.1.effective_size(physical)
+                .cmp(&b.1.effective_size(physical))
+        }),
+        SortMode::NameAsc => nodes.sort_by_key(|a| a.1.name.to_lowercase()),
+        SortMode::NameDesc => nodes.sort_by_key(|b| std::cmp::Reverse(b.1.name.to_lowercase())),
+        SortMode::ModifiedDesc => nodes.sort_by_key(|b| std::cmp::Reverse(b.1.modified)),
+        SortMode::ModifiedAsc => nodes.sort_by_key(|a| a.1.modified),
+    }
+}
+
+/// Hands a value off to a detached thread to be dropped there.
+///
+/// Freeing a scanned tree is not cheap: it walks every node and returns
+/// millions of individual allocations — one per name, one per child list,
+/// one per directory's category totals — to the allocator. A whole-drive
+/// scan is over a second of pure teardown even with every page resident,
+/// and far worse once the working set has been paged out, because the
+/// allocator has to fault all of it back in just to release it. Doing
+/// that on the UI thread is what made rescanning a large drive hitch and
+/// made closing the window look like a hang.
+///
+/// Nothing observable depends on *when* the memory comes back, so it can
+/// happen off to the side. At process exit the reclaim thread is killed
+/// wherever it happens to be, which is fine — the OS releases the whole
+/// address space regardless, and that is the point: the teardown is work
+/// nobody is waiting for.
+fn drop_in_background<T: Send + 'static>(value: T) {
+    // If the spawn itself fails, `spawn` drops the closure — and with it
+    // the value — right here, which is the correct fallback.
+    let _ = std::thread::Builder::new()
+        .name("rustdirstat-reclaim".to_owned())
+        .spawn(move || drop(value));
 }
 
 fn valid_prefix(tree: &Tree, requested: &[usize]) -> Vec<usize> {
@@ -797,12 +1012,22 @@ impl eframe::App for GuiApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_preferences();
+        // Preferences are the only thing that has to survive the process,
+        // and they are on disk by now. Everything else is a cache of the
+        // filesystem, so the scanned tree is handed off instead of being
+        // walked and freed on the way out — on a whole-drive scan that
+        // teardown is the difference between the window vanishing at once
+        // and it sitting there unresponsive while millions of allocations
+        // are returned to an allocator that is about to be discarded
+        // wholesale anyway.
+        self.release_tree();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{extension_label, GuiApp};
+    use crate::tui::SortMode;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -881,6 +1106,156 @@ mod tests {
         assert!(app.is_busy());
         wait_for_background(&mut app);
         assert_eq!(app.duplicate_groups.len(), 1);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn nested_test_tree() -> std::path::PathBuf {
+        let dir = test_dir("cache");
+        std::fs::create_dir_all(dir.join("alpha")).unwrap();
+        std::fs::create_dir_all(dir.join("beta")).unwrap();
+        std::fs::write(dir.join("alpha/small.bin"), vec![1_u8; 16]).unwrap();
+        std::fs::write(dir.join("alpha/large.bin"), vec![2_u8; 4096]).unwrap();
+        std::fs::write(dir.join("beta/only.bin"), vec![3_u8; 512]).unwrap();
+        dir
+    }
+
+    /// The row cache is keyed off observed state rather than invalidated
+    /// by hand, so what needs proving is that every input actually
+    /// reaches the key — a missed one would leave the table painting a
+    /// stale tree while the app looked like it was ignoring input.
+    #[test]
+    fn cached_rows_refresh_whenever_an_input_changes() {
+        let dir = nested_test_tree();
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+
+        app.refresh_visible_rows();
+        let collapsed = app.visible_rows.len();
+
+        // Expanding a directory reveals its children.
+        let alpha = app
+            .visible_rows
+            .iter()
+            .find(|row| row.name == "alpha")
+            .map(|row| row.path.clone())
+            .expect("alpha should be a visible row");
+        app.toggle_expanded(&alpha);
+        app.refresh_visible_rows();
+        assert!(
+            app.visible_rows.len() > collapsed,
+            "expanding a directory did not add rows"
+        );
+        let expanded = app.visible_rows.len();
+
+        // Sort order changes which child comes first.
+        app.sort = SortMode::SizeDesc;
+        app.refresh_visible_rows();
+        let biggest_first = app.visible_rows[1].name.clone();
+        app.sort = SortMode::SizeAsc;
+        app.refresh_visible_rows();
+        assert_ne!(
+            biggest_first, app.visible_rows[1].name,
+            "flipping the sort order did not reorder the rows"
+        );
+        assert_eq!(app.visible_rows.len(), expanded);
+
+        // Collapsing again gets back to where it started.
+        app.toggle_expanded(&alpha);
+        app.refresh_visible_rows();
+        assert_eq!(app.visible_rows.len(), collapsed);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cached_rows_are_not_rebuilt_when_nothing_changed() {
+        let dir = nested_test_tree();
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+
+        app.refresh_visible_rows();
+        let first = app.visible_rows.as_ptr();
+        for _ in 0..8 {
+            app.refresh_visible_rows();
+        }
+        assert_eq!(
+            first,
+            app.visible_rows.as_ptr(),
+            "the row list was reallocated despite nothing changing, so it is \
+             being rebuilt every frame"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cached_treemap_follows_the_panel_rect_and_the_zoom() {
+        let dir = nested_test_tree();
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
+        assert!(!app.treemap_tiles.is_empty());
+        let stable = app.treemap_tiles.as_ptr();
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
+        assert_eq!(
+            stable,
+            app.treemap_tiles.as_ptr(),
+            "the treemap was re-laid-out for an unchanged rect"
+        );
+
+        // A different panel size has to produce a different layout.
+        app.refresh_treemap(0.0, 0.0, 900.0, 200.0);
+        let widest = app
+            .treemap_tiles
+            .iter()
+            .fold(0.0_f32, |acc, tile| acc.max(tile.x + tile.w));
+        assert!(
+            widest > 400.0,
+            "tiles still fit the old 400px panel after it grew to 900px"
+        );
+
+        // So does zooming into a subdirectory.
+        app.refresh_visible_rows();
+        let alpha = app
+            .visible_rows
+            .iter()
+            .find(|row| row.name == "alpha")
+            .map(|row| row.path.clone())
+            .expect("alpha should be a visible row");
+        app.select_path(alpha);
+        app.zoom_in();
+        app.refresh_treemap(0.0, 0.0, 900.0, 200.0);
+        assert!(
+            app.treemap_tiles
+                .iter()
+                .any(|tile| tile.name == "large.bin"),
+            "zooming in did not re-lay-out the treemap for the new root"
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Closing the window must not depend on walking the scanned tree, so
+    /// the exit path hands it off rather than freeing it in place.
+    #[test]
+    fn releasing_the_tree_drops_everything_derived_from_it() {
+        let dir = nested_test_tree();
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+        app.refresh_visible_rows();
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
+        assert!(!app.visible_rows.is_empty());
+        assert!(!app.treemap_tiles.is_empty());
+        assert!(!app.largest_files.is_empty());
+
+        app.release_tree();
+
+        assert!(app.visible_rows.is_empty());
+        assert!(app.treemap_tiles.is_empty());
+        assert!(app.largest_files.is_empty());
+        assert!(app.tree.root.children.is_empty());
+        assert_eq!(app.tree.root_path, dir);
+        // The placeholder still has to answer the queries the UI makes
+        // while the window tears down around it.
+        assert_eq!(app.zoom_node().size, 0);
 
         std::fs::remove_dir_all(dir).unwrap();
     }

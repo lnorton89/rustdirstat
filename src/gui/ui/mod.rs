@@ -1,0 +1,164 @@
+//! The egui front end, split by what part of the window each
+//! module paints.
+//!
+//! Everything here is immediate mode: [`draw`] runs top to bottom
+//! once per frame and rebuilds the whole window from [`GuiApp`],
+//! which owns all the state. Nothing in this subtree keeps state of
+//! its own between frames, so a module can be read in isolation --
+//! what it paints is a pure function of the app it is handed.
+//!
+//! The one thing to know before editing: because every frame is a
+//! full rebuild, anything expensive that is proportional to the
+//! size of the scanned tree must be cached on `GuiApp` rather than
+//! recomputed here. See `GuiApp::refresh_visible_rows` and
+//! `GuiApp::refresh_treemap`.
+
+use crate::gui::app::{FileView, GuiApp, PaneOrientation};
+use eframe::egui::{self, Color32, Frame, Margin, RichText, Stroke};
+
+mod actions;
+mod chrome;
+mod dialogs;
+mod directory;
+mod extensions;
+mod lists;
+#[cfg(test)]
+mod probes;
+#[cfg(test)]
+mod tests;
+mod theme;
+mod treemap;
+mod widgets;
+
+use self::actions::*;
+use self::chrome::*;
+use self::dialogs::*;
+use self::directory::*;
+use self::extensions::*;
+use self::lists::*;
+use self::theme::*;
+use self::treemap::*;
+use self::widgets::*;
+
+pub fn draw(app: &mut GuiApp, ctx: &egui::Context) {
+    apply_style(ctx);
+    draw_menu_bar(app, ctx);
+    if app.show_toolbar {
+        draw_toolbar(app, ctx);
+    }
+    if app.show_status_bar {
+        draw_status_bar(app, ctx);
+    }
+    draw_workspace(app, ctx);
+    draw_delete_dialog(app, ctx);
+    draw_properties_dialog(app, ctx);
+    draw_settings_dialog(app, ctx);
+    draw_windows_tools_dialog(app, ctx);
+    draw_windows_tool_confirmation(app, ctx);
+    draw_about_dialog(app, ctx);
+    handle_shortcuts(app, ctx);
+}
+
+pub(super) fn draw_workspace(app: &mut GuiApp, ctx: &egui::Context) {
+    match (app.show_treemap, app.orientation) {
+        (true, PaneOrientation::Horizontal) => {
+            egui::TopBottomPanel::bottom("treemap_horizontal")
+                .resizable(true)
+                .default_height(280.0)
+                .min_height(0.0)
+                .frame(panel_frame())
+                .show(ctx, |ui| draw_treemap(app, ui));
+            draw_upper_workspace(app, ctx, true);
+        }
+        (true, PaneOrientation::Vertical) => {
+            egui::SidePanel::right("treemap_vertical")
+                .resizable(true)
+                .default_width(ctx.available_rect().width() * 0.48)
+                .min_width(0.0)
+                .frame(panel_frame())
+                .show(ctx, |ui| draw_treemap(app, ui));
+            draw_upper_workspace(app, ctx, false);
+        }
+        (false, _) => {
+            draw_upper_workspace(app, ctx, app.orientation == PaneOrientation::Horizontal)
+        }
+    }
+}
+
+pub(super) fn draw_upper_workspace(
+    app: &mut GuiApp,
+    ctx: &egui::Context,
+    extension_on_right: bool,
+) {
+    if app.show_extension_view {
+        if extension_on_right {
+            egui::SidePanel::right("extension_right")
+                .resizable(true)
+                .default_width(430.0)
+                .min_width(0.0)
+                .frame(panel_frame())
+                .show(ctx, |ui| draw_extension_list(app, ui));
+        } else {
+            egui::TopBottomPanel::bottom("extension_bottom")
+                .resizable(true)
+                .default_height(220.0)
+                .min_height(0.0)
+                .frame(panel_frame())
+                .show(ctx, |ui| draw_extension_list(app, ui));
+        }
+    }
+    egui::CentralPanel::default()
+        .frame(panel_frame())
+        .show(ctx, |ui| draw_file_area(app, ui));
+}
+
+pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
+    if let Some(message) = app.busy_text() {
+        Frame::none()
+            .fill(ACCENT_MUTED_COLOR)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(Margin::symmetric(13.0, 9.0))
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(67, 112, 171)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new(message).strong());
+                    ui.label(
+                        RichText::new("You can keep browsing the current scan.")
+                            .color(SECONDARY_TEXT_COLOR),
+                    );
+                });
+            });
+        ui.add_space(8.0);
+    }
+    Frame::none()
+        .fill(APP_COLOR)
+        .rounding(egui::Rounding::same(8.0))
+        .inner_margin(Margin::same(4.0))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for view in [
+                    FileView::AllFiles,
+                    FileView::LargestFiles,
+                    FileView::DuplicateFiles,
+                    FileView::SearchResults,
+                ] {
+                    let clicked = view_tab(ui, app.file_view == view, view).clicked();
+                    if clicked {
+                        if view == FileView::DuplicateFiles && app.duplicate_groups.is_empty() {
+                            app.find_duplicates();
+                        } else {
+                            app.file_view = view;
+                        }
+                    }
+                }
+            });
+        });
+    ui.add_space(9.0);
+    match app.file_view {
+        FileView::AllFiles => draw_directory_tree(app, ui),
+        FileView::LargestFiles => draw_largest_files(app, ui),
+        FileView::DuplicateFiles => draw_duplicates(app, ui),
+        FileView::SearchResults => draw_search(app, ui),
+    }
+}
