@@ -121,19 +121,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// the platform's native file manager — a "reveal"/"show in folder", not
 /// opening the item itself. See `open_path` for that.
 pub fn open_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer").arg(path).spawn()?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(path).spawn()?;
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open").arg(path).spawn()?;
-    }
-    Ok(())
+    launch(path)
 }
 
 /// Opens `path` itself with its default handler — a file launches its
@@ -143,18 +131,26 @@ pub fn open_in_file_manager(path: &std::path::Path) -> std::io::Result<()> {
 /// `open_in_file_manager`, which deliberately passes a file's *parent*
 /// instead, to reveal/select it rather than opening it).
 pub fn open_path(path: &std::path::Path) -> std::io::Result<()> {
+    launch(path)
+}
+
+/// Hands `path` to the platform's shell launcher and returns immediately.
+///
+/// The three launchers all mean "do the default thing with this", so
+/// what separates revealing an item from opening it is entirely which
+/// path the caller passes — the parent, or the item itself. That is why
+/// [`open_in_file_manager`] and [`open_path`] are two names over one
+/// body rather than two bodies: the platform table is the part that
+/// must not drift, and it now exists once.
+fn launch(path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer").arg(path).spawn()?;
-    }
+    let mut command = std::process::Command::new("explorer");
     #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(path).spawn()?;
-    }
+    let mut command = std::process::Command::new("open");
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open").arg(path).spawn()?;
-    }
+    let mut command = std::process::Command::new("xdg-open");
+
+    command.arg(path).spawn()?;
     Ok(())
 }
 
