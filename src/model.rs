@@ -119,20 +119,35 @@ impl Tree {
 
     /// Reconstruct the absolute path of the node reached by following
     /// `index_path` (child indices, root to leaf) from the root.
+    ///
+    /// An index path that runs off the end of the tree stops at the
+    /// deepest node that does exist. It used to index `children`
+    /// directly and panic instead — the crate denies `panic!`, but `[]`
+    /// walks straight past that, and a stale path outliving a rescan is
+    /// the ordinary way to get one. Use [`Self::try_node_for`] where
+    /// telling a stale path from a live one actually matters.
     pub fn path_for(&self, index_path: &[usize]) -> PathBuf {
         let mut path = self.root_path.clone();
         let mut node = &self.root;
         for &idx in index_path {
-            node = &node.children[idx];
+            let Some(child) = node.children.get(idx) else {
+                break;
+            };
+            node = child;
             path.push(&node.name);
         }
         path
     }
 
+    /// The node `index_path` leads to, or the deepest one that exists if
+    /// it leads past the end. See [`Self::path_for`].
     pub fn node_for(&self, index_path: &[usize]) -> &Node {
         let mut node = &self.root;
         for &idx in index_path {
-            node = &node.children[idx];
+            let Some(child) = node.children.get(idx) else {
+                break;
+            };
+            node = child;
         }
         node
     }
@@ -173,4 +188,33 @@ pub fn category_for_name(name: &str) -> Category {
         .and_then(|e| e.to_str())
         .unwrap_or("");
     crate::color::category_for_ext(ext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An index path outliving the tree it was taken from must not take
+    /// the process down with it.
+    ///
+    /// Both helpers used to index `children` directly. The crate denies
+    /// `panic!`, but `[]` is not a `panic!` call and slipped past the
+    /// lint, so a queued deletion or a restored selection surviving a
+    /// rescan could crash the app outright.
+    #[test]
+    fn walking_past_the_end_of_the_tree_stops_rather_than_panicking() {
+        let tree = Tree::placeholder(PathBuf::from("root"));
+
+        // The root has no children at all, so every one of these indices
+        // is past the end.
+        assert_eq!(tree.path_for(&[0]), PathBuf::from("root"));
+        assert_eq!(tree.path_for(&[3, 7, 11]), PathBuf::from("root"));
+        assert_eq!(tree.node_for(&[0]).name, tree.root.name);
+        assert_eq!(tree.node_for(&[3, 7, 11]).name, tree.root.name);
+
+        // And the fallible form still reports the path as gone rather
+        // than quietly answering about the root.
+        assert!(tree.try_node_for(&[0]).is_none());
+        assert!(tree.try_node_for(&[]).is_some());
+    }
 }

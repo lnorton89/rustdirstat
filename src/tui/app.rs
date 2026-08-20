@@ -475,10 +475,18 @@ impl App {
             return Ok(());
         }
         if self.pending_wintool.is_some() {
+            // Same rule as the delete confirmation below: this dialog
+            // offers `[Y]es` and `[N]o`, and a key it does not offer
+            // leaves it alone rather than dismissing it.
             let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                 Action::ConfirmWinTool
-            } else {
+            } else if matches!(
+                code,
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') | KeyCode::Esc
+            ) {
                 Action::CancelWinTool
+            } else {
+                return Ok(());
             };
             return self.dispatch(action);
         }
@@ -501,12 +509,22 @@ impl App {
             return Ok(());
         }
         if let Some(pending) = &self.pending_delete {
+            // Only the keys the dialog actually offers do anything. It
+            // used to cancel on *every* other key, so an arrow key, a
+            // function key, or a modifier arriving on its own dismissed
+            // the confirmation — and the next keystroke, meant for the
+            // dialog, went to the file list instead.
             let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                 Action::ConfirmDelete
             } else if pending.is_dir && matches!(code, KeyCode::Char('e') | KeyCode::Char('E')) {
                 Action::ConfirmEmpty
-            } else {
+            } else if matches!(
+                code,
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') | KeyCode::Esc
+            ) {
                 Action::CancelDelete
+            } else {
+                return Ok(());
             };
             return self.dispatch(action);
         }
@@ -1229,5 +1247,99 @@ fn subtract_totals(
                 n.ext_totals[i].2 -= c;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn app_awaiting_delete_confirmation(is_dir: bool) -> App {
+        let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+        app.pending_delete = Some(PendingDelete {
+            orig_idx: 0,
+            name: "doomed".to_owned(),
+            permanent: false,
+            is_dir,
+        });
+        app
+    }
+
+    /// Only the keys the confirmation dialog offers do anything to it.
+    ///
+    /// It used to treat every key other than Y (and E for folders) as a
+    /// cancel, so an arrow key or a function key silently dismissed the
+    /// dialog — and the keystroke the user then aimed at it went to the
+    /// file list instead. The dialog itself only ever advertised
+    /// `[Y]es`, `[E]mpty` and `[N]o`.
+    #[test]
+    fn a_key_the_delete_dialog_does_not_offer_leaves_it_standing() -> Result<()> {
+        for code in [
+            KeyCode::Down,
+            KeyCode::Up,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Tab,
+            KeyCode::F(5),
+            KeyCode::Char(' '),
+            KeyCode::Char('x'),
+        ] {
+            let mut app = app_awaiting_delete_confirmation(true);
+            app.handle_key(code)?;
+            assert!(
+                app.pending_delete.is_some(),
+                "{code:?} dismissed the delete confirmation, but the dialog does not offer it"
+            );
+        }
+        Ok(())
+    }
+
+    /// The Windows-tool confirmation guards a destructive action too,
+    /// and had the same "any key cancels" shape.
+    #[test]
+    fn a_key_the_wintool_dialog_does_not_offer_leaves_it_standing() -> Result<()> {
+        for code in [
+            KeyCode::Down,
+            KeyCode::Tab,
+            KeyCode::F(5),
+            KeyCode::Char('x'),
+        ] {
+            let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+            app.pending_wintool = Some(0);
+            app.handle_key(code)?;
+            assert!(
+                app.pending_wintool.is_some(),
+                "{code:?} dismissed the tool confirmation, but the dialog does not offer it"
+            );
+        }
+        for code in [KeyCode::Char('n'), KeyCode::Esc] {
+            let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+            app.pending_wintool = Some(0);
+            app.handle_key(code)?;
+            assert!(
+                app.pending_wintool.is_none(),
+                "{code:?} should cancel the tool confirmation"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_delete_dialog_still_cancels_on_the_keys_it_offers() -> Result<()> {
+        for code in [
+            KeyCode::Char('n'),
+            KeyCode::Char('N'),
+            KeyCode::Char('q'),
+            KeyCode::Esc,
+        ] {
+            let mut app = app_awaiting_delete_confirmation(true);
+            app.handle_key(code)?;
+            assert!(
+                app.pending_delete.is_none(),
+                "{code:?} should cancel the delete confirmation"
+            );
+        }
+        Ok(())
     }
 }
