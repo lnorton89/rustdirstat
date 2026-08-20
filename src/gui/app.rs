@@ -60,6 +60,18 @@ pub struct ExtensionRow {
     pub count: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtensionSortMode {
+    ExtensionAsc,
+    ExtensionDesc,
+    ColorAsc,
+    ColorDesc,
+    BytesDesc,
+    BytesAsc,
+    FilesDesc,
+    FilesAsc,
+}
+
 pub struct PendingDelete {
     pub index_path: Vec<usize>,
     pub name: String,
@@ -75,6 +87,7 @@ pub struct GuiApp {
     pub sort: SortMode,
     pub use_physical: bool,
     pub extensions: Vec<ExtensionRow>,
+    pub extension_sort: ExtensionSortMode,
     pub highlighted_extension: Option<String>,
     pub highlighted_category: Option<Category>,
     pub pending_delete: Option<PendingDelete>,
@@ -154,6 +167,7 @@ impl GuiApp {
             sort: config.sort.unwrap_or(SortMode::SizeDesc),
             use_physical: config.use_physical.unwrap_or(false),
             extensions: Vec::new(),
+            extension_sort: ExtensionSortMode::BytesDesc,
             highlighted_extension: None,
             highlighted_category: None,
             pending_delete: None,
@@ -236,7 +250,7 @@ impl GuiApp {
     pub fn refresh_extensions(&mut self) {
         let mut by_ext: HashMap<String, (Category, u64, u64)> = HashMap::new();
         collect_extensions(self.zoom_node(), self.use_physical, &mut by_ext);
-        let mut rows: Vec<_> = by_ext
+        let rows: Vec<_> = by_ext
             .into_iter()
             .map(|(extension, (category, size, count))| ExtensionRow {
                 extension,
@@ -245,12 +259,42 @@ impl GuiApp {
                 count,
             })
             .collect();
-        rows.sort_by(|a, b| {
-            b.size
-                .cmp(&a.size)
-                .then_with(|| a.extension.cmp(&b.extension))
-        });
         self.extensions = rows;
+        self.sort_extensions();
+    }
+
+    pub fn sort_extensions(&mut self) {
+        let by_extension = |a: &ExtensionRow, b: &ExtensionRow| {
+            a.extension.to_lowercase().cmp(&b.extension.to_lowercase())
+        };
+        match self.extension_sort {
+            ExtensionSortMode::ExtensionAsc => self.extensions.sort_by(by_extension),
+            ExtensionSortMode::ExtensionDesc => self.extensions.sort_by(|a, b| by_extension(b, a)),
+            ExtensionSortMode::ColorAsc => self.extensions.sort_by(|a, b| {
+                a.category
+                    .label()
+                    .cmp(b.category.label())
+                    .then_with(|| by_extension(a, b))
+            }),
+            ExtensionSortMode::ColorDesc => self.extensions.sort_by(|a, b| {
+                b.category
+                    .label()
+                    .cmp(a.category.label())
+                    .then_with(|| by_extension(a, b))
+            }),
+            ExtensionSortMode::BytesDesc => self
+                .extensions
+                .sort_by(|a, b| b.size.cmp(&a.size).then_with(|| by_extension(a, b))),
+            ExtensionSortMode::BytesAsc => self
+                .extensions
+                .sort_by(|a, b| a.size.cmp(&b.size).then_with(|| by_extension(a, b))),
+            ExtensionSortMode::FilesDesc => self
+                .extensions
+                .sort_by(|a, b| b.count.cmp(&a.count).then_with(|| by_extension(a, b))),
+            ExtensionSortMode::FilesAsc => self
+                .extensions
+                .sort_by(|a, b| a.count.cmp(&b.count).then_with(|| by_extension(a, b))),
+        }
     }
 
     pub fn refresh_largest_files(&mut self) {

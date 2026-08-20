@@ -1,4 +1,6 @@
-use super::app::{extension_label, size_label, FileView, GuiApp, PaneOrientation};
+use super::app::{
+    extension_label, size_label, ExtensionSortMode, FileView, GuiApp, PaneOrientation,
+};
 use super::icons::Icon;
 use crate::color;
 use crate::model::Node;
@@ -36,6 +38,10 @@ fn apply_style(ctx: &egui::Context) {
     style.spacing.button_padding = Vec2::new(10.0, 6.0);
     style.spacing.menu_margin = Margin::same(8.0);
     style.spacing.indent = 18.0;
+    // This is an application UI, not a document viewer. Selectable labels
+    // steal pointer drags/clicks from table rows and make row selection feel
+    // broken whenever the pointer lands on text.
+    style.interaction.selectable_labels = false;
     style.visuals.panel_fill = Color32::from_rgb(25, 27, 32);
     style.visuals.extreme_bg_color = Color32::from_rgb(18, 20, 24);
     style.visuals.widgets.noninteractive.bg_stroke =
@@ -646,7 +652,16 @@ static TEST_DIRECTORY_HEADER_ICONS: std::sync::Mutex<Vec<(&'static str, Option<I
 static TEST_ICON_MENU_LAYOUTS: std::sync::Mutex<Vec<(String, egui::Rect, egui::Rect, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
-static TEST_EXTENSION_ROW_RECTS: std::sync::Mutex<Vec<(usize, egui::Rect)>> =
+static TEST_EXTENSION_ROW_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
+static TEST_EXTENSION_TEXT_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
+static TEST_EXTENSION_HEADER_RECTS: std::sync::Mutex<Vec<(&'static str, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
+static TEST_EXTENSION_HEADER_ICONS: std::sync::Mutex<Vec<(&'static str, Option<Icon>)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
 static TEST_LARGEST_ROW_RECTS: std::sync::Mutex<Vec<(usize, egui::Rect)>> =
@@ -1080,6 +1095,7 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     let total = app.extensions.iter().map(|e| e.size).sum::<u64>().max(1);
     let rows = app.extensions.clone();
     let mut selected = None;
+    let mut sort = None;
     TableBuilder::new(ui)
         .striped(true)
         .vscroll(true)
@@ -1098,16 +1114,108 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
         .header(26.0, |mut h| {
             h.col(|_| {});
             h.col(|ui| {
-                ui.strong("Extension");
+                let direction = match app.extension_sort {
+                    ExtensionSortMode::ExtensionAsc => Some(Icon::ChevronUp),
+                    ExtensionSortMode::ExtensionDesc => Some(Icon::ChevronDown),
+                    _ => None,
+                };
+                let response = sortable_header(ui, "Extension", direction);
+                #[cfg(test)]
+                {
+                    TEST_EXTENSION_HEADER_RECTS
+                        .lock()
+                        .unwrap()
+                        .push(("Extension", response.rect));
+                    TEST_EXTENSION_HEADER_ICONS
+                        .lock()
+                        .unwrap()
+                        .push(("Extension", direction));
+                }
+                if response.clicked() {
+                    sort = Some(if app.extension_sort == ExtensionSortMode::ExtensionAsc {
+                        ExtensionSortMode::ExtensionDesc
+                    } else {
+                        ExtensionSortMode::ExtensionAsc
+                    });
+                }
             });
             h.col(|ui| {
-                ui.strong("Color");
+                let direction = match app.extension_sort {
+                    ExtensionSortMode::ColorAsc => Some(Icon::ChevronUp),
+                    ExtensionSortMode::ColorDesc => Some(Icon::ChevronDown),
+                    _ => None,
+                };
+                let response = sortable_header(ui, "Color", direction);
+                #[cfg(test)]
+                {
+                    TEST_EXTENSION_HEADER_RECTS
+                        .lock()
+                        .unwrap()
+                        .push(("Color", response.rect));
+                    TEST_EXTENSION_HEADER_ICONS
+                        .lock()
+                        .unwrap()
+                        .push(("Color", direction));
+                }
+                if response.clicked() {
+                    sort = Some(if app.extension_sort == ExtensionSortMode::ColorAsc {
+                        ExtensionSortMode::ColorDesc
+                    } else {
+                        ExtensionSortMode::ColorAsc
+                    });
+                }
             });
             h.col(|ui| {
-                ui.strong("Bytes");
+                let direction = match app.extension_sort {
+                    ExtensionSortMode::BytesAsc => Some(Icon::ChevronUp),
+                    ExtensionSortMode::BytesDesc => Some(Icon::ChevronDown),
+                    _ => None,
+                };
+                let response = sortable_header(ui, "Bytes", direction);
+                #[cfg(test)]
+                {
+                    TEST_EXTENSION_HEADER_RECTS
+                        .lock()
+                        .unwrap()
+                        .push(("Bytes", response.rect));
+                    TEST_EXTENSION_HEADER_ICONS
+                        .lock()
+                        .unwrap()
+                        .push(("Bytes", direction));
+                }
+                if response.clicked() {
+                    sort = Some(if app.extension_sort == ExtensionSortMode::BytesDesc {
+                        ExtensionSortMode::BytesAsc
+                    } else {
+                        ExtensionSortMode::BytesDesc
+                    });
+                }
             });
             h.col(|ui| {
-                ui.strong("Files");
+                let direction = match app.extension_sort {
+                    ExtensionSortMode::FilesAsc => Some(Icon::ChevronUp),
+                    ExtensionSortMode::FilesDesc => Some(Icon::ChevronDown),
+                    _ => None,
+                };
+                let response = sortable_header(ui, "Files", direction);
+                #[cfg(test)]
+                {
+                    TEST_EXTENSION_HEADER_RECTS
+                        .lock()
+                        .unwrap()
+                        .push(("Files", response.rect));
+                    TEST_EXTENSION_HEADER_ICONS
+                        .lock()
+                        .unwrap()
+                        .push(("Files", direction));
+                }
+                if response.clicked() {
+                    sort = Some(if app.extension_sort == ExtensionSortMode::FilesDesc {
+                        ExtensionSortMode::FilesAsc
+                    } else {
+                        ExtensionSortMode::FilesDesc
+                    });
+                }
             });
         })
         .body(|body| {
@@ -1120,7 +1228,12 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                         .rect_filled(r, 1.0, extension_color(&ext.extension));
                 });
                 row.col(|ui| {
-                    ui.label(&ext.extension);
+                    let _response = ui.label(&ext.extension);
+                    #[cfg(test)]
+                    TEST_EXTENSION_TEXT_RECTS
+                        .lock()
+                        .unwrap()
+                        .push((ext.extension.clone(), _response.rect));
                 });
                 row.col(|ui| {
                     ui.label(ext.category.label());
@@ -1140,12 +1253,16 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                 TEST_EXTENSION_ROW_RECTS
                     .lock()
                     .unwrap()
-                    .push((row.index(), response.rect));
+                    .push((ext.extension.clone(), response.rect));
                 if response.clicked() {
                     selected = Some((ext.extension.clone(), ext.category));
                 }
             })
         });
+    if let Some(mode) = sort {
+        app.extension_sort = mode;
+        app.sort_extensions();
+    }
     if let Some((ext, category)) = selected {
         let same = app.highlighted_extension.as_ref() == Some(&ext);
         app.highlighted_extension = (!same).then_some(ext);
@@ -1908,6 +2025,7 @@ fn paint_cushion_rect(painter: &egui::Painter, rect: egui::Rect, base: Color32) 
 mod interaction_tests {
     use super::*;
     use crate::color::Category;
+    use crate::gui::app::ExtensionRow;
     use crate::model::{Node, Tree};
     use std::path::PathBuf;
 
@@ -1996,6 +2114,33 @@ mod interaction_tests {
         })
     }
 
+    fn app_with_sortable_extensions() -> GuiApp {
+        let mut app = app_with_one_file();
+        app.extensions = vec![
+            ExtensionRow {
+                extension: ".zzz".to_string(),
+                category: Category::Source,
+                size: 300,
+                count: 2,
+            },
+            ExtensionRow {
+                extension: ".aaa".to_string(),
+                category: Category::Programs,
+                size: 10,
+                count: 50,
+            },
+            ExtensionRow {
+                extension: ".mmm".to_string(),
+                category: Category::Archives,
+                size: 100,
+                count: 5,
+            },
+        ];
+        app.extension_sort = ExtensionSortMode::BytesDesc;
+        app.sort_extensions();
+        app
+    }
+
     fn raw_input_at_width(events: Vec<egui::Event>, width: f32) -> egui::RawInput {
         static FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2015,30 +2160,35 @@ mod interaction_tests {
     }
 
     fn render_directory(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+        apply_style(ctx);
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| draw_directory_tree(app, ui));
         });
     }
 
     fn render_extensions(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+        apply_style(ctx);
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| draw_extension_list(app, ui));
         });
     }
 
     fn render_largest(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+        apply_style(ctx);
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| draw_largest_files(app, ui));
         });
     }
 
     fn render_search(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+        apply_style(ctx);
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| draw_search(app, ui));
         });
     }
 
     fn render_duplicates(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+        apply_style(ctx);
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| draw_duplicates(app, ui));
         });
@@ -2094,6 +2244,58 @@ mod interaction_tests {
             .and_then(|(_, icon)| *icon)
     }
 
+    fn click_extension_header(ctx: &egui::Context, app: &mut GuiApp, label: &str) {
+        TEST_EXTENSION_HEADER_RECTS.lock().unwrap().clear();
+        for _ in 0..4 {
+            render_extensions(ctx, app, raw_input(Vec::new()));
+        }
+        let position = TEST_EXTENSION_HEADER_RECTS
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(header, _)| *header == label)
+            .map(|(_, rect)| egui::pos2(rect.right() - 4.0, rect.center().y))
+            .unwrap_or_else(|| panic!("the rendered {label} header should expose a click target"));
+        render_extensions(ctx, app, raw_input(pointer_button(position, true)));
+        render_extensions(ctx, app, raw_input(pointer_button(position, false)));
+    }
+
+    fn rendered_extension_order(ctx: &egui::Context, app: &mut GuiApp) -> Vec<String> {
+        TEST_EXTENSION_ROW_RECTS.lock().unwrap().clear();
+        render_extensions(ctx, app, raw_input(Vec::new()));
+        TEST_EXTENSION_ROW_RECTS
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(extension, _)| extension.clone())
+            .collect()
+    }
+
+    fn latest_extension_header_icon(label: &str) -> Option<Icon> {
+        TEST_EXTENSION_HEADER_ICONS
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(header, _)| *header == label)
+            .and_then(|(_, icon)| *icon)
+    }
+
+    fn assert_extension_header_click(
+        ctx: &egui::Context,
+        app: &mut GuiApp,
+        label: &str,
+        expected_mode: ExtensionSortMode,
+        expected_order: &[&str],
+        expected_icon: Icon,
+    ) {
+        click_extension_header(ctx, app, label);
+        assert_eq!(app.extension_sort, expected_mode);
+        assert_eq!(rendered_extension_order(ctx, app), expected_order);
+        assert_eq!(latest_extension_header_icon(label), Some(expected_icon));
+    }
+
     #[test]
     fn clicking_directory_headers_changes_and_toggles_sort_order() {
         let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2134,6 +2336,96 @@ mod interaction_tests {
         assert!(matches!(app.sort, SortMode::ModifiedAsc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
         assert_eq!(latest_header_icon("Last change"), Some(Icon::ChevronUp));
+    }
+
+    #[test]
+    fn extension_headers_sort_rendered_rows_and_show_direction() {
+        let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        let mut app = app_with_sortable_extensions();
+
+        assert_eq!(
+            rendered_extension_order(&ctx, &mut app),
+            [".zzz", ".mmm", ".aaa"]
+        );
+        assert_eq!(
+            latest_extension_header_icon("Bytes"),
+            Some(Icon::ChevronDown)
+        );
+
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Extension",
+            ExtensionSortMode::ExtensionAsc,
+            &[".aaa", ".mmm", ".zzz"],
+            Icon::ChevronUp,
+        );
+        assert_eq!(latest_extension_header_icon("Bytes"), None);
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Extension",
+            ExtensionSortMode::ExtensionDesc,
+            &[".zzz", ".mmm", ".aaa"],
+            Icon::ChevronDown,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Color",
+            ExtensionSortMode::ColorAsc,
+            &[".mmm", ".aaa", ".zzz"],
+            Icon::ChevronUp,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Color",
+            ExtensionSortMode::ColorDesc,
+            &[".zzz", ".aaa", ".mmm"],
+            Icon::ChevronDown,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Bytes",
+            ExtensionSortMode::BytesDesc,
+            &[".zzz", ".mmm", ".aaa"],
+            Icon::ChevronDown,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Bytes",
+            ExtensionSortMode::BytesAsc,
+            &[".aaa", ".mmm", ".zzz"],
+            Icon::ChevronUp,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Files",
+            ExtensionSortMode::FilesDesc,
+            &[".aaa", ".mmm", ".zzz"],
+            Icon::ChevronDown,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Files",
+            ExtensionSortMode::FilesAsc,
+            &[".zzz", ".mmm", ".aaa"],
+            Icon::ChevronUp,
+        );
+    }
+
+    #[test]
+    fn application_labels_do_not_capture_text_selection() {
+        let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        assert!(!ctx.style().interaction.selectable_labels);
     }
 
     #[test]
@@ -2235,19 +2527,18 @@ mod interaction_tests {
         let ctx = egui::Context::default();
         let mut app = app_with_one_file();
         TEST_EXTENSION_ROW_RECTS.lock().unwrap().clear();
+        TEST_EXTENSION_TEXT_RECTS.lock().unwrap().clear();
         for _ in 0..4 {
             render_extensions(&ctx, &mut app, raw_input(Vec::new()));
         }
-        let row_pos = TEST_EXTENSION_ROW_RECTS
+        let row_pos = TEST_EXTENSION_TEXT_RECTS
             .lock()
             .unwrap()
             .iter()
             .rev()
-            .find(|(index, _)| *index == 0)
-            // Stay inside the text column instead of landing on a resize
-            // separator after automatic column measurement.
-            .map(|(_, rect)| egui::pos2(rect.left() + 45.0, rect.center().y))
-            .expect("the extension row should render");
+            .find(|(extension, _)| extension == ".txt")
+            .map(|(_, rect)| rect.center())
+            .expect("the extension text should expose its rendered rectangle");
         render_extensions(&ctx, &mut app, raw_input(pointer_button(row_pos, true)));
         render_extensions(&ctx, &mut app, raw_input(pointer_button(row_pos, false)));
         assert_eq!(app.highlighted_extension.as_deref(), Some(".txt"));
