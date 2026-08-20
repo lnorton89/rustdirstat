@@ -155,13 +155,10 @@ pub(super) enum ExtensionSortMode {
     FilesAsc,
 }
 
+/// Sorting the extension table by its Color column orders rows by the
+/// hue they are actually painted at, so it has to be the same hue.
 fn extension_color_sort_key(extension: &str) -> u32 {
-    let mut hash = 0x811c_9dc5_u32;
-    for byte in extension.bytes() {
-        hash ^= byte as u32;
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash % 360
+    crate::color::extension_hue(extension) as u32
 }
 
 fn reorder_column<T: Copy + Eq>(columns: &mut Vec<T>, source: T, target: T) {
@@ -1206,13 +1203,16 @@ fn valid_prefix(tree: &Tree, requested: &[usize]) -> Vec<usize> {
     valid
 }
 
+/// What [`extension_label`] returns for a file with no extension.
+pub(super) const NO_EXTENSION_LABEL: &str = "[no extension]";
+
 pub(super) fn extension_label(name: &str) -> String {
     Path::new(name)
         .extension()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .map(|s| format!(".{}", s.to_ascii_lowercase()))
-        .unwrap_or_else(|| "[no extension]".to_string())
+        .unwrap_or_else(|| NO_EXTENSION_LABEL.to_string())
 }
 
 /// One row per distinct extension anywhere under `node`.

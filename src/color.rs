@@ -133,24 +133,44 @@ pub fn ext_color(name: &str) -> Color {
     if ext.is_empty() {
         return Category::NoExtension.color();
     }
-    // The hash is taken modulo 320 rather than the full 360° and then
-    // shifted past a 40°-wide gap centered on the directory tan's own
-    // hue (~41°) — without this, an ordinary extension (.wav, .csv, .mp4
-    // all land within ~10° of it) can hash to a color close enough to
-    // the directory tan that a file tile and a folder tile next to it at
-    // the same depth become hard to tell apart by color alone, defeating
-    // the whole reason directories get a dedicated, distinct hue.
+    hsv_to_rgb(extension_hue(&ext), 0.55, 0.85)
+}
+
+/// The hue, in degrees, that an extension is drawn at.
+///
+/// Both front ends call this, because an extension that is one color in
+/// the terminal and another in the window is just wrong. They used to
+/// hash independently — 64-bit FNV modulo 320 with the gap below here,
+/// 32-bit FNV modulo 360 without it in `gui::ui::theme` — so the same
+/// `.mp4` came out a different color in each, and the GUI had the exact
+/// clash the gap exists to prevent even though it paints folders with
+/// the same [`directory_color`].
+///
+/// The hash is taken modulo 320 rather than the full 360° and then
+/// shifted past a 40°-wide gap centered on the directory tan's own hue
+/// (~41°) — without this, an ordinary extension (.wav, .csv, .mp4 all
+/// land within ~10° of it) can hash to a color close enough to the
+/// directory tan that a file tile and a folder tile next to it at the
+/// same depth become hard to tell apart by color alone, defeating the
+/// whole reason directories get a dedicated, distinct hue.
+pub fn extension_hue(ext: &str) -> f32 {
+    // Normalised first, because the two front ends hold an extension in
+    // different forms: the GUI keeps `.mkv`, the TUI keeps `mkv`. Those
+    // are two unrelated strings to a hash, so sharing this function is
+    // not by itself enough to make the colors agree.
+    let ext = ext.strip_prefix('.').unwrap_or(ext).to_ascii_lowercase();
     const GAP_START: f32 = 21.0;
     const GAP_WIDTH: f32 = 40.0;
     let raw = (fnv1a(ext.as_bytes()) % 320) as f32;
-    let hue = if raw < GAP_START {
+    if raw < GAP_START {
         raw
     } else {
         raw + GAP_WIDTH
-    };
-    hsv_to_rgb(hue, 0.55, 0.85)
+    }
 }
 
+/// FNV-1a. There was one of these here, one in `gui::app` and one in
+/// `gui::ui::theme`, and two of the three disagreed with this one.
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for &b in bytes {
@@ -160,21 +180,118 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color {
-    let c = v * s;
-    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
-    let m = v - c;
-    let (r1, g1, b1) = match h as u32 {
-        0..=59 => (c, x, 0.0),
-        60..=119 => (x, c, 0.0),
-        120..=179 => (0.0, c, x),
-        180..=239 => (0.0, x, c),
-        240..=299 => (x, 0.0, c),
+/// HSV to RGB, shared with the GUI, which wraps it in its own color type.
+pub fn hsv_to_rgb_bytes(hue: f32, saturation: f32, value: f32) -> (u8, u8, u8) {
+    let c = value * saturation;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let m = value - c;
+    let (r, g, b) = match hue {
+        h if h < 60.0 => (c, x, 0.0),
+        h if h < 120.0 => (x, c, 0.0),
+        h if h < 180.0 => (0.0, c, x),
+        h if h < 240.0 => (0.0, x, c),
+        h if h < 300.0 => (x, 0.0, c),
         _ => (c, 0.0, x),
     };
-    Color::Rgb(
-        ((r1 + m) * 255.0) as u8,
-        ((g1 + m) * 255.0) as u8,
-        ((b1 + m) * 255.0) as u8,
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
     )
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color {
+    let (r, g, b) = hsv_to_rgb_bytes(h, s, v);
+    Color::Rgb(r, g, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The hue must not depend on which front end is asking.
+    ///
+    /// The GUI holds an extension as `.mkv` and the TUI as `mkv`, and
+    /// they used to hash whichever form they had with two different FNV
+    /// variants — so the same file was one color in the terminal and
+    /// another in the window.
+    #[test]
+    fn an_extension_has_one_hue_whichever_form_it_is_written_in() {
+        for ext in ["mkv", "rs", "tar", "csv", "wav", "mp4"] {
+            let bare = extension_hue(ext);
+            assert_eq!(
+                bare,
+                extension_hue(&format!(".{ext}")),
+                "{ext} and .{ext} are the same extension and must share a hue"
+            );
+            assert_eq!(
+                bare,
+                extension_hue(&ext.to_ascii_uppercase()),
+                "{ext} is case-insensitive"
+            );
+        }
+    }
+
+    /// Nothing hashes into the band reserved around the directory tan.
+    ///
+    /// The GUI painted folders with `directory_color` while hashing
+    /// extensions across the full wheel, so a `.wav` tile beside a folder
+    /// tile could be the same tan.
+    #[test]
+    fn no_extension_hashes_into_the_directory_colors_hue_band() {
+        // `if let`, not `let ... else` with a `panic!`: the crate denies
+        // `panic!` in tests too.
+        let mut rgb = None;
+        if let Color::Rgb(r, g, b) = directory_color() {
+            rgb = Some((r, g, b));
+        }
+        assert!(
+            rgb.is_some(),
+            "the directory color should be a literal RGB triple"
+        );
+        let (r, g, b) = rgb.unwrap_or_default();
+        let directory_hue = hue_of(r, g, b);
+        assert!(
+            (21.0..61.0).contains(&directory_hue),
+            "the reserved band is meant to straddle the directory hue, which is {directory_hue}"
+        );
+
+        // Every two-and three-letter extension, which covers the common
+        // ones and is plenty to catch a gap that is not applied at all.
+        let letters = b'a'..=b'z';
+        for first in letters.clone() {
+            for second in letters.clone() {
+                for third in letters.clone() {
+                    let ext = String::from_utf8_lossy(&[first, second, third]).to_string();
+                    let hue = extension_hue(&ext);
+                    assert!(
+                        !(21.0..61.0).contains(&hue),
+                        ".{ext} hashes to hue {hue}, inside the band reserved                          around the directory color"
+                    );
+                }
+            }
+        }
+    }
+
+    fn hue_of(r: u8, g: u8, b: u8) -> f32 {
+        let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        if delta == 0.0 {
+            return 0.0;
+        }
+        let hue = if max == r {
+            60.0 * (((g - b) / delta) % 6.0)
+        } else if max == g {
+            60.0 * ((b - r) / delta + 2.0)
+        } else {
+            60.0 * ((r - g) / delta + 4.0)
+        };
+        if hue < 0.0 {
+            hue + 360.0
+        } else {
+            hue
+        }
+    }
 }

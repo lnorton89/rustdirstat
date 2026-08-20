@@ -228,38 +228,29 @@ pub(super) fn panel_frame() -> Frame {
 }
 
 pub(super) fn extension_color(extension: &str) -> Color32 {
-    let mut hash = 0x811c_9dc5_u32;
-    for byte in extension.bytes() {
-        hash ^= byte as u32;
-        hash = hash.wrapping_mul(0x0100_0193);
+    // The hue comes from `crate::color`, the same one the TUI draws
+    // this extension at. Only the saturation and value are the GUI's
+    // own: light themes get a deeper, less bleached tile color, because
+    // the 0.88-value pastels that read well on a near-black panel wash
+    // out to indistinguishable pale blocks on a white one.
+    // Files with no extension take the category color, the same as they
+    // do in the TUI. Hashing the literal label "[no extension]" gave
+    // them an arbitrary hue that matched nothing.
+    let bare = extension.strip_prefix('.').unwrap_or(extension);
+    if bare.is_empty() || extension == crate::gui::app::NO_EXTENSION_LABEL {
+        return to_color32(crate::color::Category::NoExtension.color());
     }
-    // Light themes get a deeper, less bleached tile color. The 0.88-value
-    // pastels that read well on a near-black panel wash out to
-    // indistinguishable pale blocks on a white one.
+    let hue = crate::color::extension_hue(extension);
     if palette().mode.is_dark() {
-        hsv_to_rgb((hash % 360) as f32, 0.68, 0.88)
+        hsv_to_rgb(hue, 0.68, 0.88)
     } else {
-        hsv_to_rgb((hash % 360) as f32, 0.78, 0.72)
+        hsv_to_rgb(hue, 0.78, 0.72)
     }
 }
 
 pub(super) fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> Color32 {
-    let c = value * saturation;
-    let x = c * (1.0 - (((hue / 60.0) % 2.0) - 1.0).abs());
-    let m = value - c;
-    let (r, g, b) = match hue {
-        h if h < 60.0 => (c, x, 0.0),
-        h if h < 120.0 => (x, c, 0.0),
-        h if h < 180.0 => (0.0, c, x),
-        h if h < 240.0 => (0.0, x, c),
-        h if h < 300.0 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    Color32::from_rgb(
-        ((r + m) * 255.0) as u8,
-        ((g + m) * 255.0) as u8,
-        ((b + m) * 255.0) as u8,
-    )
+    let (r, g, b) = crate::color::hsv_to_rgb_bytes(hue, saturation, value);
+    Color32::from_rgb(r, g, b)
 }
 
 pub(super) fn to_color32(c: ratatui::style::Color) -> Color32 {

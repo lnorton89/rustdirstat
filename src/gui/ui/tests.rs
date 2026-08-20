@@ -583,6 +583,21 @@ fn latest_extension_header_labels() -> Vec<&'static str> {
     labels
 }
 
+/// The three test extensions in the order the Color column should put
+/// them: by the hue they are painted at.
+fn sorted_by_painted_hue(ascending: bool) -> Vec<&'static str> {
+    let mut extensions = vec![".aaa", ".mmm", ".zzz"];
+    extensions.sort_by_key(|extension| {
+        let hue = crate::color::extension_hue(extension) as i64;
+        if ascending {
+            hue
+        } else {
+            -hue
+        }
+    });
+    extensions
+}
+
 fn assert_extension_header_click(
     ctx: &egui::Context,
     app: &mut GuiApp,
@@ -727,12 +742,20 @@ fn extension_headers_sort_rendered_rows_and_show_direction() -> anyhow::Result<(
         &[".zzz", ".mmm", ".aaa"],
         Icon::ChevronDown,
     )?;
+    // Derived from the hue each extension is actually painted at, not
+    // written out as a literal permutation. A literal only records what
+    // one particular hash happened to return: it does not say the column
+    // sorts by the color the user can see, and it has to be re-derived
+    // by hand every time the hue changes — which is exactly what
+    // happened when the two front ends stopped hashing differently.
+    let ascending = sorted_by_painted_hue(true);
+    let descending = sorted_by_painted_hue(false);
     assert_extension_header_click(
         &ctx,
         &mut app,
         "Color",
         ExtensionSortMode::ColorAsc,
-        &[".mmm", ".zzz", ".aaa"],
+        &ascending,
         Icon::ChevronUp,
     )?;
     assert_extension_header_click(
@@ -740,7 +763,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() -> anyhow::Result<(
         &mut app,
         "Color",
         ExtensionSortMode::ColorDesc,
-        &[".aaa", ".zzz", ".mmm"],
+        &descending,
         Icon::ChevronDown,
     )?;
     assert_extension_header_click(
