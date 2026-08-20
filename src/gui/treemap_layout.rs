@@ -41,8 +41,9 @@ pub(super) struct Tile {
     pub index_path: Vec<usize>,
     pub is_free_space: bool,
     /// True for the synthetic "N more items" tile standing in for the
-    /// children past `MAX_CHILDREN_PER_LEVEL`. It occupies their combined
-    /// area but maps to no single node, so it is not selectable.
+    /// children too small to draw individually (see `MIN_TILE_AREA_PX`).
+    /// It occupies their combined area but maps to no single node, so it
+    /// is not selectable.
     pub is_aggregate: bool,
     /// See `tui::nested::TreemapItem::can_label` — same reasoning: a tile
     /// that recursed into children without reserving a label row must not
@@ -69,15 +70,25 @@ const MIN_LABEL_PX: f32 = 18.0;
 /// could distinguish anyway, and without a floor a deeply-fanned-out
 /// subtree (thousands of tiny files) would recurse effectively forever.
 const MIN_RECURSE_AREA_PX: f32 = 9.0;
-/// Children past this many are folded into one aggregate tile rather than
-/// dropped. Dropping them would silently inflate the survivors: the
-/// squarify pass normalizes against the sizes it is handed, so discarding
-/// the tail makes the remaining tiles expand to fill area that isn't
-/// theirs, and the treemap stops being an honest picture of the bytes.
-const MAX_CHILDREN_PER_LEVEL: usize = 80;
+/// A child gets its own tile only if its share of the parent works out to
+/// at least this much area. Below it there is nothing to see — the tile
+/// would be a two-pixel speck — so the remainder is folded into one
+/// aggregate tile instead.
+///
+/// This replaced a fixed "first 80 children" cap, which was the wrong
+/// question to ask. Whether a child is worth drawing depends on how much
+/// room it would get, not on where it sorted: a folder of 200 chunky
+/// subdirectories was truncated at 80 and the other 120 collapsed into a
+/// single grey slab covering most of the panel, while a folder of 30
+/// tiny files was drawn in full detail nobody could see.
+const MIN_TILE_AREA_PX: f32 = 6.0;
+/// Hard ceiling on children considered at one level, purely so a
+/// pathological directory cannot make a single level allocate without
+/// bound. The area rule above is what normally decides.
+const MAX_CHILDREN_PER_LEVEL: usize = 2048;
 /// Soft ceiling on emitted tiles, checked *between* levels and never
 /// inside one, so that any level which starts also finishes.
-const MAX_TILES: usize = 24_000;
+const MAX_TILES: usize = 40_000;
 
 /// One directory queued to be subdivided into the rect it was given.
 struct Pending<'a> {
@@ -96,11 +107,12 @@ impl Pending<'_> {
     }
 
     /// Upper bound on the tiles that expanding this node can emit: it
-    /// cannot exceed the child count, and it cannot exceed the pixel area
-    /// either, since sub-pixel rects round away to nothing and are skipped.
+    /// cannot exceed the child count, and it cannot exceed what the rect
+    /// has room for at the minimum tile area either.
     fn tile_cost(&self) -> usize {
-        let children = self.node.children.len().min(MAX_CHILDREN_PER_LEVEL) + 1;
-        children.min(self.area().max(0.0) as usize + 1)
+        let by_count = self.node.children.len().min(MAX_CHILDREN_PER_LEVEL) + 1;
+        let by_area = (self.area().max(0.0) / MIN_TILE_AREA_PX) as usize + 1;
+        by_count.min(by_area)
     }
 }
 
@@ -163,13 +175,40 @@ fn expand<'a>(
         b.1.effective_size(use_physical)
             .cmp(&a.1.effective_size(use_physical))
     });
-    let overflow_count = children.len().saturating_sub(MAX_CHILDREN_PER_LEVEL);
-    let overflow_size: u64 = children
+    children.truncate(MAX_CHILDREN_PER_LEVEL);
+
+    // How many of them are actually worth a tile, largest first. The
+    // denominator has to include free space, since that competes for the
+    // same rect at the root.
+    let total: u64 = children
         .iter()
-        .skip(MAX_CHILDREN_PER_LEVEL)
         .map(|(_, c)| c.effective_size(use_physical).max(1))
         .sum();
-    children.truncate(MAX_CHILDREN_PER_LEVEL);
+    let denominator = (total + free_space.unwrap_or(0)).max(1) as f64;
+    let area = f64::from(w) * f64::from(h);
+    let visible = children
+        .iter()
+        .take_while(|(_, c)| {
+            let share = c.effective_size(use_physical).max(1) as f64 / denominator;
+            share * area >= f64::from(MIN_TILE_AREA_PX)
+        })
+        .count();
+
+    // Every child is too small to see. Leave the parent's own tile
+    // standing rather than replacing it with an aggregate covering the
+    // identical area — the parent already represents exactly these bytes,
+    // and a grey "N more items" slab in its place says strictly less.
+    if visible == 0 && free_space.is_none() {
+        return;
+    }
+
+    let overflow_count = children.len() - visible;
+    let overflow_size: u64 = children
+        .iter()
+        .skip(visible)
+        .map(|(_, c)| c.effective_size(use_physical).max(1))
+        .sum();
+    children.truncate(visible);
 
     let mut sizes: Vec<u64> = children
         .iter()
@@ -427,26 +466,71 @@ mod tests {
     }
 
     #[test]
-    fn overflow_children_keep_their_area_instead_of_inflating_the_rest() {
-        // 200 children of equal size: the 80 that get their own tile are
-        // 40% of the bytes, so they must get ~40% of the area and the
-        // aggregate tile the rest. Dropping the tail would give them 100%.
+    fn many_children_all_get_their_own_tile_when_there_is_room() {
+        // 200 equal children in a large panel work out to ~2400px each,
+        // far above the visibility floor, so every one of them is drawn.
+        // A fixed "first N children" cap used to truncate this at 80 and
+        // collapse the rest into one grey slab covering 60% of the panel.
         let children = (0..200).map(|i| leaf(&format!("f{i}.bin"), 1000)).collect();
         let root = dir("root", children);
-        let (w, h) = (800.0_f32, 600.0_f32);
+        let tiles = build(&root, 0.0, 0.0, 800.0, 600.0, false, None);
+
+        assert_eq!(tiles.iter().filter(|t| !t.is_aggregate).count(), 200);
+        assert!(
+            !tiles.iter().any(|t| t.is_aggregate),
+            "nothing here is too small to draw, so nothing should be aggregated"
+        );
+    }
+
+    #[test]
+    fn a_sub_pixel_tail_is_aggregated_at_its_true_area() {
+        // Five chunky files plus two thousand specks, in a panel where a
+        // speck works out to under 3px. The specks are 2/7ths of the
+        // bytes, so the tile standing in for them has to be 2/7ths of the
+        // area — dropping them instead would inflate the five survivors
+        // to fill the whole panel and misstate what is on disk.
+        let mut children: Vec<Node> = (0..5)
+            .map(|i| leaf(&format!("big{i}.bin"), 100_000))
+            .collect();
+        children.extend((0..2000).map(|i| leaf(&format!("tiny{i}.bin"), 100)));
+        let root = dir("root", children);
+        let (w, h) = (200.0_f32, 100.0_f32);
         let tiles = build(&root, 0.0, 0.0, w, h, false, None);
 
         let aggregate: Vec<_> = tiles.iter().filter(|t| t.is_aggregate).collect();
         assert_eq!(aggregate.len(), 1, "expected exactly one aggregate tile");
-        assert_eq!(aggregate[0].name, "120 more items");
-
-        let aggregate_share = aggregate[0].w * aggregate[0].h / (w * h);
-        assert!(
-            (aggregate_share - 0.6).abs() < 0.02,
-            "aggregate tile took {:.1}% of the area, expected ~60%",
-            aggregate_share * 100.0
-        );
+        assert_eq!(aggregate[0].name, "2000 more items");
         assert!(!aggregate[0].is_node(), "aggregate tiles are not clickable");
+
+        let share = aggregate[0].w * aggregate[0].h / (w * h);
+        assert!(
+            (share - 2.0 / 7.0).abs() < 0.03,
+            "aggregate took {:.1}% of the area, expected ~28.6%",
+            share * 100.0
+        );
+    }
+
+    #[test]
+    fn a_directory_of_nothing_but_specks_is_left_as_its_own_tile() {
+        // Every child is below the visibility floor. Replacing the parent
+        // with an aggregate covering the identical rect would say strictly
+        // less than the parent tile already does, so the expansion is
+        // skipped entirely.
+        let children = (0..5000).map(|i| leaf(&format!("f{i}.bin"), 10)).collect();
+        let root = dir(
+            "root",
+            vec![dir("dense", children), leaf("big.bin", 5_000_000)],
+        );
+        let tiles = build(&root, 0.0, 0.0, 300.0, 200.0, false, None);
+
+        assert!(
+            tiles.iter().any(|t| t.name == "dense"),
+            "the directory itself should still be drawn"
+        );
+        assert!(
+            !tiles.iter().any(|t| t.is_aggregate),
+            "a directory with nothing visible inside should not become a grey slab"
+        );
     }
 
     #[test]

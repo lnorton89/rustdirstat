@@ -63,7 +63,7 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             } else if tile.is_aggregate {
                 // Not any one extension, so give the stand-in a neutral fill
                 // rather than letting it borrow a color that means something.
-                Color32::from_rgb(96, 102, 114)
+                Color32::from_rgb(62, 67, 78)
             } else if tile.is_dir {
                 to_color32(color::directory_color())
             } else {
@@ -82,7 +82,11 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                 }
             }
             paint_cushion_rect(&painter, rect, base);
-            if app.show_grid {
+            // Only outline tiles with room for an outline. A 1px border on
+            // each side of a 3px tile leaves one pixel of colour, so
+            // gridding the dense regions turned them into black mush and
+            // cost a stroke per tile to do it.
+            if app.show_grid && rect.width() >= MIN_GRID_PX && rect.height() >= MIN_GRID_PX {
                 painter.rect_stroke(
                     rect,
                     0.0,
@@ -185,6 +189,10 @@ pub(super) fn cushion_mesh(rect: egui::Rect, base: Color32) -> egui::Mesh {
 /// of thousands of tiles, and the shaded mesh costs 25 vertices and 32
 /// triangles each where a flat rect costs 4 and 2.
 pub(super) const MIN_CUSHION_PX: f32 = 12.0;
+
+/// Tiles smaller than this on a side get no grid outline; see the call
+/// site in `draw_treemap` for why.
+const MIN_GRID_PX: f32 = 5.0;
 
 pub(super) fn paint_cushion_rect(painter: &egui::Painter, rect: egui::Rect, base: Color32) {
     if rect.width() < MIN_CUSHION_PX || rect.height() < MIN_CUSHION_PX {

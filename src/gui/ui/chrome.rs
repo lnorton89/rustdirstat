@@ -20,9 +20,12 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             // The top-level menu names sit in the tightest strip in the
             // window, so give them their own roomier padding rather than
-            // inheriting the compact one the toolbar buttons want.
-            ui.spacing_mut().button_padding = Vec2::new(12.0, 6.0);
-            ui.spacing_mut().item_spacing.x = 2.0;
+            // inheriting the compact one the toolbar buttons want. The
+            // gap between names matters as much as the padding inside
+            // them: with too little, "Cleanup Treemap View" reads as one
+            // run of words rather than three separate targets.
+            ui.spacing_mut().button_padding = Vec2::new(14.0, 6.0);
+            ui.spacing_mut().item_spacing.x = 6.0;
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if menu_action(
