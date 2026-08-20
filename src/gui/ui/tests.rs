@@ -2851,3 +2851,107 @@ fn no_column_disappears_when_the_pane_narrows() {
         );
     }
 }
+
+use super::actions::handle_shortcuts;
+use super::modal::modal_is_open;
+use super::modal::ModalPage;
+
+/// Feeds one key press through the shortcut handler.
+fn press(ctx: &egui::Context, app: &mut GuiApp, key: egui::Key, modifiers: egui::Modifiers) {
+    let mut input = raw_input(Vec::new());
+    input.events.push(egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    });
+    let _ = ctx.run(input, |ctx| handle_shortcuts(app, ctx));
+}
+
+/// A modal is modal for the keyboard too.
+///
+/// Without the guard, pressing Del while an "are you sure" was on screen
+/// queued a *second* delete behind the one being confirmed, and F5 could
+/// swap the tree out from under a pending deletion's index path — both
+/// of which act on an index path that no longer means what it did.
+///
+/// This is the GUI's counterpart to the TUI rule that a destructive
+/// confirmation answers only to the keys it offers.
+#[test]
+fn shortcuts_do_nothing_while_a_modal_is_open() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    app.select_path(vec![0]);
+
+    // Queue a delete, which is what puts the confirmation up.
+    app.request_delete_selected(false);
+    assert!(
+        app.pending_delete.is_some(),
+        "the fixture should have something queued to confirm"
+    );
+    app.open_modal(ModalPage::Maintenance);
+    assert!(
+        modal_is_open(&app),
+        "the confirmation should count as an open modal"
+    );
+
+    let before_view = app.file_view;
+    let before_sort = app.sort;
+
+    // Every destructive or state-changing shortcut the menus advertise,
+    // minus Ctrl+O — that one opens a native folder picker, which would
+    // block a test rather than fail it.
+    let plain = egui::Modifiers::NONE;
+    let ctrl = egui::Modifiers::CTRL;
+    for (key, modifiers) in [
+        (egui::Key::F5, plain),
+        (egui::Key::Delete, plain),
+        (egui::Key::Delete, egui::Modifiers::SHIFT),
+        (egui::Key::F, ctrl),
+        (egui::Key::C, ctrl),
+        (egui::Key::Home, plain),
+        (egui::Key::Plus, plain),
+        (egui::Key::Minus, plain),
+    ] {
+        press(&ctx, &mut app, key, modifiers);
+    }
+
+    assert!(
+        app.pending_delete.is_some(),
+        "the queued delete should still be waiting on its confirmation, not replaced or \
+         cancelled by a keystroke aimed at the dialog"
+    );
+    assert!(
+        modal_is_open(&app),
+        "no shortcut should have closed the modal out from under the user"
+    );
+    assert_eq!(
+        app.file_view, before_view,
+        "a shortcut changed the view while a modal was up"
+    );
+    assert!(
+        app.sort == before_sort,
+        "a shortcut changed the sort while a modal was up"
+    );
+    assert!(
+        app.scan_progress.is_none(),
+        "F5 started a rescan while a deletion was waiting to be confirmed — the tree it \
+         is queued against would be swapped out from under it"
+    );
+}
+
+/// Escape is the exception: it dismisses the modal, and only that.
+#[test]
+fn escape_closes_the_modal_it_is_aimed_at() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+
+    app.open_modal(ModalPage::Maintenance);
+    assert!(modal_is_open(&app));
+
+    press(&ctx, &mut app, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!modal_is_open(&app), "Escape should dismiss the open modal");
+}
