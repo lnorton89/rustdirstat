@@ -70,7 +70,7 @@ fn write_children(out: &mut String, node: &Node, depth: usize, top: usize, max_d
         return;
     }
     let mut children: Vec<&Node> = node.children.iter().collect();
-    children.sort_by(|a, b| b.size.cmp(&a.size));
+    children.sort_by_key(|b| std::cmp::Reverse(b.size));
     let total = node.size.max(1);
     let indent = "  ".repeat(depth + 1);
 

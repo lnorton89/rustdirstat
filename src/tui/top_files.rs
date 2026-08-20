@@ -48,7 +48,7 @@ pub fn top_k(node: &Node, k: usize) -> Vec<TopFile> {
     let mut path = Vec::new();
     visit(node, &mut path, &mut heap, k);
     let mut out: Vec<TopFile> = heap.into_iter().map(|Reverse(e)| e.0).collect();
-    out.sort_by(|a, b| b.size.cmp(&a.size));
+    out.sort_by_key(|b| Reverse(b.size));
     out
 }
 

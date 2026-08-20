@@ -29,6 +29,9 @@
 //! Windows console session from a test, so this doesn't attempt one.
 
 #![cfg(unix)]
+// See the note in src/lib.rs: test code is exempt from the crate-wide
+// deny on unwrap/expect/panic.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::os::unix::io::{FromRawFd, RawFd};

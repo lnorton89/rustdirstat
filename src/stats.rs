@@ -35,6 +35,6 @@ pub fn extension_stats(node: &Node, use_physical: bool) -> Vec<ExtStat> {
             }
         })
         .collect();
-    v.sort_by(|a, b| b.size.cmp(&a.size));
+    v.sort_by_key(|b| std::cmp::Reverse(b.size));
     v
 }

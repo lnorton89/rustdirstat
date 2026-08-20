@@ -7,6 +7,7 @@ use crate::model::{Node, Tree};
 use crate::stats::{self, ExtStat};
 use anyhow::Result;
 use crossterm::event::KeyCode;
+use std::cmp::Reverse;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -347,16 +348,12 @@ impl App {
             v.retain(|(_, n)| n.name.to_lowercase().contains(&f));
         }
         match self.sort {
-            SortMode::SizeDesc => v.sort_by(|a, b| b.1.size.cmp(&a.1.size)),
-            SortMode::SizeAsc => v.sort_by(|a, b| a.1.size.cmp(&b.1.size)),
-            SortMode::NameAsc => {
-                v.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
-            }
-            SortMode::NameDesc => {
-                v.sort_by(|a, b| b.1.name.to_lowercase().cmp(&a.1.name.to_lowercase()))
-            }
-            SortMode::ModifiedDesc => v.sort_by(|a, b| b.1.modified.cmp(&a.1.modified)),
-            SortMode::ModifiedAsc => v.sort_by(|a, b| a.1.modified.cmp(&b.1.modified)),
+            SortMode::SizeDesc => v.sort_by_key(|b| Reverse(b.1.size)),
+            SortMode::SizeAsc => v.sort_by_key(|a| a.1.size),
+            SortMode::NameAsc => v.sort_by_key(|a| a.1.name.to_lowercase()),
+            SortMode::NameDesc => v.sort_by_key(|b| Reverse(b.1.name.to_lowercase())),
+            SortMode::ModifiedDesc => v.sort_by_key(|b| Reverse(b.1.modified)),
+            SortMode::ModifiedAsc => v.sort_by_key(|a| a.1.modified),
         }
         v
     }
@@ -580,7 +577,15 @@ impl App {
             KeyCode::Char('u') => Action::ToggleDuplicates,
             KeyCode::Char('0') => Action::ClearHighlight,
             KeyCode::Char(c @ '1'..='9') => {
-                let idx = c.to_digit(10).unwrap() as usize - 1;
+                // The pattern already restricts `c` to '1'..='9', so the
+                // digit conversion cannot fail — but the crate denies
+                // `unwrap`, and an `unwrap` that is only correct because
+                // of a guard several lines away is exactly the kind that
+                // rots when the guard is edited.
+                let Some(digit) = c.to_digit(10) else {
+                    return Ok(());
+                };
+                let idx = digit as usize - 1;
                 match self.ext_stats.get(idx) {
                     Some(stat) => Action::ToggleHighlight(stat.category),
                     None => return Ok(()),
