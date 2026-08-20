@@ -1101,18 +1101,18 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
         .vscroll(true)
         .resizable(true)
         .sense(Sense::click())
-        .column(Column::exact(24.0))
         .column(
             Column::remainder()
-                .at_least(80.0)
+                .at_least(64.0)
                 .clip(true)
                 .resizable(false),
         )
-        .column(Column::auto().range(65.0..=120.0).clip(true))
-        .column(Column::auto().range(85.0..=145.0).clip(true))
-        .column(Column::auto().range(48.0..=80.0).clip(true))
+        .column(Column::exact(48.0).clip(true))
+        .column(Column::auto().range(72.0..=115.0).clip(true))
+        .column(Column::auto().range(70.0..=120.0).clip(true))
+        .column(Column::auto().range(56.0..=78.0).clip(true))
+        .column(Column::auto().range(44.0..=70.0).clip(true))
         .header(26.0, |mut h| {
-            h.col(|_| {});
             h.col(|ui| {
                 let direction = match app.extension_sort {
                     ExtensionSortMode::ExtensionAsc => Some(Icon::ChevronUp),
@@ -1167,6 +1167,32 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             });
             h.col(|ui| {
                 let direction = match app.extension_sort {
+                    ExtensionSortMode::DescriptionAsc => Some(Icon::ChevronUp),
+                    ExtensionSortMode::DescriptionDesc => Some(Icon::ChevronDown),
+                    _ => None,
+                };
+                let response = sortable_header(ui, "Description", direction);
+                #[cfg(test)]
+                {
+                    TEST_EXTENSION_HEADER_RECTS
+                        .lock()
+                        .unwrap()
+                        .push(("Description", response.rect));
+                    TEST_EXTENSION_HEADER_ICONS
+                        .lock()
+                        .unwrap()
+                        .push(("Description", direction));
+                }
+                if response.clicked() {
+                    sort = Some(if app.extension_sort == ExtensionSortMode::DescriptionAsc {
+                        ExtensionSortMode::DescriptionDesc
+                    } else {
+                        ExtensionSortMode::DescriptionAsc
+                    });
+                }
+            });
+            h.col(|ui| {
+                let direction = match app.extension_sort {
                     ExtensionSortMode::BytesAsc => Some(Icon::ChevronUp),
                     ExtensionSortMode::BytesDesc => Some(Icon::ChevronDown),
                     _ => None,
@@ -1188,6 +1214,32 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                         ExtensionSortMode::BytesAsc
                     } else {
                         ExtensionSortMode::BytesDesc
+                    });
+                }
+            });
+            h.col(|ui| {
+                let direction = match app.extension_sort {
+                    ExtensionSortMode::PercentAsc => Some(Icon::ChevronUp),
+                    ExtensionSortMode::PercentDesc => Some(Icon::ChevronDown),
+                    _ => None,
+                };
+                let response = sortable_header(ui, "% Bytes", direction);
+                #[cfg(test)]
+                {
+                    TEST_EXTENSION_HEADER_RECTS
+                        .lock()
+                        .unwrap()
+                        .push(("% Bytes", response.rect));
+                    TEST_EXTENSION_HEADER_ICONS
+                        .lock()
+                        .unwrap()
+                        .push(("% Bytes", direction));
+                }
+                if response.clicked() {
+                    sort = Some(if app.extension_sort == ExtensionSortMode::PercentDesc {
+                        ExtensionSortMode::PercentAsc
+                    } else {
+                        ExtensionSortMode::PercentDesc
                     });
                 }
             });
@@ -1223,11 +1275,6 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                 let ext = &rows[row.index()];
                 row.set_selected(app.highlighted_extension.as_ref() == Some(&ext.extension));
                 row.col(|ui| {
-                    let (r, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
-                    ui.painter()
-                        .rect_filled(r, 1.0, extension_color(&ext.extension));
-                });
-                row.col(|ui| {
                     let _response = ui.label(&ext.extension);
                     #[cfg(test)]
                     TEST_EXTENSION_TEXT_RECTS
@@ -1236,14 +1283,18 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                         .push((ext.extension.clone(), _response.rect));
                 });
                 row.col(|ui| {
+                    let (r, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
+                    ui.painter()
+                        .rect_filled(r, 1.0, extension_color(&ext.extension));
+                });
+                row.col(|ui| {
                     ui.label(ext.category.label());
                 });
                 row.col(|ui| {
-                    ui.label(format!(
-                        "{}  ({:.1}%)",
-                        human_bytes(ext.size),
-                        ext.size as f64 / total as f64 * 100.0
-                    ));
+                    ui.label(human_bytes(ext.size));
+                });
+                row.col(|ui| {
+                    ui.label(format!("{:.1}%", ext.size as f64 / total as f64 * 100.0));
                 });
                 row.col(|ui| {
                     ui.label(thousands(ext.count));
@@ -2282,6 +2333,18 @@ mod interaction_tests {
             .and_then(|(_, icon)| *icon)
     }
 
+    fn latest_extension_header_labels() -> Vec<&'static str> {
+        let headers = TEST_EXTENSION_HEADER_RECTS.lock().unwrap();
+        let mut labels: Vec<_> = headers
+            .iter()
+            .rev()
+            .take(6)
+            .map(|(label, _)| *label)
+            .collect();
+        labels.reverse();
+        labels
+    }
+
     fn assert_extension_header_click(
         ctx: &egui::Context,
         app: &mut GuiApp,
@@ -2352,6 +2415,17 @@ mod interaction_tests {
             latest_extension_header_icon("Bytes"),
             Some(Icon::ChevronDown)
         );
+        assert_eq!(
+            latest_extension_header_labels(),
+            [
+                "Extension",
+                "Color",
+                "Description",
+                "Bytes",
+                "% Bytes",
+                "Files"
+            ]
+        );
 
         assert_extension_header_click(
             &ctx,
@@ -2375,7 +2449,7 @@ mod interaction_tests {
             &mut app,
             "Color",
             ExtensionSortMode::ColorAsc,
-            &[".mmm", ".aaa", ".zzz"],
+            &[".mmm", ".zzz", ".aaa"],
             Icon::ChevronUp,
         );
         assert_extension_header_click(
@@ -2383,6 +2457,22 @@ mod interaction_tests {
             &mut app,
             "Color",
             ExtensionSortMode::ColorDesc,
+            &[".aaa", ".zzz", ".mmm"],
+            Icon::ChevronDown,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Description",
+            ExtensionSortMode::DescriptionAsc,
+            &[".mmm", ".aaa", ".zzz"],
+            Icon::ChevronUp,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "Description",
+            ExtensionSortMode::DescriptionDesc,
             &[".zzz", ".aaa", ".mmm"],
             Icon::ChevronDown,
         );
@@ -2399,6 +2489,22 @@ mod interaction_tests {
             &mut app,
             "Bytes",
             ExtensionSortMode::BytesAsc,
+            &[".aaa", ".mmm", ".zzz"],
+            Icon::ChevronUp,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "% Bytes",
+            ExtensionSortMode::PercentDesc,
+            &[".zzz", ".mmm", ".aaa"],
+            Icon::ChevronDown,
+        );
+        assert_extension_header_click(
+            &ctx,
+            &mut app,
+            "% Bytes",
+            ExtensionSortMode::PercentAsc,
             &[".aaa", ".mmm", ".zzz"],
             Icon::ChevronUp,
         );

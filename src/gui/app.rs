@@ -66,10 +66,23 @@ pub enum ExtensionSortMode {
     ExtensionDesc,
     ColorAsc,
     ColorDesc,
+    DescriptionAsc,
+    DescriptionDesc,
     BytesDesc,
     BytesAsc,
+    PercentDesc,
+    PercentAsc,
     FilesDesc,
     FilesAsc,
+}
+
+fn extension_color_sort_key(extension: &str) -> u32 {
+    let mut hash = 0x811c_9dc5_u32;
+    for byte in extension.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash % 360
 }
 
 pub struct PendingDelete {
@@ -271,12 +284,22 @@ impl GuiApp {
             ExtensionSortMode::ExtensionAsc => self.extensions.sort_by(by_extension),
             ExtensionSortMode::ExtensionDesc => self.extensions.sort_by(|a, b| by_extension(b, a)),
             ExtensionSortMode::ColorAsc => self.extensions.sort_by(|a, b| {
+                extension_color_sort_key(&a.extension)
+                    .cmp(&extension_color_sort_key(&b.extension))
+                    .then_with(|| by_extension(a, b))
+            }),
+            ExtensionSortMode::ColorDesc => self.extensions.sort_by(|a, b| {
+                extension_color_sort_key(&b.extension)
+                    .cmp(&extension_color_sort_key(&a.extension))
+                    .then_with(|| by_extension(a, b))
+            }),
+            ExtensionSortMode::DescriptionAsc => self.extensions.sort_by(|a, b| {
                 a.category
                     .label()
                     .cmp(b.category.label())
                     .then_with(|| by_extension(a, b))
             }),
-            ExtensionSortMode::ColorDesc => self.extensions.sort_by(|a, b| {
+            ExtensionSortMode::DescriptionDesc => self.extensions.sort_by(|a, b| {
                 b.category
                     .label()
                     .cmp(a.category.label())
@@ -286,6 +309,12 @@ impl GuiApp {
                 .extensions
                 .sort_by(|a, b| b.size.cmp(&a.size).then_with(|| by_extension(a, b))),
             ExtensionSortMode::BytesAsc => self
+                .extensions
+                .sort_by(|a, b| a.size.cmp(&b.size).then_with(|| by_extension(a, b))),
+            ExtensionSortMode::PercentDesc => self
+                .extensions
+                .sort_by(|a, b| b.size.cmp(&a.size).then_with(|| by_extension(a, b))),
+            ExtensionSortMode::PercentAsc => self
                 .extensions
                 .sort_by(|a, b| a.size.cmp(&b.size).then_with(|| by_extension(a, b))),
             ExtensionSortMode::FilesDesc => self
