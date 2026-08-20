@@ -1,5 +1,6 @@
 use super::app::{
-    extension_label, size_label, ExtensionSortMode, FileView, GuiApp, PaneOrientation,
+    extension_label, size_label, DirectoryColumn, ExtensionColumn, ExtensionSortMode, FileView,
+    GuiApp, PaneOrientation,
 };
 use super::icons::Icon;
 use crate::color;
@@ -12,6 +13,10 @@ use eframe::egui::{
 use egui_extras::{Column, TableBuilder};
 
 const PAD: f32 = 10.0;
+const PANEL_COLOR: Color32 = Color32::from_rgb(25, 27, 32);
+const PRIMARY_TEXT_COLOR: Color32 = Color32::from_rgb(218, 222, 230);
+const SECONDARY_TEXT_COLOR: Color32 = Color32::from_rgb(172, 179, 191);
+const TREEMAP_SELECTION_WIDTH: f32 = 3.0;
 
 pub fn draw(app: &mut GuiApp, ctx: &egui::Context) {
     apply_style(ctx);
@@ -42,8 +47,10 @@ fn apply_style(ctx: &egui::Context) {
     // steal pointer drags/clicks from table rows and make row selection feel
     // broken whenever the pointer lands on text.
     style.interaction.selectable_labels = false;
-    style.visuals.panel_fill = Color32::from_rgb(25, 27, 32);
+    style.visuals.panel_fill = PANEL_COLOR;
     style.visuals.extreme_bg_color = Color32::from_rgb(18, 20, 24);
+    style.visuals.widgets.noninteractive.fg_stroke.color = PRIMARY_TEXT_COLOR;
+    style.visuals.widgets.inactive.fg_stroke.color = PRIMARY_TEXT_COLOR;
     style.visuals.widgets.noninteractive.bg_stroke =
         Stroke::new(1.0_f32, Color32::from_rgb(55, 59, 68));
     style.visuals.selection.bg_fill = Color32::from_rgb(45, 104, 190);
@@ -63,7 +70,7 @@ fn apply_style(ctx: &egui::Context) {
 
 fn panel_frame() -> Frame {
     Frame::none()
-        .fill(Color32::from_rgb(25, 27, 32))
+        .fill(PANEL_COLOR)
         .inner_margin(Margin::same(PAD))
         .stroke(Stroke::new(1.0_f32, Color32::from_rgb(52, 56, 65)))
 }
@@ -643,6 +650,9 @@ enum RowAction {
 static TEST_DIRECTORY_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
+static TEST_DIRECTORY_CELL_COLUMNS: std::sync::Mutex<Vec<(Vec<usize>, DirectoryColumn)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
 static TEST_DIRECTORY_HEADER_RECTS: std::sync::Mutex<Vec<(&'static str, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
@@ -653,6 +663,9 @@ static TEST_ICON_MENU_LAYOUTS: std::sync::Mutex<Vec<(String, egui::Rect, egui::R
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
 static TEST_EXTENSION_ROW_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
+static TEST_EXTENSION_CELL_COLUMNS: std::sync::Mutex<Vec<(String, ExtensionColumn)>> =
     std::sync::Mutex::new(Vec::new());
 #[cfg(test)]
 static TEST_EXTENSION_TEXT_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
@@ -687,7 +700,7 @@ fn sortable_header(
         TextStyle::Button,
     );
     let size = ui.available_size_before_wrap();
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     if ui.is_rect_visible(rect) {
         let text_pos = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
         let color = if direction.is_some() {
@@ -712,9 +725,14 @@ fn sortable_header(
         .lock()
         .unwrap()
         .push((label, direction));
+    let cursor = if response.dragged() {
+        egui::CursorIcon::Grabbing
+    } else {
+        egui::CursorIcon::Grab
+    };
     response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(format!("Sort by {label}"))
+        .on_hover_cursor(cursor)
+        .on_hover_text(format!("Click to sort by {label} · drag to reorder"))
 }
 
 fn visible_tree_rows(app: &GuiApp) -> Vec<TreeRow> {
@@ -792,6 +810,163 @@ fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) {
     }
 }
 
+fn visible_directory_columns(app: &GuiApp, compact: bool) -> Vec<DirectoryColumn> {
+    app.directory_column_order
+        .iter()
+        .copied()
+        .filter(|column| {
+            !compact
+                || matches!(
+                    column,
+                    DirectoryColumn::Name | DirectoryColumn::Size | DirectoryColumn::PercentTotal
+                )
+        })
+        .collect()
+}
+
+fn directory_column_spec(column: DirectoryColumn) -> Column {
+    match column {
+        DirectoryColumn::Name => Column::remainder()
+            .at_least(160.0)
+            .clip(true)
+            .resizable(false),
+        DirectoryColumn::Size => Column::auto().range(75.0..=110.0).clip(true),
+        DirectoryColumn::SubtreePercentage => Column::auto().range(110.0..=180.0).clip(true),
+        DirectoryColumn::PercentTotal => Column::auto().range(60.0..=90.0).clip(true),
+        DirectoryColumn::Files | DirectoryColumn::Subdirs => {
+            Column::auto().range(45.0..=75.0).clip(true)
+        }
+        DirectoryColumn::LastChange => Column::auto().range(95.0..=150.0).clip(true),
+        DirectoryColumn::Attributes => Column::auto().range(55.0..=90.0).clip(true),
+    }
+}
+
+fn directory_column_label(column: DirectoryColumn) -> &'static str {
+    match column {
+        DirectoryColumn::Name => "Name",
+        DirectoryColumn::Size => "Size",
+        DirectoryColumn::SubtreePercentage => "Subtree percentage",
+        DirectoryColumn::PercentTotal => "% of total",
+        DirectoryColumn::Files => "Files",
+        DirectoryColumn::Subdirs => "Subdirs",
+        DirectoryColumn::LastChange => "Last change",
+        DirectoryColumn::Attributes => "Attributes",
+    }
+}
+
+fn directory_sort_icon(sort: SortMode, column: DirectoryColumn) -> Option<Icon> {
+    match (column, sort) {
+        (DirectoryColumn::Name, SortMode::NameAsc)
+        | (DirectoryColumn::Size, SortMode::SizeAsc)
+        | (DirectoryColumn::LastChange, SortMode::ModifiedAsc) => Some(Icon::ChevronUp),
+        (DirectoryColumn::Name, SortMode::NameDesc)
+        | (DirectoryColumn::Size, SortMode::SizeDesc)
+        | (DirectoryColumn::LastChange, SortMode::ModifiedDesc) => Some(Icon::ChevronDown),
+        _ => None,
+    }
+}
+
+fn directory_sort_after_click(sort: SortMode, column: DirectoryColumn) -> Option<SortMode> {
+    match column {
+        DirectoryColumn::Name => Some(if sort == SortMode::NameAsc {
+            SortMode::NameDesc
+        } else {
+            SortMode::NameAsc
+        }),
+        DirectoryColumn::Size => Some(if sort == SortMode::SizeDesc {
+            SortMode::SizeAsc
+        } else {
+            SortMode::SizeDesc
+        }),
+        DirectoryColumn::LastChange => Some(if sort == SortMode::ModifiedDesc {
+            SortMode::ModifiedAsc
+        } else {
+            SortMode::ModifiedDesc
+        }),
+        _ => None,
+    }
+}
+
+fn draw_directory_cell(
+    ui: &mut egui::Ui,
+    app: &GuiApp,
+    item: &TreeRow,
+    column: DirectoryColumn,
+    total: u64,
+) -> bool {
+    match column {
+        DirectoryColumn::Name => {
+            ui.add_space(item.depth as f32 * 18.0);
+            let mut toggle = false;
+            if item.is_dir {
+                let expanded = app.expanded.contains(&item.path);
+                let chevron = if expanded {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                };
+                toggle =
+                    compact_icon_button(ui, chevron, if expanded { "Collapse" } else { "Expand" })
+                        .clicked();
+            } else {
+                ui.add_space(28.0);
+            }
+            paint_inline_icon(
+                ui,
+                if item.is_dir {
+                    Icon::Folder
+                } else {
+                    Icon::File
+                },
+                17.0,
+                if item.is_dir {
+                    Color32::from_rgb(238, 185, 82)
+                } else {
+                    ui.visuals().text_color()
+                },
+            );
+            ui.label(&item.name);
+            toggle
+        }
+        DirectoryColumn::Size => {
+            ui.label(human_bytes(item.size));
+            false
+        }
+        DirectoryColumn::SubtreePercentage => {
+            percentage_bar(ui, item.size as f32 / item.parent_size.max(1) as f32);
+            false
+        }
+        DirectoryColumn::PercentTotal => {
+            ui.label(format!("{:.1}%", item.size as f64 / total as f64 * 100.0));
+            false
+        }
+        DirectoryColumn::Files => {
+            ui.label(thousands(item.files));
+            false
+        }
+        DirectoryColumn::Subdirs => {
+            ui.label(thousands(item.dirs));
+            false
+        }
+        DirectoryColumn::LastChange => {
+            ui.label(format_modified(item.modified));
+            false
+        }
+        DirectoryColumn::Attributes => {
+            ui.label(if item.unreadable > 0 {
+                "D !"
+            } else if item.symlink {
+                "L"
+            } else if item.is_dir {
+                "D"
+            } else {
+                "A"
+            });
+            false
+        }
+    }
+}
+
 fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
     let rows = visible_tree_rows(app);
     let total = app.tree.root.effective_size(app.use_physical).max(1);
@@ -799,124 +974,46 @@ fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
     let mut toggle = None;
     let mut open = None;
     let mut sort = None;
+    let mut reorder = None;
     let mut row_action: Option<(RowAction, Vec<usize>)> = None;
     let compact = ui.available_width() < 760.0;
+    let columns = visible_directory_columns(app, compact);
     let mut table = TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
         .vscroll(true)
         .sense(Sense::click())
-        .cell_layout(Layout::left_to_right(Align::Center))
-        // The flexible column must not persist a stale drag width: it absorbs
-        // every pixel left after the content-sized columns are measured.
-        .column(
-            Column::remainder()
-                .at_least(220.0)
-                .clip(true)
-                .resizable(false),
-        )
-        .column(Column::auto().range(90.0..=125.0).clip(true));
-    table = if compact {
-        table.column(Column::auto().range(70.0..=100.0).clip(true))
-    } else {
-        table
-            .column(Column::auto().range(150.0..=240.0).clip(true))
-            .column(Column::auto().range(70.0..=105.0).clip(true))
-            .column(Column::auto().range(60.0..=95.0).clip(true))
-            .column(Column::auto().range(60.0..=95.0).clip(true))
-            .column(Column::auto().range(110.0..=175.0).clip(true))
-            .column(Column::auto().range(70.0..=105.0).clip(true))
-    };
+        .cell_layout(Layout::left_to_right(Align::Center));
+    for column in &columns {
+        table = table.column(directory_column_spec(*column));
+    }
     table
         .header(28.0, |mut h| {
-            h.col(|ui| {
-                let response = sortable_header(
-                    ui,
-                    "Name",
-                    match app.sort {
-                        SortMode::NameAsc => Some(Icon::ChevronUp),
-                        SortMode::NameDesc => Some(Icon::ChevronDown),
-                        _ => None,
-                    },
-                );
-                #[cfg(test)]
-                TEST_DIRECTORY_HEADER_RECTS
-                    .lock()
-                    .unwrap()
-                    .push(("Name", response.rect));
-                if response.clicked() {
-                    sort = Some(if app.sort == SortMode::NameAsc {
-                        SortMode::NameDesc
-                    } else {
-                        SortMode::NameAsc
-                    });
-                }
-            });
-            h.col(|ui| {
-                let response = sortable_header(
-                    ui,
-                    "Size",
-                    match app.sort {
-                        SortMode::SizeAsc => Some(Icon::ChevronUp),
-                        SortMode::SizeDesc => Some(Icon::ChevronDown),
-                        _ => None,
-                    },
-                );
-                #[cfg(test)]
-                TEST_DIRECTORY_HEADER_RECTS
-                    .lock()
-                    .unwrap()
-                    .push(("Size", response.rect));
-                if response.clicked() {
-                    sort = Some(if app.sort == SortMode::SizeDesc {
-                        SortMode::SizeAsc
-                    } else {
-                        SortMode::SizeDesc
-                    });
-                }
-            });
-            if compact {
+            for column in &columns {
+                let column = *column;
                 h.col(|ui| {
-                    ui.strong("% total");
-                });
-            } else {
-                h.col(|ui| {
-                    ui.strong("Subtree percentage");
-                });
-                h.col(|ui| {
-                    ui.strong("% of total");
-                });
-                h.col(|ui| {
-                    ui.strong("Files");
-                });
-                h.col(|ui| {
-                    ui.strong("Subdirs");
-                });
-                h.col(|ui| {
-                    let response = sortable_header(
-                        ui,
-                        "Last change",
-                        match app.sort {
-                            SortMode::ModifiedAsc => Some(Icon::ChevronUp),
-                            SortMode::ModifiedDesc => Some(Icon::ChevronDown),
-                            _ => None,
-                        },
-                    );
+                    let label = directory_column_label(column);
+                    let response =
+                        sortable_header(ui, label, directory_sort_icon(app.sort, column));
+                    response.dnd_set_drag_payload(column);
+                    if response.dnd_hover_payload::<DirectoryColumn>().is_some() {
+                        ui.painter().rect_stroke(
+                            response.rect.shrink(1.0),
+                            2.0,
+                            Stroke::new(1.0_f32, Color32::from_rgb(104, 168, 255)),
+                        );
+                    }
+                    if let Some(source) = response.dnd_release_payload::<DirectoryColumn>() {
+                        reorder = Some((*source, column));
+                    }
                     #[cfg(test)]
                     TEST_DIRECTORY_HEADER_RECTS
                         .lock()
                         .unwrap()
-                        .push(("Last change", response.rect));
+                        .push((label, response.rect));
                     if response.clicked() {
-                        sort = Some(if app.sort == SortMode::ModifiedDesc {
-                            SortMode::ModifiedAsc
-                        } else {
-                            SortMode::ModifiedDesc
-                        });
+                        sort = directory_sort_after_click(app.sort, column);
                     }
-                });
-                h.col(|ui| {
-                    ui.strong("Attributes");
                 });
             }
         })
@@ -924,76 +1021,17 @@ fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
             body.rows(27.0, rows.len(), |mut row| {
                 let item = &rows[row.index()];
                 row.set_selected(app.selected_path.as_ref() == Some(&item.path));
-                row.col(|ui| {
-                    ui.add_space(item.depth as f32 * 18.0);
-                    if item.is_dir {
-                        let expanded = app.expanded.contains(&item.path);
-                        let chevron = if expanded {
-                            Icon::ChevronDown
-                        } else {
-                            Icon::ChevronRight
-                        };
-                        if compact_icon_button(
-                            ui,
-                            chevron,
-                            if expanded { "Collapse" } else { "Expand" },
-                        )
-                        .clicked()
-                        {
+                for column in &columns {
+                    let column = *column;
+                    #[cfg(test)]
+                    TEST_DIRECTORY_CELL_COLUMNS
+                        .lock()
+                        .unwrap()
+                        .push((item.path.clone(), column));
+                    row.col(|ui| {
+                        if draw_directory_cell(ui, app, item, column, total) {
                             toggle = Some(item.path.clone());
                         }
-                    } else {
-                        ui.add_space(28.0);
-                    }
-                    paint_inline_icon(
-                        ui,
-                        if item.is_dir {
-                            Icon::Folder
-                        } else {
-                            Icon::File
-                        },
-                        17.0,
-                        if item.is_dir {
-                            Color32::from_rgb(238, 185, 82)
-                        } else {
-                            ui.visuals().text_color()
-                        },
-                    );
-                    ui.label(&item.name);
-                });
-                row.col(|ui| {
-                    ui.label(human_bytes(item.size));
-                });
-                if compact {
-                    row.col(|ui| {
-                        ui.label(format!("{:.1}%", item.size as f64 / total as f64 * 100.0));
-                    });
-                } else {
-                    row.col(|ui| {
-                        percentage_bar(ui, item.size as f32 / item.parent_size.max(1) as f32);
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:.1}%", item.size as f64 / total as f64 * 100.0));
-                    });
-                    row.col(|ui| {
-                        ui.label(thousands(item.files));
-                    });
-                    row.col(|ui| {
-                        ui.label(thousands(item.dirs));
-                    });
-                    row.col(|ui| {
-                        ui.label(format_modified(item.modified));
-                    });
-                    row.col(|ui| {
-                        ui.label(if item.unreadable > 0 {
-                            "D !"
-                        } else if item.symlink {
-                            "L"
-                        } else if item.is_dir {
-                            "D"
-                        } else {
-                            "A"
-                        });
                     });
                 }
                 let response = row.response();
@@ -1044,6 +1082,9 @@ fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                 }
             })
         });
+    if let Some((source, target)) = reorder {
+        app.reorder_directory_column(source, target);
+    }
     if let Some(mode) = sort {
         app.sort = mode;
     }
@@ -1083,6 +1124,173 @@ fn percentage_bar(ui: &mut egui::Ui, fraction: f32) {
         .rect_filled(fill, 2.0, Color32::from_rgb(66, 133, 219));
 }
 
+fn extension_column_spec(column: ExtensionColumn) -> Column {
+    match column {
+        ExtensionColumn::Extension => Column::remainder()
+            .at_least(64.0)
+            .clip(true)
+            .resizable(false),
+        ExtensionColumn::Color => Column::exact(48.0).clip(true),
+        ExtensionColumn::Description => Column::auto().range(72.0..=115.0).clip(true),
+        ExtensionColumn::Bytes => Column::auto().range(70.0..=120.0).clip(true),
+        ExtensionColumn::PercentBytes => Column::auto().range(56.0..=78.0).clip(true),
+        ExtensionColumn::Files => Column::auto().range(44.0..=70.0).clip(true),
+    }
+}
+
+fn extension_column_label(column: ExtensionColumn) -> &'static str {
+    match column {
+        ExtensionColumn::Extension => "Extension",
+        ExtensionColumn::Color => "Color",
+        ExtensionColumn::Description => "Description",
+        ExtensionColumn::Bytes => "Bytes",
+        ExtensionColumn::PercentBytes => "% Bytes",
+        ExtensionColumn::Files => "Files",
+    }
+}
+
+fn extension_sort_icon(sort: ExtensionSortMode, column: ExtensionColumn) -> Option<Icon> {
+    match (column, sort) {
+        (ExtensionColumn::Extension, ExtensionSortMode::ExtensionAsc)
+        | (ExtensionColumn::Color, ExtensionSortMode::ColorAsc)
+        | (ExtensionColumn::Description, ExtensionSortMode::DescriptionAsc)
+        | (ExtensionColumn::Bytes, ExtensionSortMode::BytesAsc)
+        | (ExtensionColumn::PercentBytes, ExtensionSortMode::PercentAsc)
+        | (ExtensionColumn::Files, ExtensionSortMode::FilesAsc) => Some(Icon::ChevronUp),
+        (ExtensionColumn::Extension, ExtensionSortMode::ExtensionDesc)
+        | (ExtensionColumn::Color, ExtensionSortMode::ColorDesc)
+        | (ExtensionColumn::Description, ExtensionSortMode::DescriptionDesc)
+        | (ExtensionColumn::Bytes, ExtensionSortMode::BytesDesc)
+        | (ExtensionColumn::PercentBytes, ExtensionSortMode::PercentDesc)
+        | (ExtensionColumn::Files, ExtensionSortMode::FilesDesc) => Some(Icon::ChevronDown),
+        _ => None,
+    }
+}
+
+fn extension_sort_after_click(
+    sort: ExtensionSortMode,
+    column: ExtensionColumn,
+) -> ExtensionSortMode {
+    match column {
+        ExtensionColumn::Extension => {
+            if sort == ExtensionSortMode::ExtensionAsc {
+                ExtensionSortMode::ExtensionDesc
+            } else {
+                ExtensionSortMode::ExtensionAsc
+            }
+        }
+        ExtensionColumn::Color => {
+            if sort == ExtensionSortMode::ColorAsc {
+                ExtensionSortMode::ColorDesc
+            } else {
+                ExtensionSortMode::ColorAsc
+            }
+        }
+        ExtensionColumn::Description => {
+            if sort == ExtensionSortMode::DescriptionAsc {
+                ExtensionSortMode::DescriptionDesc
+            } else {
+                ExtensionSortMode::DescriptionAsc
+            }
+        }
+        ExtensionColumn::Bytes => {
+            if sort == ExtensionSortMode::BytesDesc {
+                ExtensionSortMode::BytesAsc
+            } else {
+                ExtensionSortMode::BytesDesc
+            }
+        }
+        ExtensionColumn::PercentBytes => {
+            if sort == ExtensionSortMode::PercentDesc {
+                ExtensionSortMode::PercentAsc
+            } else {
+                ExtensionSortMode::PercentDesc
+            }
+        }
+        ExtensionColumn::Files => {
+            if sort == ExtensionSortMode::FilesDesc {
+                ExtensionSortMode::FilesAsc
+            } else {
+                ExtensionSortMode::FilesDesc
+            }
+        }
+    }
+}
+
+fn draw_extension_cell(
+    ui: &mut egui::Ui,
+    ext: &super::app::ExtensionRow,
+    column: ExtensionColumn,
+    total: u64,
+) {
+    match column {
+        ExtensionColumn::Extension => {
+            let _response = ui.label(&ext.extension);
+            #[cfg(test)]
+            TEST_EXTENSION_TEXT_RECTS
+                .lock()
+                .unwrap()
+                .push((ext.extension.clone(), _response.rect));
+        }
+        ExtensionColumn::Color => {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 1.0, extension_color(&ext.extension));
+        }
+        ExtensionColumn::Description => {
+            ui.label(ext.category.label());
+        }
+        ExtensionColumn::Bytes => {
+            ui.label(human_bytes(ext.size));
+        }
+        ExtensionColumn::PercentBytes => {
+            ui.label(format!("{:.1}%", ext.size as f64 / total as f64 * 100.0));
+        }
+        ExtensionColumn::Files => {
+            ui.label(thousands(ext.count));
+        }
+    }
+}
+
+fn draw_extension_header(
+    ui: &mut egui::Ui,
+    app: &GuiApp,
+    column: ExtensionColumn,
+) -> (
+    Option<ExtensionSortMode>,
+    Option<(ExtensionColumn, ExtensionColumn)>,
+) {
+    let label = extension_column_label(column);
+    let direction = extension_sort_icon(app.extension_sort, column);
+    let response = sortable_header(ui, label, direction);
+    response.dnd_set_drag_payload(column);
+    if response.dnd_hover_payload::<ExtensionColumn>().is_some() {
+        ui.painter().rect_stroke(
+            response.rect.shrink(1.0),
+            2.0,
+            Stroke::new(1.0_f32, Color32::from_rgb(104, 168, 255)),
+        );
+    }
+    let reorder = response
+        .dnd_release_payload::<ExtensionColumn>()
+        .map(|source| (*source, column));
+    #[cfg(test)]
+    {
+        TEST_EXTENSION_HEADER_RECTS
+            .lock()
+            .unwrap()
+            .push((label, response.rect));
+        TEST_EXTENSION_HEADER_ICONS
+            .lock()
+            .unwrap()
+            .push((label, direction));
+    }
+    let sort = response
+        .clicked()
+        .then(|| extension_sort_after_click(app.extension_sort, column));
+    (sort, reorder)
+}
+
 fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         paint_inline_icon(ui, Icon::Extensions, 19.0, Color32::from_rgb(104, 168, 255));
@@ -1094,211 +1302,64 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     });
     let total = app.extensions.iter().map(|e| e.size).sum::<u64>().max(1);
     let rows = app.extensions.clone();
+    let columns = app.extension_column_order.clone();
     let mut selected = None;
     let mut sort = None;
-    TableBuilder::new(ui)
+    let mut reorder = None;
+    let mut table = TableBuilder::new(ui)
         .striped(true)
         .vscroll(true)
         .resizable(true)
-        .sense(Sense::click())
-        .column(
-            Column::remainder()
-                .at_least(64.0)
-                .clip(true)
-                .resizable(false),
-        )
-        .column(Column::exact(48.0).clip(true))
-        .column(Column::auto().range(72.0..=115.0).clip(true))
-        .column(Column::auto().range(70.0..=120.0).clip(true))
-        .column(Column::auto().range(56.0..=78.0).clip(true))
-        .column(Column::auto().range(44.0..=70.0).clip(true))
+        .sense(Sense::click());
+    for column in &columns {
+        table = table.column(extension_column_spec(*column));
+    }
+    table
         .header(26.0, |mut h| {
             h.col(|ui| {
-                let direction = match app.extension_sort {
-                    ExtensionSortMode::ExtensionAsc => Some(Icon::ChevronUp),
-                    ExtensionSortMode::ExtensionDesc => Some(Icon::ChevronDown),
-                    _ => None,
-                };
-                let response = sortable_header(ui, "Extension", direction);
-                #[cfg(test)]
-                {
-                    TEST_EXTENSION_HEADER_RECTS
-                        .lock()
-                        .unwrap()
-                        .push(("Extension", response.rect));
-                    TEST_EXTENSION_HEADER_ICONS
-                        .lock()
-                        .unwrap()
-                        .push(("Extension", direction));
-                }
-                if response.clicked() {
-                    sort = Some(if app.extension_sort == ExtensionSortMode::ExtensionAsc {
-                        ExtensionSortMode::ExtensionDesc
-                    } else {
-                        ExtensionSortMode::ExtensionAsc
-                    });
-                }
+                let (new_sort, new_reorder) = draw_extension_header(ui, app, columns[0]);
+                sort = new_sort.or(sort);
+                reorder = new_reorder.or(reorder);
             });
             h.col(|ui| {
-                let direction = match app.extension_sort {
-                    ExtensionSortMode::ColorAsc => Some(Icon::ChevronUp),
-                    ExtensionSortMode::ColorDesc => Some(Icon::ChevronDown),
-                    _ => None,
-                };
-                let response = sortable_header(ui, "Color", direction);
-                #[cfg(test)]
-                {
-                    TEST_EXTENSION_HEADER_RECTS
-                        .lock()
-                        .unwrap()
-                        .push(("Color", response.rect));
-                    TEST_EXTENSION_HEADER_ICONS
-                        .lock()
-                        .unwrap()
-                        .push(("Color", direction));
-                }
-                if response.clicked() {
-                    sort = Some(if app.extension_sort == ExtensionSortMode::ColorAsc {
-                        ExtensionSortMode::ColorDesc
-                    } else {
-                        ExtensionSortMode::ColorAsc
-                    });
-                }
+                let (new_sort, new_reorder) = draw_extension_header(ui, app, columns[1]);
+                sort = new_sort.or(sort);
+                reorder = new_reorder.or(reorder);
             });
             h.col(|ui| {
-                let direction = match app.extension_sort {
-                    ExtensionSortMode::DescriptionAsc => Some(Icon::ChevronUp),
-                    ExtensionSortMode::DescriptionDesc => Some(Icon::ChevronDown),
-                    _ => None,
-                };
-                let response = sortable_header(ui, "Description", direction);
-                #[cfg(test)]
-                {
-                    TEST_EXTENSION_HEADER_RECTS
-                        .lock()
-                        .unwrap()
-                        .push(("Description", response.rect));
-                    TEST_EXTENSION_HEADER_ICONS
-                        .lock()
-                        .unwrap()
-                        .push(("Description", direction));
-                }
-                if response.clicked() {
-                    sort = Some(if app.extension_sort == ExtensionSortMode::DescriptionAsc {
-                        ExtensionSortMode::DescriptionDesc
-                    } else {
-                        ExtensionSortMode::DescriptionAsc
-                    });
-                }
+                let (new_sort, new_reorder) = draw_extension_header(ui, app, columns[2]);
+                sort = new_sort.or(sort);
+                reorder = new_reorder.or(reorder);
             });
             h.col(|ui| {
-                let direction = match app.extension_sort {
-                    ExtensionSortMode::BytesAsc => Some(Icon::ChevronUp),
-                    ExtensionSortMode::BytesDesc => Some(Icon::ChevronDown),
-                    _ => None,
-                };
-                let response = sortable_header(ui, "Bytes", direction);
-                #[cfg(test)]
-                {
-                    TEST_EXTENSION_HEADER_RECTS
-                        .lock()
-                        .unwrap()
-                        .push(("Bytes", response.rect));
-                    TEST_EXTENSION_HEADER_ICONS
-                        .lock()
-                        .unwrap()
-                        .push(("Bytes", direction));
-                }
-                if response.clicked() {
-                    sort = Some(if app.extension_sort == ExtensionSortMode::BytesDesc {
-                        ExtensionSortMode::BytesAsc
-                    } else {
-                        ExtensionSortMode::BytesDesc
-                    });
-                }
+                let (new_sort, new_reorder) = draw_extension_header(ui, app, columns[3]);
+                sort = new_sort.or(sort);
+                reorder = new_reorder.or(reorder);
             });
             h.col(|ui| {
-                let direction = match app.extension_sort {
-                    ExtensionSortMode::PercentAsc => Some(Icon::ChevronUp),
-                    ExtensionSortMode::PercentDesc => Some(Icon::ChevronDown),
-                    _ => None,
-                };
-                let response = sortable_header(ui, "% Bytes", direction);
-                #[cfg(test)]
-                {
-                    TEST_EXTENSION_HEADER_RECTS
-                        .lock()
-                        .unwrap()
-                        .push(("% Bytes", response.rect));
-                    TEST_EXTENSION_HEADER_ICONS
-                        .lock()
-                        .unwrap()
-                        .push(("% Bytes", direction));
-                }
-                if response.clicked() {
-                    sort = Some(if app.extension_sort == ExtensionSortMode::PercentDesc {
-                        ExtensionSortMode::PercentAsc
-                    } else {
-                        ExtensionSortMode::PercentDesc
-                    });
-                }
+                let (new_sort, new_reorder) = draw_extension_header(ui, app, columns[4]);
+                sort = new_sort.or(sort);
+                reorder = new_reorder.or(reorder);
             });
             h.col(|ui| {
-                let direction = match app.extension_sort {
-                    ExtensionSortMode::FilesAsc => Some(Icon::ChevronUp),
-                    ExtensionSortMode::FilesDesc => Some(Icon::ChevronDown),
-                    _ => None,
-                };
-                let response = sortable_header(ui, "Files", direction);
-                #[cfg(test)]
-                {
-                    TEST_EXTENSION_HEADER_RECTS
-                        .lock()
-                        .unwrap()
-                        .push(("Files", response.rect));
-                    TEST_EXTENSION_HEADER_ICONS
-                        .lock()
-                        .unwrap()
-                        .push(("Files", direction));
-                }
-                if response.clicked() {
-                    sort = Some(if app.extension_sort == ExtensionSortMode::FilesDesc {
-                        ExtensionSortMode::FilesAsc
-                    } else {
-                        ExtensionSortMode::FilesDesc
-                    });
-                }
+                let (new_sort, new_reorder) = draw_extension_header(ui, app, columns[5]);
+                sort = new_sort.or(sort);
+                reorder = new_reorder.or(reorder);
             });
         })
         .body(|body| {
             body.rows(25.0, rows.len(), |mut row| {
                 let ext = &rows[row.index()];
                 row.set_selected(app.highlighted_extension.as_ref() == Some(&ext.extension));
-                row.col(|ui| {
-                    let _response = ui.label(&ext.extension);
+                for column in &columns {
+                    let column = *column;
                     #[cfg(test)]
-                    TEST_EXTENSION_TEXT_RECTS
+                    TEST_EXTENSION_CELL_COLUMNS
                         .lock()
                         .unwrap()
-                        .push((ext.extension.clone(), _response.rect));
-                });
-                row.col(|ui| {
-                    let (r, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
-                    ui.painter()
-                        .rect_filled(r, 1.0, extension_color(&ext.extension));
-                });
-                row.col(|ui| {
-                    ui.label(ext.category.label());
-                });
-                row.col(|ui| {
-                    ui.label(human_bytes(ext.size));
-                });
-                row.col(|ui| {
-                    ui.label(format!("{:.1}%", ext.size as f64 / total as f64 * 100.0));
-                });
-                row.col(|ui| {
-                    ui.label(thousands(ext.count));
-                });
+                        .push((ext.extension.clone(), column));
+                    row.col(|ui| draw_extension_cell(ui, ext, column, total));
+                }
                 let response = row.response();
                 #[cfg(test)]
                 TEST_EXTENSION_ROW_RECTS
@@ -1310,6 +1371,9 @@ fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                 }
             })
         });
+    if let Some((source, target)) = reorder {
+        app.reorder_extension_column(source, target);
+    }
     if let Some(mode) = sort {
         app.extension_sort = mode;
         app.sort_extensions();
@@ -1496,9 +1560,14 @@ fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         paint_inline_icon(ui, Icon::App, 19.0, Color32::from_rgb(104, 168, 255));
         ui.heading("Treemap");
-        ui.label(RichText::new(app.zoom_fs_path().display().to_string()).weak());
+        ui.label(
+            RichText::new(app.zoom_fs_path().display().to_string()).color(SECONDARY_TEXT_COLOR),
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label("Drag the splitter to resize all the way down");
+            ui.label(
+                RichText::new("Drag the splitter to resize all the way down")
+                    .color(SECONDARY_TEXT_COLOR),
+            );
         });
     });
     let avail = ui.available_size();
@@ -1508,6 +1577,7 @@ fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     let (response, painter) = ui.allocate_painter(avail, Sense::click());
     let tiles = app.treemap_tiles(response.rect.min.x, response.rect.min.y, avail.x, avail.y);
     let mut clicked = None;
+    let mut selected_rect = None;
     for tile in &tiles {
         if tile.w < 1.0 || tile.h < 1.0 {
             continue;
@@ -1542,7 +1612,7 @@ fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             );
         }
         if app.selected_path.as_ref() == Some(&tile.index_path) {
-            painter.rect_stroke(rect.shrink(1.0), 0.0, Stroke::new(3.0_f32, Color32::WHITE));
+            selected_rect = treemap_selection_rect(rect);
         }
         if app.show_labels && tile.can_label && tile.w >= 48.0 && tile.h >= 16.0 {
             painter.text(
@@ -1550,11 +1620,7 @@ fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                 egui::Align2::LEFT_TOP,
                 truncate_for_width(&tile.name, tile.w - 8.0, &painter, ui),
                 TextStyle::Small.resolve(ui.style()),
-                if luminance(base) > 145.0 {
-                    Color32::BLACK
-                } else {
-                    Color32::WHITE
-                },
+                readable_text_color(base),
             );
         }
         if !tile.is_free_space
@@ -1565,6 +1631,23 @@ fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
         {
             clicked = Some(tile.index_path.clone());
         }
+    }
+    // Paint selection last. Otherwise tiles rendered later overwrite the
+    // shared right and bottom edges of the selected tile.
+    if let Some(rect) = selected_rect {
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(
+                TREEMAP_SELECTION_WIDTH + 2.0,
+                Color32::from_black_alpha(190),
+            ),
+        );
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(TREEMAP_SELECTION_WIDTH, Color32::WHITE),
+        );
     }
     if let Some(path) = clicked {
         app.navigate_to_absolute(path);
@@ -2029,8 +2112,40 @@ fn truncate_for_width(name: &str, max_w: f32, painter: &egui::Painter, ui: &egui
     }
     String::new()
 }
-fn luminance(c: Color32) -> f32 {
-    0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32
+fn treemap_selection_rect(tile: egui::Rect) -> Option<egui::Rect> {
+    let inset = (TREEMAP_SELECTION_WIDTH + 2.0) * 0.5 + 0.5;
+    let rect = tile.shrink(inset);
+    (rect.width() > TREEMAP_SELECTION_WIDTH && rect.height() > TREEMAP_SELECTION_WIDTH)
+        .then_some(rect)
+}
+
+fn relative_luminance(c: Color32) -> f32 {
+    fn channel(value: u8) -> f32 {
+        let value = value as f32 / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+}
+
+fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (lighter, darker) = if relative_luminance(a) >= relative_luminance(b) {
+        (relative_luminance(a), relative_luminance(b))
+    } else {
+        (relative_luminance(b), relative_luminance(a))
+    };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn readable_text_color(background: Color32) -> Color32 {
+    if contrast_ratio(Color32::WHITE, background) >= contrast_ratio(Color32::BLACK, background) {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
 }
 fn scale(c: Color32, factor: f32) -> Color32 {
     let f = factor.clamp(0.0, 1.5);
@@ -2049,27 +2164,47 @@ fn blend(c: Color32, target: Color32, t: f32) -> Color32 {
         m(c.b(), target.b()),
     )
 }
-fn paint_cushion_rect(painter: &egui::Painter, rect: egui::Rect, base: Color32) {
-    const STEPS: i32 = 12;
-    let step = (rect.height() / STEPS as f32).max(1.0);
-    for i in 0..STEPS {
-        let t = i as f32 / STEPS as f32;
-        let y0 = rect.min.y + t * rect.height();
-        let y1 = (y0 + step).min(rect.max.y);
-        if y1 <= y0 {
-            continue;
-        }
-        let shade = if t < 0.5 {
-            blend(base, Color32::WHITE, (0.5 - t) * 0.5)
-        } else {
-            blend(base, Color32::BLACK, (t - 0.5) * 0.6)
-        };
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(rect.min.x, y0), egui::pos2(rect.max.x, y1)),
-            0.0,
-            shade,
-        );
+fn cushion_color(base: Color32, x: f32, y: f32) -> Color32 {
+    let highlight = (1.0 - ((x - 0.34).powi(2) * 0.65 + (y - 0.26).powi(2) * 1.35)).clamp(0.0, 1.0);
+    let edge = ((x - 0.5).abs() * 0.10 + (y - 0.5).abs() * 0.22).clamp(0.0, 0.16);
+    let light = 0.04 + highlight * 0.13 - y * 0.12 - edge;
+    if light >= 0.0 {
+        blend(base, Color32::WHITE, light)
+    } else {
+        blend(base, Color32::BLACK, -light)
     }
+}
+
+fn cushion_mesh(rect: egui::Rect, base: Color32) -> egui::Mesh {
+    const GRID: usize = 5;
+    let mut mesh = egui::Mesh::default();
+    mesh.reserve_vertices(GRID * GRID);
+    mesh.reserve_triangles((GRID - 1) * (GRID - 1) * 2);
+    for row in 0..GRID {
+        let y = row as f32 / (GRID - 1) as f32;
+        for column in 0..GRID {
+            let x = column as f32 / (GRID - 1) as f32;
+            mesh.colored_vertex(
+                egui::pos2(egui::lerp(rect.x_range(), x), egui::lerp(rect.y_range(), y)),
+                cushion_color(base, x, y),
+            );
+        }
+    }
+    for row in 0..GRID - 1 {
+        for column in 0..GRID - 1 {
+            let top_left = (row * GRID + column) as u32;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + GRID as u32;
+            let bottom_right = bottom_left + 1;
+            mesh.add_triangle(top_left, top_right, bottom_right);
+            mesh.add_triangle(top_left, bottom_right, bottom_left);
+        }
+    }
+    mesh
+}
+
+fn paint_cushion_rect(painter: &egui::Painter, rect: egui::Rect, base: Color32) {
+    painter.add(egui::Shape::mesh(cushion_mesh(rect, base)));
 }
 
 #[cfg(test)]
@@ -2126,6 +2261,52 @@ mod interaction_tests {
             volume_free: None,
             volume_total: None,
         })
+    }
+
+    #[test]
+    fn treemap_selection_frame_is_fully_inside_the_tile() {
+        let tile = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 80.0));
+        let frame = treemap_selection_rect(tile).expect("a normal tile should have a frame");
+        let half_outer_stroke = (TREEMAP_SELECTION_WIDTH + 2.0) * 0.5;
+
+        assert!(frame.left() - half_outer_stroke > tile.left());
+        assert!(frame.top() - half_outer_stroke > tile.top());
+        assert!(frame.right() + half_outer_stroke < tile.right());
+        assert!(frame.bottom() + half_outer_stroke < tile.bottom());
+    }
+
+    #[test]
+    fn cushion_is_one_valid_two_dimensional_gradient_mesh() {
+        let rect = egui::Rect::from_min_size(egui::pos2(4.0, 8.0), egui::vec2(200.0, 100.0));
+        let mesh = cushion_mesh(rect, Color32::from_rgb(155, 62, 205));
+
+        assert!(mesh.is_valid());
+        assert_eq!(mesh.vertices.len(), 25);
+        assert_eq!(mesh.indices.len(), 96);
+        assert_eq!(mesh.calc_bounds(), rect);
+        assert_ne!(mesh.vertices[0].color, mesh.vertices[4].color);
+        assert_ne!(mesh.vertices[0].color, mesh.vertices[20].color);
+
+        for pair in mesh.vertices.windows(2) {
+            let delta =
+                (relative_luminance(pair[0].color) - relative_luminance(pair[1].color)).abs();
+            assert!(delta < 0.08, "adjacent gradient vertices jump by {delta}");
+        }
+    }
+
+    #[test]
+    fn secondary_and_treemap_text_meet_readability_contrast() {
+        assert!(contrast_ratio(SECONDARY_TEXT_COLOR, PANEL_COLOR) >= 4.5);
+        assert!(contrast_ratio(PRIMARY_TEXT_COLOR, PANEL_COLOR) >= 7.0);
+
+        for background in [
+            Color32::from_rgb(155, 62, 205),
+            Color32::from_rgb(65, 92, 102),
+            Color32::from_rgb(190, 190, 45),
+            Color32::from_rgb(35, 35, 38),
+        ] {
+            assert!(contrast_ratio(readable_text_color(background), background) >= 4.5);
+        }
     }
 
     fn app_with_sortable_files() -> GuiApp {
@@ -2257,6 +2438,58 @@ mod interaction_tests {
         ]
     }
 
+    fn pointer_move(pos: egui::Pos2) -> Vec<egui::Event> {
+        vec![egui::Event::PointerMoved(pos)]
+    }
+
+    fn latest_header_position(
+        headers: &std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
+        label: &str,
+    ) -> egui::Pos2 {
+        headers
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(header, _)| *header == label)
+            .map(|(_, rect)| rect.center())
+            .unwrap_or_else(|| panic!("the rendered {label} header should expose a drag target"))
+    }
+
+    fn drag_directory_header(ctx: &egui::Context, app: &mut GuiApp, source: &str, target: &str) {
+        TEST_DIRECTORY_HEADER_RECTS.lock().unwrap().clear();
+        for _ in 0..4 {
+            render_directory(ctx, app, raw_input(Vec::new()));
+        }
+        let source_pos = latest_header_position(&TEST_DIRECTORY_HEADER_RECTS, source);
+        let target_pos = latest_header_position(&TEST_DIRECTORY_HEADER_RECTS, target);
+        render_directory(ctx, app, raw_input(pointer_button(source_pos, true)));
+        render_directory(
+            ctx,
+            app,
+            raw_input(pointer_move(source_pos + egui::vec2(16.0, 0.0))),
+        );
+        render_directory(ctx, app, raw_input(pointer_move(target_pos)));
+        render_directory(ctx, app, raw_input(pointer_button(target_pos, false)));
+    }
+
+    fn drag_extension_header(ctx: &egui::Context, app: &mut GuiApp, source: &str, target: &str) {
+        TEST_EXTENSION_HEADER_RECTS.lock().unwrap().clear();
+        for _ in 0..4 {
+            render_extensions(ctx, app, raw_input(Vec::new()));
+        }
+        let source_pos = latest_header_position(&TEST_EXTENSION_HEADER_RECTS, source);
+        let target_pos = latest_header_position(&TEST_EXTENSION_HEADER_RECTS, target);
+        render_extensions(ctx, app, raw_input(pointer_button(source_pos, true)));
+        render_extensions(
+            ctx,
+            app,
+            raw_input(pointer_move(source_pos + egui::vec2(16.0, 0.0))),
+        );
+        render_extensions(ctx, app, raw_input(pointer_move(target_pos)));
+        render_extensions(ctx, app, raw_input(pointer_button(target_pos, false)));
+    }
+
     fn click_directory_header(ctx: &egui::Context, app: &mut GuiApp, label: &str) {
         TEST_DIRECTORY_HEADER_RECTS.lock().unwrap().clear();
         for _ in 0..4 {
@@ -2268,7 +2501,7 @@ mod interaction_tests {
             .iter()
             .rev()
             .find(|(header, _)| *header == label)
-            .map(|(_, rect)| egui::pos2(rect.right() - 4.0, rect.center().y))
+            .map(|(_, rect)| rect.center())
             .unwrap_or_else(|| panic!("the rendered {label} header should expose a click target"));
         render_directory(ctx, app, raw_input(pointer_button(position, true)));
         render_directory(ctx, app, raw_input(pointer_button(position, false)));
@@ -2295,6 +2528,18 @@ mod interaction_tests {
             .and_then(|(_, icon)| *icon)
     }
 
+    fn latest_directory_header_labels() -> Vec<&'static str> {
+        let headers = TEST_DIRECTORY_HEADER_RECTS.lock().unwrap();
+        let mut labels: Vec<_> = headers
+            .iter()
+            .rev()
+            .take(8)
+            .map(|(label, _)| *label)
+            .collect();
+        labels.reverse();
+        labels
+    }
+
     fn click_extension_header(ctx: &egui::Context, app: &mut GuiApp, label: &str) {
         TEST_EXTENSION_HEADER_RECTS.lock().unwrap().clear();
         for _ in 0..4 {
@@ -2306,7 +2551,7 @@ mod interaction_tests {
             .iter()
             .rev()
             .find(|(header, _)| *header == label)
-            .map(|(_, rect)| egui::pos2(rect.right() - 4.0, rect.center().y))
+            .map(|(_, rect)| rect.center())
             .unwrap_or_else(|| panic!("the rendered {label} header should expose a click target"));
         render_extensions(ctx, app, raw_input(pointer_button(position, true)));
         render_extensions(ctx, app, raw_input(pointer_button(position, false)));
@@ -2399,6 +2644,51 @@ mod interaction_tests {
         assert!(matches!(app.sort, SortMode::ModifiedAsc));
         assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
         assert_eq!(latest_header_icon("Last change"), Some(Icon::ChevronUp));
+    }
+
+    #[test]
+    fn dragging_directory_header_reorders_headers_and_row_columns() {
+        let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        let mut app = app_with_one_file();
+
+        drag_directory_header(&ctx, &mut app, "Name", "Files");
+        assert_eq!(
+            app.directory_column_order,
+            [
+                DirectoryColumn::Size,
+                DirectoryColumn::SubtreePercentage,
+                DirectoryColumn::PercentTotal,
+                DirectoryColumn::Name,
+                DirectoryColumn::Files,
+                DirectoryColumn::Subdirs,
+                DirectoryColumn::LastChange,
+                DirectoryColumn::Attributes,
+            ]
+        );
+        TEST_DIRECTORY_CELL_COLUMNS.lock().unwrap().clear();
+        render_directory(&ctx, &mut app, raw_input(Vec::new()));
+        assert_eq!(
+            latest_directory_header_labels(),
+            [
+                "Size",
+                "Subtree percentage",
+                "% of total",
+                "Name",
+                "Files",
+                "Subdirs",
+                "Last change",
+                "Attributes",
+            ]
+        );
+        let child_columns: Vec<_> = TEST_DIRECTORY_CELL_COLUMNS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| path == &[0])
+            .map(|(_, column)| *column)
+            .collect();
+        assert_eq!(child_columns, app.directory_column_order);
     }
 
     #[test]
@@ -2524,6 +2814,47 @@ mod interaction_tests {
             &[".zzz", ".mmm", ".aaa"],
             Icon::ChevronUp,
         );
+    }
+
+    #[test]
+    fn dragging_extension_header_reorders_headers_and_row_columns() {
+        let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = egui::Context::default();
+        let mut app = app_with_sortable_extensions();
+
+        drag_extension_header(&ctx, &mut app, "Extension", "Files");
+        assert_eq!(
+            app.extension_column_order,
+            [
+                ExtensionColumn::Color,
+                ExtensionColumn::Description,
+                ExtensionColumn::Bytes,
+                ExtensionColumn::PercentBytes,
+                ExtensionColumn::Extension,
+                ExtensionColumn::Files,
+            ]
+        );
+        TEST_EXTENSION_CELL_COLUMNS.lock().unwrap().clear();
+        render_extensions(&ctx, &mut app, raw_input(Vec::new()));
+        assert_eq!(
+            latest_extension_header_labels(),
+            [
+                "Color",
+                "Description",
+                "Bytes",
+                "% Bytes",
+                "Extension",
+                "Files"
+            ]
+        );
+        let first_row_columns: Vec<_> = TEST_EXTENSION_CELL_COLUMNS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(extension, _)| extension == ".zzz")
+            .map(|(_, column)| *column)
+            .collect();
+        assert_eq!(first_row_columns, app.extension_column_order);
     }
 
     #[test]

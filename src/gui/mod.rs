@@ -19,13 +19,7 @@ pub fn run(root: PathBuf) -> Result<()> {
     // failed launch while the process is busy walking the filesystem.
     let gui_app = app::GuiApp::loading(root);
 
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([720.0, 480.0])
-            .with_icon(icons::app_icon()),
-        ..Default::default()
-    };
+    let options = native_options();
 
     eframe::run_native(
         "RustDirStat",
@@ -33,4 +27,27 @@ pub fn run(root: PathBuf) -> Result<()> {
         Box::new(|_cc| Ok(Box::new(gui_app))),
     )
     .map_err(|e| anyhow::anyhow!("GUI failed: {e}"))
+}
+
+fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 820.0])
+            .with_min_inner_size([720.0, 480.0])
+            .with_icon(icons::app_icon()),
+        // wgpu avoids glutin's rigid framebuffer-config selection on Linux
+        // and can use Vulkan or OpenGL according to what the system exposes.
+        renderer: eframe::Renderer::Wgpu,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_gui_uses_wgpu_instead_of_glutin() {
+        assert_eq!(native_options().renderer, eframe::Renderer::Wgpu);
+    }
 }

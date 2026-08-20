@@ -41,6 +41,52 @@ pub enum FileView {
     SearchResults,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DirectoryColumn {
+    Name,
+    Size,
+    SubtreePercentage,
+    PercentTotal,
+    Files,
+    Subdirs,
+    LastChange,
+    Attributes,
+}
+
+impl DirectoryColumn {
+    pub const DEFAULT_ORDER: [Self; 8] = [
+        Self::Name,
+        Self::Size,
+        Self::SubtreePercentage,
+        Self::PercentTotal,
+        Self::Files,
+        Self::Subdirs,
+        Self::LastChange,
+        Self::Attributes,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ExtensionColumn {
+    Extension,
+    Color,
+    Description,
+    Bytes,
+    PercentBytes,
+    Files,
+}
+
+impl ExtensionColumn {
+    pub const DEFAULT_ORDER: [Self; 6] = [
+        Self::Extension,
+        Self::Color,
+        Self::Description,
+        Self::Bytes,
+        Self::PercentBytes,
+        Self::Files,
+    ];
+}
+
 impl FileView {
     pub fn label(self) -> &'static str {
         match self {
@@ -85,6 +131,21 @@ fn extension_color_sort_key(extension: &str) -> u32 {
     hash % 360
 }
 
+fn reorder_column<T: Copy + Eq>(columns: &mut Vec<T>, source: T, target: T) {
+    if source == target {
+        return;
+    }
+    let Some(source_index) = columns.iter().position(|column| *column == source) else {
+        return;
+    };
+    columns.remove(source_index);
+    let Some(target_index) = columns.iter().position(|column| *column == target) else {
+        columns.insert(source_index.min(columns.len()), source);
+        return;
+    };
+    columns.insert(target_index, source);
+}
+
 pub struct PendingDelete {
     pub index_path: Vec<usize>,
     pub name: String,
@@ -98,9 +159,11 @@ pub struct GuiApp {
     pub selected_path: Option<Vec<usize>>,
     pub expanded: HashSet<Vec<usize>>,
     pub sort: SortMode,
+    pub directory_column_order: Vec<DirectoryColumn>,
     pub use_physical: bool,
     pub extensions: Vec<ExtensionRow>,
     pub extension_sort: ExtensionSortMode,
+    pub extension_column_order: Vec<ExtensionColumn>,
     pub highlighted_extension: Option<String>,
     pub highlighted_category: Option<Category>,
     pub pending_delete: Option<PendingDelete>,
@@ -178,9 +241,11 @@ impl GuiApp {
             selected_path: None,
             expanded,
             sort: config.sort.unwrap_or(SortMode::SizeDesc),
+            directory_column_order: DirectoryColumn::DEFAULT_ORDER.to_vec(),
             use_physical: config.use_physical.unwrap_or(false),
             extensions: Vec::new(),
             extension_sort: ExtensionSortMode::BytesDesc,
+            extension_column_order: ExtensionColumn::DEFAULT_ORDER.to_vec(),
             highlighted_extension: None,
             highlighted_category: None,
             pending_delete: None,
@@ -324,6 +389,14 @@ impl GuiApp {
                 .extensions
                 .sort_by(|a, b| a.count.cmp(&b.count).then_with(|| by_extension(a, b))),
         }
+    }
+
+    pub fn reorder_directory_column(&mut self, source: DirectoryColumn, target: DirectoryColumn) {
+        reorder_column(&mut self.directory_column_order, source, target);
+    }
+
+    pub fn reorder_extension_column(&mut self, source: ExtensionColumn, target: ExtensionColumn) {
+        reorder_column(&mut self.extension_column_order, source, target);
     }
 
     pub fn refresh_largest_files(&mut self) {
