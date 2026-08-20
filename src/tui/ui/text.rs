@@ -120,3 +120,130 @@ pub(super) fn wrap_text(s: &str, width: usize) -> Vec<String> {
     lines.push(current);
     lines
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A name with wide glyphs in it. Each CJK character occupies two
+    /// terminal columns, which is the whole reason these functions
+    /// measure width instead of counting `char`s.
+    const WIDE: &str = "画像フォルダ";
+
+    /// Nothing ever comes back wider than it was asked for.
+    ///
+    /// This is the property the whole module exists for: a label that
+    /// overflows its box does not wrap in a terminal, it overwrites the
+    /// cell next to it. Counting `char`s instead of columns lets a
+    /// CJK name through at twice the width asked for.
+    #[test]
+    fn nothing_is_ever_wider_than_the_budget() {
+        let inputs = [
+            "short",
+            "a rather long directory name.tar.gz",
+            WIDE,
+            "mixed 日本語 and latin",
+            "",
+            "…",
+        ];
+        for text in inputs {
+            for max in 0..=40 {
+                let cut = truncate(text, max);
+                assert!(
+                    cut.width() <= max,
+                    "truncate({text:?}, {max}) = {cut:?} at {} columns",
+                    cut.width()
+                );
+                let middle = truncate_middle(text, max);
+                assert!(
+                    middle.width() <= max.max(1),
+                    "truncate_middle({text:?}, {max}) = {middle:?} at {} columns",
+                    middle.width()
+                );
+            }
+        }
+    }
+
+    /// Text that already fits is returned untouched — no ellipsis bolted
+    /// onto something that never needed one.
+    #[test]
+    fn text_that_fits_is_left_alone() {
+        for text in ["short", WIDE, "", "exactly"] {
+            let width = text.width();
+            assert_eq!(truncate(text, width), text, "truncate at exact width");
+            assert_eq!(
+                truncate(text, width + 5),
+                text,
+                "truncate with room to spare"
+            );
+            assert_eq!(truncate_middle(text, width), text, "middle at exact width");
+        }
+    }
+
+    /// Truncation says it happened, and keeps a prefix of the original.
+    #[test]
+    fn a_shortened_string_says_so_and_keeps_its_start() {
+        let text = "documents-and-settings";
+        let cut = truncate(text, 10);
+        assert!(cut.ends_with('…'), "{cut:?} was cut but does not say so");
+        let kept: String = cut.chars().take_while(|c| *c != '…').collect();
+        assert!(
+            text.starts_with(&kept),
+            "{cut:?} is not a prefix of {text:?}"
+        );
+        assert!(
+            !kept.is_empty(),
+            "10 columns has room for more than the ellipsis"
+        );
+    }
+
+    /// The middle form keeps both ends, which is the point of it: for a
+    /// path, the volume and the leaf are the identifying parts.
+    #[test]
+    fn the_middle_form_keeps_both_ends() {
+        let path = "C:/Users/Lawrence/Documents/Dev/rustdirstat/target/debug";
+        let cut = truncate_middle(path, 30);
+        assert!(cut.width() <= 30, "{cut:?} is {} columns", cut.width());
+        assert!(cut.contains('…'), "{cut:?} should show where it was cut");
+        assert!(cut.starts_with("C:/"), "the volume should survive: {cut:?}");
+        assert!(cut.ends_with("debug"), "the leaf should survive: {cut:?}");
+    }
+
+    /// Wrapping never emits a line wider than the width it was given, and
+    /// never loses a word.
+    #[test]
+    fn wrapping_respects_the_width_and_keeps_every_word() {
+        let text = "Delete this folder and everything inside it, permanently";
+        for width in [10, 16, 24, 40, 200] {
+            let lines = wrap_text(text, width);
+            for line in &lines {
+                assert!(
+                    line.width() <= width || !line.contains(' '),
+                    "a {width}-column wrap produced {line:?} at {} columns",
+                    line.width()
+                );
+            }
+            let rejoined: Vec<&str> = lines
+                .iter()
+                .flat_map(|line| line.split_whitespace())
+                .collect();
+            let original: Vec<&str> = text.split_whitespace().collect();
+            assert_eq!(
+                rejoined, original,
+                "wrapping at {width} lost or reordered words"
+            );
+        }
+    }
+
+    /// A degenerate width does not hang or panic.
+    #[test]
+    fn wrapping_at_a_useless_width_still_terminates() {
+        for width in [0, 1] {
+            let lines = wrap_text("some words here", width);
+            assert!(
+                !lines.is_empty(),
+                "wrapping at {width} should still produce something"
+            );
+        }
+    }
+}
