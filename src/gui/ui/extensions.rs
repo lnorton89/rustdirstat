@@ -143,18 +143,31 @@ pub(super) fn draw_extension_cell(
     ext: &crate::gui::app::ExtensionRow,
     column: ExtensionColumn,
     total: u64,
+    shell_icon: Option<&egui::TextureHandle>,
 ) {
     match column {
         ExtensionColumn::Extension => {
-            // The category mark, not an extension-specific one: the shape
-            // is what lets a row be recognised before its label is read,
-            // and there is no sensible glyph for ".rlib" specifically.
-            paint_inline_icon(
-                ui,
-                Icon::for_category(ext.category),
-                14.0,
-                ui.visuals().text_color(),
-            );
+            // Prefer the icon the OS itself shows for this file type: a
+            // `.docx` should look like whatever Word looks like on this
+            // machine. That is information the drawn set cannot carry —
+            // it knows "document", not "Word document". Where the
+            // platform has nothing (or is not Windows), the category
+            // glyph is the fallback.
+            match shell_icon {
+                Some(texture) => {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(Vec2::splat(15.0))
+                            .maintain_aspect_ratio(true),
+                    );
+                }
+                None => paint_inline_icon(
+                    ui,
+                    Icon::for_category(ext.category),
+                    14.0,
+                    ui.visuals().text_color(),
+                ),
+            }
             ui.add_space(2.0);
             let _response = ui.label(&ext.extension);
             #[cfg(test)]
@@ -254,69 +267,96 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     let total = app.extensions.iter().map(|e| e.size).sum::<u64>().max(1);
     let rows = app.extensions.clone();
     let columns = app.extension_column_order.clone();
+    // Resolved up front rather than inside the row closure: looking one
+    // up needs `&mut app` for the cache, which the closure cannot have
+    // while it is also reading the rest of the app. Handles are cheap to
+    // clone, and there are only ever as many as there are extensions on
+    // screen.
+    let shell_icons: Vec<Option<egui::TextureHandle>> = {
+        let ctx = ui.ctx().clone();
+        rows.iter()
+            .map(|ext| app.shell_icons.get(&ctx, &ext.extension).cloned())
+            .collect()
+    };
     let mut selected = None;
     let mut sort = None;
     let mut reorder = None;
     let minimum_width = extension_table_min_width(&columns, ui.spacing().item_spacing.x);
     // Same story as the directory table: this panel is resizable, and
     // below a certain width every column but the first was simply clipped
-    // away with no scrollbar and no way to reach them.
-    let table_width = ui.available_width().max(minimum_width);
-    egui::ScrollArea::horizontal()
-        .id_salt("extension_hscroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // See the directory table: `set_width` rather than
-            // `set_min_width`, or `Column::remainder()` takes the scroll
-            // area's unbounded width and shoves the rest out of view.
-            ui.set_width(table_width);
-            let mut table = TableBuilder::new(ui)
-                .striped(true)
-                .vscroll(true)
-                .resizable(true)
-                // Without this the cell layout is top-down, so a cell
-                // holding more than one widget stacks them instead of
-                // putting them side by side — which is what happened the
-                // moment the extension column gained an icon next to its
-                // label. The directory table has always set it.
-                .cell_layout(Layout::left_to_right(Align::Center))
-                .sense(Sense::click());
-            for column in &columns {
-                table = table.column(extension_column_spec(*column));
-            }
-            table
-                .header(TABLE_HEADER_HEIGHT, |mut h| {
+    // away with no scrollbar and no way to reach them — but only wrap
+    // when that is actually the case. Inside a horizontal scroll area
+    // `Column::remainder()` settles at its minimum instead of taking up
+    // the slack, so wrapping unconditionally stops the columns reflowing
+    // when the pane is dragged and stops the resize handles working at
+    // all.
+    let scrolled = ui.available_width() < minimum_width;
+    let mut render_table = |ui: &mut egui::Ui| {
+        let mut table = TableBuilder::new(ui)
+            .striped(true)
+            .vscroll(true)
+            .resizable(true)
+            // Without this the cell layout is top-down, so a cell
+            // holding more than one widget stacks them instead of
+            // putting them side by side — which is what happened the
+            // moment the extension column gained an icon next to its
+            // label. The directory table has always set it.
+            .cell_layout(Layout::left_to_right(Align::Center))
+            .sense(Sense::click());
+        for column in &columns {
+            table = table.column(extension_column_spec(*column));
+        }
+        table
+            .header(TABLE_HEADER_HEIGHT, |mut h| {
+                for column in &columns {
+                    h.col(|ui| {
+                        let (new_sort, new_reorder) = draw_extension_header(ui, app, *column);
+                        sort = new_sort.or(sort);
+                        reorder = new_reorder.or(reorder);
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
+                    let index = row.index();
+                    let ext = &rows[index];
+                    row.set_selected(app.highlighted_extension.as_ref() == Some(&ext.extension));
                     for column in &columns {
-                        h.col(|ui| {
-                            let (new_sort, new_reorder) = draw_extension_header(ui, app, *column);
-                            sort = new_sort.or(sort);
-                            reorder = new_reorder.or(reorder);
+                        let column = *column;
+                        #[cfg(test)]
+                        probe(&TEST_EXTENSION_CELL_COLUMNS).push((ext.extension.clone(), column));
+                        row.col(|ui| {
+                            draw_extension_cell(
+                                ui,
+                                ext,
+                                column,
+                                total,
+                                shell_icons.get(index).and_then(Option::as_ref),
+                            );
                         });
                     }
+                    let response = row.response();
+                    #[cfg(test)]
+                    probe(&TEST_EXTENSION_ROW_RECTS).push((ext.extension.clone(), response.rect));
+                    if response.clicked() {
+                        selected = Some((ext.extension.clone(), ext.category));
+                    }
                 })
-                .body(|body| {
-                    body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
-                        let ext = &rows[row.index()];
-                        row.set_selected(
-                            app.highlighted_extension.as_ref() == Some(&ext.extension),
-                        );
-                        for column in &columns {
-                            let column = *column;
-                            #[cfg(test)]
-                            probe(&TEST_EXTENSION_CELL_COLUMNS)
-                                .push((ext.extension.clone(), column));
-                            row.col(|ui| draw_extension_cell(ui, ext, column, total));
-                        }
-                        let response = row.response();
-                        #[cfg(test)]
-                        probe(&TEST_EXTENSION_ROW_RECTS)
-                            .push((ext.extension.clone(), response.rect));
-                        if response.clicked() {
-                            selected = Some((ext.extension.clone(), ext.category));
-                        }
-                    })
-                });
-        });
+            });
+    };
+
+    if scrolled {
+        egui::ScrollArea::horizontal()
+            .id_salt("extension_hscroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(minimum_width);
+                render_table(ui);
+            });
+    } else {
+        render_table(ui);
+    }
+
     if let Some((source, target)) = reorder {
         app.reorder_extension_column(source, target);
     }

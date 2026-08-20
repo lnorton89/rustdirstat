@@ -22,7 +22,42 @@ pub struct Progress {
 /// three-entry folder costs more in scheduling overhead than it saves.
 const PAR_THRESHOLD: usize = 32;
 
+/// The thread pool the scan runs on, deliberately one thread short of
+/// the machine.
+///
+/// Rayon's global pool sizes itself to every available core, and a scan
+/// saturates all of them. On a large tree that leaves the UI thread
+/// fighting the scan for a core, which is what made dragging a splitter
+/// or a window stutter while a scan was running — the frame was ready,
+/// there was just nowhere to run it. Giving the scan everything *but*
+/// one core costs a few percent of scan throughput and buys back a
+/// responsive window for the whole of it.
+///
+/// Falls back to the global pool if a dedicated one cannot be built;
+/// a slightly stuttery scan is much better than no scan.
+fn scan_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(cores.saturating_sub(1).max(1))
+            .thread_name(|index| format!("rustdirstat-scan-{index}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
 pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
+    match scan_pool() {
+        Some(pool) => pool.install(|| scan_inner(root, progress)),
+        None => scan_inner(root, progress),
+    }
+}
+
+fn scan_inner(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
     let name = root
         .file_name()
         .map(|n| n.to_string_lossy().to_string())

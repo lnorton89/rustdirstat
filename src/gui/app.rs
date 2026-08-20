@@ -266,6 +266,9 @@ pub(super) struct GuiApp {
     visible_rows_key: Option<RowKey>,
     /// Treemap tiles for the current panel rect, cached on the same
     /// terms and for the same reason.
+    /// System file-type icons, resolved lazily per extension and kept
+    /// for the life of the process. See `gui::shell_icons`.
+    pub shell_icons: super::shell_icons::ShellIcons,
     pub treemap_tiles: Vec<treemap_layout::Tile>,
     treemap_key: Option<TreemapKey>,
     scan_rx: Option<mpsc::Receiver<Result<Tree, String>>>,
@@ -326,6 +329,7 @@ impl GuiApp {
             scan_progress: None,
             visible_rows: Vec::new(),
             visible_rows_key: None,
+            shell_icons: super::shell_icons::ShellIcons::default(),
             treemap_tiles: Vec::new(),
             treemap_key: None,
             scan_rx: None,
@@ -748,7 +752,12 @@ impl GuiApp {
         }
 
         if self.is_busy() {
-            ctx.request_repaint_after(Duration::from_millis(80));
+            // ~30fps while work is in flight. At the previous 80ms the
+            // window only redrew twelve times a second, so anything the
+            // user did during a scan — dragging a splitter, moving the
+            // window — moved in visible steps even when the machine had
+            // capacity to spare.
+            ctx.request_repaint_after(Duration::from_millis(33));
         }
     }
 

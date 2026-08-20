@@ -7,6 +7,7 @@
 
 mod app;
 mod icons;
+mod shell_icons;
 mod treemap_layout;
 mod ui;
 

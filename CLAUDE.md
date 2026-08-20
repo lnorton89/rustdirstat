@@ -53,10 +53,33 @@ check` there is another way to exercise the Linux build.
 
 ## Rules this codebase actually enforces
 
-**No `unwrap`, `expect`, or `panic!` in library code.** Denied by lint, so
-a violation is a build failure, not a warning. Use `let ... else`, `?`, or
-an explicit fallback. Test code is exempt via a `cfg_attr` in
-`src/lib.rs` — do not widen that exemption to reach shipping code.
+**No `unwrap`, `expect`, or `panic!` anywhere — including tests.** Denied
+by lint, so a violation is a build failure, not a warning. In library
+code use `let ... else`, `?`, or an explicit fallback. In tests, return
+`anyhow::Result<()>` and use `?` for anything fallible, and `assert!` /
+`assert_eq!` with a message for the actual assertions. There is no
+crate-wide exemption and there should not be one: a blanket
+`cfg_attr(test, allow(..))` in `lib.rs` covers *all* `#[cfg(test)]`
+items, including library code that merely happens to be test-gated.
+
+**Every `unsafe` block gets a safe leaf wrapper.** The pattern, used in
+`platform.rs`, `gui/shell_icons.rs`, and `tests/quit_stress.rs`:
+
+- One named function per FFI call, taking safe Rust arguments and
+  returning `Option`/`Result` of a safe type.
+- The `unsafe` block contains *the call and nothing else*. Arithmetic,
+  error handling, and string marshalling go outside it — if it can be
+  safe code, it is.
+- A `// SAFETY:` comment on every block, stating the argument-validity
+  reasoning it actually depends on.
+- Anything with a matching destroy/free/close call gets an owning
+  wrapper with a `Drop` impl, so early returns cannot leak it. See
+  `OwnedIcon` and `OwnedBitmap`.
+- Prefer `MaybeUninit` over `mem::zeroed` for out-parameters, and only
+  `assume_init` on the path where the callee reported success.
+
+The result should be that no caller of one of these needs `unsafe`
+itself, and no test body contains any.
 
 **Never recompute something tree-sized inside a draw call.** The GUI is
 immediate mode: `gui::ui::draw` runs in full every frame. A scan of a
