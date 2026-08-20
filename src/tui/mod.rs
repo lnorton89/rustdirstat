@@ -61,8 +61,11 @@ const MOUSE_CAPTURE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 fn restore_terminal() {
     let _ = disable_raw_mode();
     let mut stdout = std::io::stdout();
-    let _ = write!(stdout, "{MOUSE_CAPTURE_OFF}\x1b[?25h");
-    let _ = execute!(stdout, LeaveAlternateScreen);
+    // The mouse modes go out raw because crossterm cannot address them
+    // individually (see above); showing the cursor again is an ordinary
+    // crossterm command and has no reason to be hand-written.
+    let _ = write!(stdout, "{MOUSE_CAPTURE_OFF}");
+    let _ = execute!(stdout, crossterm::cursor::Show, LeaveAlternateScreen);
     let _ = stdout.flush();
 }
 
