@@ -102,15 +102,18 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
     };
     // The termios and winsize arguments are `*const` on Linux but `*mut`
     // on the BSDs, macOS included. `*mut` weakens to `*const` implicitly,
-    // so passing mutable pointers is the spelling that compiles on both;
-    // `openpty` only reads them.
+    // so a mutable pointer is the one spelling that compiles on both.
+    // Coercing through an explicit binding rather than passing `&mut
+    // winsize` inline also keeps clippy from flagging the mutable
+    // reference as unnecessary on the platforms where it would be.
+    let winsize_ptr: *mut libc::winsize = &mut winsize;
     let rc = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut winsize,
+            winsize_ptr,
         )
     };
     assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
@@ -201,13 +204,22 @@ fn flood_then_send(master: RawFd, trailing: &[u8]) {
     // Best-effort: a pty input buffer can be smaller than this whole
     // payload, so short writes are expected and fine — the drain thread
     // on the other side keeps consuming, so this just paces itself.
+    //
+    // Writing to a pty master races the child by construction: once the
+    // slave side is gone, the write fails with EIO (macOS) or EPIPE. That
+    // means the app exited before it had read everything, which is
+    // absolutely something this test should catch — but panicking here
+    // reports it as "write to pty failed", which says nothing about the
+    // app. Stopping instead lets the caller's real assertions run, and
+    // they name the actual problem: died rather than quit cleanly, or
+    // never exited at all.
     let mut written = 0;
     while written < payload.len() {
         match file.write(&payload[written..]) {
             Ok(0) => break,
             Ok(n) => written += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => panic!("write to pty failed: {e}"),
+            Err(_) => break,
         }
     }
 }
