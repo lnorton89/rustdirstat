@@ -28,6 +28,18 @@ are attached to each [release](https://github.com/lnorton89/rustdirstat/releases
 Each contains both binaries and a `.sha256` companion file to verify the
 download against.
 
+### Nix
+
+```sh
+nix run github:lnorton89/rustdirstat            # terminal UI
+nix run github:lnorton89/rustdirstat#gui        # desktop GUI
+nix develop github:lnorton89/rustdirstat        # dev shell
+```
+
+The flake wraps the GUI binary with the X11/Wayland/Vulkan/GL paths it
+resolves at startup, so it runs without any further setup, and the dev
+shell sets the same paths for `cargo run`.
+
 ### Build from source
 
 Requires a recent stable Rust toolchain (install via [rustup](https://rustup.rs)).

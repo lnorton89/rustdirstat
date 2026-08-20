@@ -32,8 +32,22 @@ All three are clean on `main` and are enforced by CI
 way — a warning is a build failure there.
 
 The integration test in `tests/quit_stress.rs` is `#![cfg(unix)]` and
-compiles to nothing on Windows, so `cargo test` there runs the 38 unit
-tests only.
+compiles to nothing on Windows, so `cargo test` there runs the unit
+tests only. **A lot of code is platform-gated** — `platform.rs` has a
+whole `cfg(unix)` module, `util.rs` has a unix-only test module — so a
+clean run on one OS proves less than it looks. On Windows, WSL is the
+fast way to check the Linux side before pushing:
+
+```bash
+wsl -e bash -lc "cd /mnt/c/path/to/repo && CARGO_TARGET_DIR=\$HOME/rds-target cargo clippy --all-targets"
+```
+
+Use a separate `CARGO_TARGET_DIR` so the two toolchains do not fight
+over `target/`. A full debug build of this crate is ~5.6 GB; if disk is
+tight, `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` cuts that
+to ~1.2 GB without changing what is checked.
+
+There is also a Nix flake (`nix flake check`, `nix develop`).
 
 ## Rules this codebase actually enforces
 
