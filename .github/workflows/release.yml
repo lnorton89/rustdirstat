@@ -19,6 +19,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Equal to rust-toolchain.toml's channel, so a released binary is built
+  # with the toolchain the tests and lints ran under rather than with
+  # whatever `stable` happened to be on release day.
+  TOOLCHAIN: "1.98.0"
 
 jobs:
   draft:
@@ -80,8 +84,9 @@ jobs:
         with:
           ref: ${{ needs.draft.outputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2

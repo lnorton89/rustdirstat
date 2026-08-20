@@ -25,7 +25,7 @@ path = "src/bin/gui.rs"
 eframe = { version = "0.29", features = ["wgpu"] }
 egui = "0.29"
 egui_extras = "0.29"
-rfd = "0.14"
+rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.28"
 # use-dev-tty switches crossterm's Unix input backend from mio/epoll to a
@@ -47,13 +47,13 @@ anyhow = "1"
 trash = "5"
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-dirs = "5"
+toml = "1"
+dirs = "6"
 regex = "1"
-unicode-width = "0.1"
+unicode-width = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_Foundation",
     # Shell file-type icons for the extension list.

@@ -420,8 +420,10 @@ mod clipboard_tests {
 
         // Decoded back, it must be the same string.
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .filter_map(|pair| <[u8; 2]>::try_from(pair).ok())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .copied()
             .map(u16::from_le_bytes)
             .collect();
         let decoded = String::from_utf16(&units);

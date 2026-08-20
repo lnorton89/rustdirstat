@@ -13,6 +13,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Kept equal to rust-toolchain.toml's channel. The file is what rustup
+  # actually obeys; this is here so the action installs that toolchain up
+  # front rather than downloading it on the first cargo call.
+  TOOLCHAIN: "1.98.0"
 
 jobs:
   format:
@@ -20,8 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # No version here: rust-toolchain.toml pins it, so CI and a local
+      # checkout run the same rustfmt and the same clippy. `@stable`
+      # meant CI silently moved to each new release on its own.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -36,8 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.TOOLCHAIN }}
           components: clippy
 
       - uses: Swatinem/rust-cache@v2

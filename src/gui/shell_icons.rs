@@ -280,14 +280,18 @@ mod platform {
             return None;
         }
 
-        // GDI hands back BGRA; egui wants RGBA.
-        for chunk in pixels.chunks_exact_mut(4) {
+        // GDI hands back BGRA; egui wants RGBA. `as_chunks_mut`
+        // rather than `chunks_exact_mut`: the pixel stride is a
+        // constant, so the array length belongs in the type, and the
+        // remainder is then a separate value that cannot be forgotten.
+        let (pixel_chunks, _remainder) = pixels.as_chunks_mut::<4>();
+        for chunk in pixel_chunks {
             chunk.swap(0, 2);
         }
         // A fully transparent result means the shell had nothing useful
         // to draw, and an invisible icon is worse than the drawn
         // fallback.
-        if pixels.chunks_exact(4).all(|chunk| chunk[3] == 0) {
+        if pixels.as_chunks::<4>().0.iter().all(|chunk| chunk[3] == 0) {
             return None;
         }
         Some(IconPixels { rgba: pixels, size })
@@ -339,7 +343,11 @@ mod tests {
             "buffer does not match the dimensions it claims"
         );
         assert!(
-            icon.rgba.chunks_exact(4).any(|pixel| pixel[3] != 0),
+            icon.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 0),
             "every pixel was transparent, so nothing would be drawn"
         );
     }

@@ -1,0 +1,16 @@
+# The toolchain everything is built and linted with.
+#
+# Pinned, and pinned *here* rather than in CI, because rustup reads this
+# file for the directory — so a local `cargo clippy` and the one CI runs
+# are the same clippy. They were not: CI installs whatever `stable` is on
+# the day it runs, and a lint added in a new release (`chunks_exact_to_
+# as_chunks`, in 1.98) fired there while the older local toolchain could
+# not see it. A lint that does not exist locally cannot be caught locally.
+#
+# The cost of pinning is that new lints arrive when this line is bumped
+# rather than on their release day. That is the point: they arrive as a
+# deliberate change someone is looking at, instead of turning a green
+# build red on a morning nobody touched the code.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
