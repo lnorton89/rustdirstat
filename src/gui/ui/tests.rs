@@ -32,8 +32,8 @@ use crate::gui::app::{
     DirectoryColumn, ExtensionColumn, ExtensionRow, ExtensionSortMode, FileView, GuiApp,
 };
 use crate::gui::icons::Icon;
+use crate::model::SortMode;
 use crate::model::{Node, Tree};
-use crate::tui::SortMode;
 use anyhow::Context;
 use eframe::egui::{self, Color32};
 use std::path::PathBuf;
@@ -2792,4 +2792,62 @@ fn app_with_many_extensions() -> GuiApp {
             unreadable_count: 0,
         },
     })
+}
+
+/// Every column stays on screen however narrow the pane gets.
+///
+/// A narrow pane used to drop all but Name, Size and % of total. That is
+/// the wrong trade for this table: the columns are the reason to look at
+/// it, and one that vanishes cannot be scrolled to, resized, or even
+/// known to exist — it simply looks like the app lost them. Narrowing
+/// now scrolls instead, which is what the horizontal scroll area is for.
+#[test]
+fn no_column_disappears_when_the_pane_narrows() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+
+    let expected: Vec<&'static str> = app
+        .directory_column_order
+        .iter()
+        .map(|column| directory_column_label(*column))
+        .collect();
+
+    // Well below the 760px that used to trigger the compact set, and on
+    // down to a pane narrower than a single column.
+    for width in [1400.0, 900.0, 700.0, 500.0, 300.0, 120.0] {
+        probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
+        probe(&TEST_DIRECTORY_SCROLL).clear();
+        for _ in 0..4 {
+            render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), width));
+        }
+
+        let headers = probe(&TEST_DIRECTORY_HEADER_RECTS);
+        let drawn: Vec<&str> = headers
+            .iter()
+            .rev()
+            .take(expected.len())
+            .rev()
+            .map(|(label, _)| *label)
+            .collect();
+        assert_eq!(
+            drawn, expected,
+            "at {width:.0}px the table drew {drawn:?} instead of every column"
+        );
+
+        // And the ones past the edge are reachable rather than clipped.
+        let (content, viewport) = probe(&TEST_DIRECTORY_SCROLL)
+            .last()
+            .copied()
+            .unwrap_or_default();
+        if content > viewport + 1.0 {
+            continue;
+        }
+        assert!(
+            width > 700.0,
+            "at {width:.0}px the columns cannot all fit in {viewport:.0}px, so the table \
+             should report more content than viewport and give a scrollbar — it reported \
+             {content:.0}px"
+        );
+    }
 }

@@ -12,7 +12,7 @@
 
 use crate::gui::app::{DirectoryColumn, GuiApp, TreeRow};
 use crate::gui::icons::Icon;
-use crate::tui::SortMode;
+use crate::model::SortMode;
 use crate::util::{format_modified, human_bytes, thousands};
 use eframe::egui::{self, Align, Layout, Sense, Stroke};
 use egui_extras::{Column, TableBuilder};
@@ -32,18 +32,16 @@ pub(super) enum RowAction {
     Delete,
 }
 
-pub(super) fn visible_directory_columns(app: &GuiApp, compact: bool) -> Vec<DirectoryColumn> {
-    app.directory_column_order
-        .iter()
-        .copied()
-        .filter(|column| {
-            !compact
-                || matches!(
-                    column,
-                    DirectoryColumn::Name | DirectoryColumn::Size | DirectoryColumn::PercentTotal
-                )
-        })
-        .collect()
+/// The columns to draw: all of them, in the order the user arranged them.
+///
+/// A narrow pane used to drop everything but Name, Size and % of total.
+/// That is the wrong trade for this table — the columns are the reason
+/// to look at it, and a column that vanishes when the pane gets small
+/// cannot be scrolled to, resized, or even known to exist. Narrowing the
+/// pane now scrolls, which is what the horizontal scroll area below is
+/// for.
+pub(super) fn visible_directory_columns(app: &GuiApp) -> Vec<DirectoryColumn> {
+    app.directory_column_order.clone()
 }
 
 /// The narrowest a column may be squeezed before its contents stop being
@@ -296,25 +294,17 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
         let app = &*app;
         let rows = &app.visible_rows;
         let total = app.tree.root.effective_size(app.use_physical).max(1);
-        let compact = ui.available_width() < 760.0;
-        let columns = visible_directory_columns(app, compact);
+        let columns = visible_directory_columns(app);
         let minimum_width = directory_table_min_width(&columns, ui.spacing().item_spacing.x);
         // Dragging the treemap splitter left can squeeze this pane below
-        // even the compact column set. The table already refuses to go
-        // narrower than its columns need, so what was missing was not the
-        // width but any way to reach it: the overflow was simply clipped
-        // at the pane edge, which reads as the pane being broken rather
-        // than small. The scroll area is what turns that into a
-        // scrollbar. It costs nothing at ordinary widths, since it only
-        // scrolls when the content genuinely does not fit.
-        //
-        // Only when it is actually needed, though. `Column::remainder()`
-        // does not expand inside a horizontal scroll area — it settles at
-        // its minimum — so wrapping unconditionally left the table stuck
-        // at its natural width with dead space beside it on any pane
-        // wide enough to matter. Below the minimum there is no remainder
-        // to distribute anyway, which is exactly when the scroll area
-        // earns its place.
+        // what the columns need. The table refuses to go narrower than
+        // that, so what was missing was never the width but a way to
+        // reach it: the overflow was clipped at the pane edge, which
+        // reads as the pane being broken rather than small. The scroll
+        // area turns that into a scrollbar, and costs nothing at
+        // ordinary widths because the spacer column keeps the table
+        // exactly as wide as the pane until the columns genuinely need
+        // more.
         let available = ui.available_width();
 
         let mut render_table = |ui: &mut egui::Ui| {
