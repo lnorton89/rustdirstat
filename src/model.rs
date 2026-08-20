@@ -82,6 +82,41 @@ impl Node {
 }
 
 impl Tree {
+    /// An empty tree standing in for a real one: what the GUI shows while
+    /// the first scan is still running, and what a scanned tree is swapped
+    /// out for when it is being retired.
+    pub fn placeholder(root_path: PathBuf) -> Self {
+        let name = root_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| root_path.display().to_string());
+        let is_dir = root_path.is_dir();
+        Self {
+            root: Node {
+                name,
+                is_dir,
+                is_symlink: false,
+                size: 0,
+                physical_size: 0,
+                file_count: 0,
+                dir_count: 0,
+                modified: None,
+                children: Vec::new(),
+                error: false,
+                category: None,
+                ext_totals: if is_dir {
+                    vec![(0, 0, 0); Category::COUNT]
+                } else {
+                    Vec::new()
+                },
+                unreadable_count: 0,
+            },
+            root_path,
+            volume_free: None,
+            volume_total: None,
+        }
+    }
+
     /// Reconstruct the absolute path of the node reached by following
     /// `index_path` (child indices, root to leaf) from the root.
     pub fn path_for(&self, index_path: &[usize]) -> PathBuf {
