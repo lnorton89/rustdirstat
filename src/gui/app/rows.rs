@@ -43,6 +43,11 @@ impl TreeRow {
     /// so that adding a field to `TreeRow` fails to compile here until
     /// someone decides whether a change in it should count as the rows
     /// having changed.
+    ///
+    /// Debug-only, like its one caller: the cache check it serves does
+    /// not run in release, and the crate denies dead code, so a release
+    /// build fails on it otherwise.
+    #[cfg(debug_assertions)]
     fn same_as(&self, other: &Self) -> bool {
         let Self {
             path,
