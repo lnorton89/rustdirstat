@@ -42,12 +42,24 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
+
 use ratatui::Terminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// A ratatui backend whose errors `anyhow` will accept.
+///
+/// From 0.30 a `Backend` names its own error type rather than always
+/// using `io::Error`, so every generic function here has to say that it
+/// can be carried by `?` — which for `anyhow` means `Send + Sync` and no
+/// borrowed data. Stated once as an alias rather than repeated as a
+/// `where` clause on each of them.
+trait TerminalBackend: ratatui::backend::Backend<Error: Send + Sync + 'static> {}
+
+impl<B: ratatui::backend::Backend<Error: Send + Sync + 'static>> TerminalBackend for B {}
 
 /// True for Ctrl+C specifically. Raw mode disables the terminal's own
 /// SIGINT-on-Ctrl+C handling (that's what "raw" means — no line discipline
@@ -121,7 +133,7 @@ enum BrowseOutcome {
     Refresh,
 }
 
-fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, root: PathBuf) -> Result<()> {
+fn run_app<B: TerminalBackend>(terminal: &mut Terminal<B>, root: PathBuf) -> Result<()> {
     let mut restore_to: Option<PathBuf> = None;
     let config = crate::config::load();
 
@@ -149,7 +161,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, root: PathB
     }
 }
 
-fn scan_with_progress<B: ratatui::backend::Backend>(
+fn scan_with_progress<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
     root: &Path,
 ) -> Result<Option<crate::model::Tree>> {
@@ -193,10 +205,7 @@ fn scan_with_progress<B: ratatui::backend::Backend>(
 // them would break on every crossterm upgrade. See the matching note on
 // `App::handle_key`.
 #[expect(clippy::wildcard_enum_match_arm, reason = "see the comment above")]
-fn browse<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-) -> Result<BrowseOutcome> {
+fn browse<B: TerminalBackend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<BrowseOutcome> {
     terminal.draw(|f| ui::draw(f, app))?;
     loop {
         // Drain every event already queued before redrawing, instead of
@@ -308,7 +317,7 @@ fn browse<B: ratatui::backend::Backend>(
 /// does: `thread::scope` won't return until the worker finishes, so cancel
 /// instead sets `DupProgress::cancelled`, which the hashing loop checks
 /// between files to wind down quickly.
-fn run_duplicate_scan<B: ratatui::backend::Backend>(
+fn run_duplicate_scan<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
     tree: &crate::model::Tree,
 ) -> Result<Option<crate::duplicates::DupScan>> {
