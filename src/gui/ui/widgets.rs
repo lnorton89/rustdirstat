@@ -101,7 +101,13 @@ pub(super) fn tool_enabled(
         egui::Rect::from_center_size(response.rect.center(), Vec2::splat(18.0)),
         color,
     );
-    response.on_hover_text(tip)
+    // Both, deliberately. egui shows nothing on hover for a disabled
+    // widget unless asked separately, and these buttons are icon-only —
+    // so a greyed-out one was a picture with no name and no way to find
+    // out what it was, which is exactly when the tooltip matters most.
+    response
+        .on_hover_text(tip)
+        .on_disabled_hover_text(format!("{tip} (unavailable right now)"))
 }
 
 pub(super) fn compact_icon_button(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {
@@ -353,6 +359,10 @@ pub(super) fn settings_group(
         });
 }
 
+/// Width of the strip at a header's right edge left to the column
+/// resizer rather than claimed for click-to-sort and drag-to-reorder.
+pub(super) const HEADER_RESIZE_MARGIN: f32 = 8.0;
+
 pub(super) fn sortable_header(
     ui: &mut egui::Ui,
     label: &'static str,
@@ -367,7 +377,21 @@ pub(super) fn sortable_header(
         TextStyle::Button,
     );
     let size = ui.available_size_before_wrap();
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    // The header fills the column, but it must not *sense* the whole of
+    // it: `egui_extras` puts the column's resize handle on the boundary
+    // at the right-hand edge, and a header that senses drags across its
+    // full width swallows every one of those drags as a reorder — which
+    // is why resizing stopped working the moment headers became
+    // draggable. Leaving the last few pixels unclaimed gives the
+    // resizer its grab strip back.
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let mut draggable = rect;
+    draggable.max.x = (draggable.max.x - HEADER_RESIZE_MARGIN).max(draggable.min.x);
+    let response = ui.interact(
+        draggable,
+        ui.id().with(("sortable_header", label)),
+        Sense::click_and_drag(),
+    );
     if ui.is_rect_visible(rect) {
         let fill = if direction.is_some() {
             ACCENT_MUTED_COLOR

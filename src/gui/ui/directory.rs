@@ -254,10 +254,19 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
         // `set_min_width` restates the floor independently of how the
         // column specs happen to be written, so the guarantee does not
         // quietly depend on `Name` keeping its `at_least`.
+        // Width the table should lay out to: the pane when it fits, the
+        // columns' minimum when it does not.
+        let table_width = ui.available_width().max(minimum_width);
         let scroll = egui::ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_min_width(minimum_width);
+                // `set_width`, not `set_min_width`. Inside a horizontal
+                // scroll area the available width is effectively
+                // unbounded, and `Column::remainder()` will happily take
+                // all of it — which pushed every column after `Name` off
+                // the right-hand side and out of reach. Pinning both ends
+                // is what keeps the remainder column honest.
+                ui.set_width(table_width);
                 let mut table = TableBuilder::new(ui)
                     .striped(true)
                     .resizable(true)

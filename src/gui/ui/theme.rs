@@ -42,6 +42,13 @@ pub(super) fn apply_style(ctx: &egui::Context) {
     style.spacing.button_padding = Vec2::new(11.0, 7.0);
     style.spacing.menu_margin = Margin::same(8.0);
     style.spacing.indent = 18.0;
+    // Solid, not floating. egui's default scrollbars are invisible until
+    // the pointer is over them and overlay the content when they appear,
+    // so a table with columns past the edge looked like it had simply
+    // lost them — there was nothing on screen to say the rest was one
+    // scroll away. Solid bars are always drawn and take up their own
+    // space, which is what a desktop app is expected to do.
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
     style.spacing.interact_size = Vec2::new(40.0, 32.0);
     // This is an application UI, not a document viewer. Selectable labels
     // steal pointer drags/clicks from table rows and make row selection feel

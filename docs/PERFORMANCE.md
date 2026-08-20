@@ -113,22 +113,56 @@ The traversal is now level-order:
 Level order also happens to give the correct paint order for free —
 children are emitted after the parents they paint over.
 
-### Truthful areas
+### Which children get a tile
 
-Children past `MAX_CHILDREN_PER_LEVEL` (80) are folded into one aggregate
-"N more items" tile rather than dropped. Dropping them is not a display
-shortcut, it is a lie: the squarify pass normalizes against the sizes it
-is handed, so discarding the tail makes the survivors expand to fill area
-that is not theirs. A directory whose top 80 files are 40% of its bytes
-would draw them at 100%.
+By projected area, not by rank. A child gets its own tile when its share
+of the parent works out to at least `MIN_TILE_AREA_PX`; the rest fold
+into one aggregate "N more items" tile.
+
+This started life as a fixed "first 80 children" cap, which asked the
+wrong question. Whether a child is worth drawing depends on how much room
+it would get, not on where it sorted by size — a folder of 190 chunky
+subdirectories got 80 tiles and one grey slab covering most of the panel,
+while a folder of 30 specks was drawn in detail nobody could see.
+`MAX_CHILDREN_PER_LEVEL` survives at 2048 purely so a pathological
+directory cannot make one level allocate without bound.
+
+Folding rather than dropping matters: the squarify pass normalizes
+against the sizes it is handed, so discarding the tail makes the
+survivors expand to fill area that is not theirs. A directory whose top
+80 files are 40% of its bytes would draw them at 100%.
+
+A directory whose children are *all* below the floor is left as its own
+tile instead. The parent already represents exactly those bytes, and a
+grey slab covering the identical rect says strictly less.
+
+### Geometry has to stay inside its parent
+
+Pixel dimensions round **down**, and the label strip is a whole number of
+pixels. Rounding to nearest let a child come out fractionally larger than
+the rect it was given, so it extended past its parent, painted over a
+sibling, and credited that sibling's pixels to the wrong directory — an
+error that grew with depth. Rounding down leaves an invisible hairline
+instead. `no_tile_ever_escapes_the_panel_or_its_parent` sweeps a range of
+panel sizes and checks this.
+
+The label strip is measured from the font the renderer will actually draw
+with and passed into the layout, rather than hard-coded. A strip shorter
+than the text means the children painted into the rest of the tile cover
+the bottom of their own parent's name, which showed up as descenders
+being sliced off every `g` and `p`. That is also why the strip is part of
+the treemap cache key.
 
 ### Render cost
 
-Each tile is a 5×5 cushion-shaded mesh — 25 vertices, 32 triangles — which
-at 24,000 tiles would be 600k vertices per frame. Tiles under
-`MIN_CUSHION_PX` on a side get a flat rect (4 vertices, 2 triangles)
-instead; the gradient spans too few pixels to be visible at that size
-anyway.
+Each tile is a 5×5 cushion-shaded mesh — 25 vertices, 32 triangles —
+which at `MAX_TILES` would be a million vertices per frame. Two things
+keep that in hand: tiles under `MIN_CUSHION_PX` on a side get a flat rect
+(4 vertices, 2 triangles), since the gradient spans too few pixels to see
+anyway, and tiles under `MIN_GRID_PX` get no grid outline. The outlines
+were the worse of the two — a 1px border on each side of a 3px tile
+leaves one pixel of colour, so the dense regions rendered as black mush
+*and* paid a stroke per tile for it.
 
 ## 4. Things that are still O(tree), and when they run
 

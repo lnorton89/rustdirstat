@@ -33,12 +33,12 @@ download against.
 ```sh
 nix run github:lnorton89/rustdirstat            # terminal UI
 nix run github:lnorton89/rustdirstat#gui        # desktop GUI
-nix develop github:lnorton89/rustdirstat        # dev shell
 ```
 
 The flake wraps the GUI binary with the X11/Wayland/Vulkan/GL paths it
-resolves at startup, so it runs without any further setup, and the dev
-shell sets the same paths for `cargo run`.
+resolves at startup, so it runs without any further setup. See
+[`NIX.md`](NIX.md) for installing it into a profile, adding it as a flake
+input, and the dev shell.
 
 ### Build from source
 

@@ -47,7 +47,9 @@ over `target/`. A full debug build of this crate is ~5.6 GB; if disk is
 tight, `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` cuts that
 to ~1.2 GB without changing what is checked.
 
-There is also a Nix flake (`nix flake check`, `nix develop`).
+There is also a Nix flake — `nix flake check` and `nix develop`, with
+[`NIX.md`](NIX.md) covering installation. If WSL has Nix, `nix flake
+check` there is another way to exercise the Linux build.
 
 ## Rules this codebase actually enforces
 

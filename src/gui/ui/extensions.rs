@@ -235,11 +235,15 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     // Same story as the directory table: this panel is resizable, and
     // below a certain width every column but the first was simply clipped
     // away with no scrollbar and no way to reach them.
+    let table_width = ui.available_width().max(minimum_width);
     egui::ScrollArea::horizontal()
         .id_salt("extension_hscroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.set_min_width(minimum_width);
+            // See the directory table: `set_width` rather than
+            // `set_min_width`, or `Column::remainder()` takes the scroll
+            // area's unbounded width and shoves the rest out of view.
+            ui.set_width(table_width);
             let mut table = TableBuilder::new(ui)
                 .striped(true)
                 .vscroll(true)
