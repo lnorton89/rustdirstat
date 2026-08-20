@@ -70,11 +70,15 @@ pub enum Icon {
     Extensions,
     Export,
     Help,
+    /// Checkmark for menu items that toggle a setting on and off.
+    Check,
+    /// Filled dot for menu items that pick one of a set of choices.
+    Dot,
 }
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 28] = [
         Self::App,
         Self::Folder,
         Self::FolderOpen,
@@ -101,6 +105,8 @@ impl Icon {
         Self::Extensions,
         Self::Export,
         Self::Help,
+        Self::Check,
+        Self::Dot,
     ];
 
     pub fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
@@ -271,6 +277,12 @@ impl Icon {
                 line(&[(8.0, 1.5), (8.0, 10.0)]);
                 line(&[(4.8, 7.0), (8.0, 10.2), (11.2, 7.0)]);
             }
+            Self::Check => {
+                line(&[(3.0, 8.4), (6.6, 12.0), (13.0, 4.4)]);
+            }
+            Self::Dot => {
+                painter.circle_filled(p(8.0, 8.0), rect.width() * 0.19, color);
+            }
         }
     }
 }
@@ -293,7 +305,16 @@ mod tests {
 
     #[test]
     fn icon_catalog_has_no_missing_variants() {
-        assert_eq!(Icon::ALL.len(), 26);
+        // `ALL` is the list the rendering test sweeps, so a variant listed
+        // twice silently shrinks that coverage by one. The length is
+        // pinned by the array type; what needs asserting is that every
+        // slot holds a different icon.
+        for (i, icon) in Icon::ALL.iter().enumerate() {
+            assert!(
+                !Icon::ALL[..i].contains(icon),
+                "{icon:?} appears twice in Icon::ALL"
+            );
+        }
     }
 
     #[test]
