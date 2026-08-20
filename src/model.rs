@@ -81,6 +81,38 @@ impl Node {
     }
 }
 
+/// Frees a subtree without recursing once per level.
+///
+/// The derived drop walks `children` recursively, so a deep enough tree
+/// overflows the stack and takes the process down — while *freeing*
+/// memory, which is not a failure anyone expects to have to handle. The
+/// GUI already moves this work off the UI thread (`drop_in_background`),
+/// but that only changes which thread's stack runs out.
+///
+/// Costs one allocation for a whole tree, not one per node: the
+/// outermost drop takes its children and drains them here, so by the
+/// time any node below it is dropped its own `children` is already empty
+/// and it returns immediately. That matters — a drive-sized scan is
+/// millions of nodes, and this runs on every one of them.
+impl Drop for Node {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let mut pending = vec![std::mem::take(&mut self.children)];
+        while let Some(mut level) = pending.pop() {
+            while let Some(mut node) = level.pop() {
+                let children = std::mem::take(&mut node.children);
+                if !children.is_empty() {
+                    pending.push(children);
+                }
+                // `node` drops here with no children of its own, so the
+                // early return above ends it.
+            }
+        }
+    }
+}
+
 impl Tree {
     /// An empty tree standing in for a real one: what the GUI shows while
     /// the first scan is still running, and what a scanned tree is swapped
