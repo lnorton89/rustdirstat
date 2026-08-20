@@ -26,7 +26,7 @@ use crate::util::{format_modified, human_bytes, thousands};
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, Vec2};
 
 use super::modal::{
-    callout, confirm_card, fill_width, page_link, separator, ConfirmKind, ModalPage,
+    callout, confirm_card, fill_width, page_link, separator, ConfirmKind, ModalPage, Tone,
 };
 #[cfg(test)]
 use super::probes::*;
@@ -330,9 +330,7 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
         // the feature was unavailable was a failure message after a click.
         callout(
             ui,
-            palette.warning,
-            palette.warning_bg,
-            palette.warning_text,
+            Tone::Warning,
             Icon::Warning,
             "These are Windows utilities. Nothing on this page can run on this system.",
         );
@@ -644,14 +642,7 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
         ui.label(RichText::new(&name).strong());
         ui.add_space(8.0);
         if permanent {
-            callout(
-                ui,
-                palette.danger,
-                palette.danger_bg,
-                palette.danger_text,
-                Icon::Warning,
-                "This cannot be undone.",
-            );
+            callout(ui, Tone::Danger, Icon::Warning, "This cannot be undone.");
         } else {
             ui.label(
                 RichText::new("The item can be restored from the Recycle Bin.")
@@ -733,22 +724,13 @@ fn draw_tool_confirm(app: &mut GuiApp, ctx: &egui::Context, index: usize, openin
         ui.label(tool.description);
         ui.add_space(10.0);
         if tool.irreversible {
-            callout(
-                ui,
-                palette.danger,
-                palette.danger_bg,
-                palette.danger_text,
-                Icon::Warning,
-                "This cannot be undone.",
-            );
+            callout(ui, Tone::Danger, Icon::Warning, "This cannot be undone.");
             ui.add_space(6.0);
         }
         if tool.needs_admin {
             callout(
                 ui,
-                palette.warning,
-                palette.warning_bg,
-                palette.warning_text,
+                Tone::Warning,
                 Icon::Info,
                 "Needs an elevated session. Without one it will fail immediately.",
             );

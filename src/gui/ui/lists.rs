@@ -23,7 +23,48 @@ use super::probes::*;
 use super::theme::*;
 use super::widgets::*;
 
-pub(super) fn draw_largest_files(app: &mut GuiApp, ui: &mut egui::Ui) {
+/// Which of the two flat file views a [`path_size_date_table`] is
+/// drawing.
+///
+/// Everything the two differ by hangs off this: the rows it reads, the
+/// hover-animation id namespace, and which set of rects the test probes
+/// record. They used to differ by being two copies of the same table.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FlatView {
+    LargestFiles,
+    SearchResults,
+}
+
+impl FlatView {
+    /// Namespaces the per-row hover animation, so a row in one view does
+    /// not inherit the hover ramp of the row that sat at the same index
+    /// in the other.
+    fn id_prefix(self) -> &'static str {
+        match self {
+            FlatView::LargestFiles => "largest_row",
+            FlatView::SearchResults => "search_row",
+        }
+    }
+}
+
+/// The Path / Size / Last change table both flat views are.
+///
+/// Takes `app` immutably and hands the clicked row back rather than
+/// selecting it, because the table borrows `app` for as long as it is
+/// being built.
+///
+/// The size column used to be 90..=125 in one copy and 80..=120 in the
+/// other. Nothing chose that; it is what two copies of a layout drift
+/// into.
+pub(super) fn path_size_date_table(
+    app: &GuiApp,
+    ui: &mut egui::Ui,
+    view: FlatView,
+) -> Option<Vec<usize>> {
+    let count = match view {
+        FlatView::LargestFiles => app.largest_files.len(),
+        FlatView::SearchResults => app.search.results.len(),
+    };
     let mut selected = None;
     TableBuilder::new(ui)
         .striped(true)
@@ -38,46 +79,78 @@ pub(super) fn draw_largest_files(app: &mut GuiApp, ui: &mut egui::Ui) {
         )
         .column(Column::auto().range(90.0..=125.0).clip(true))
         .column(Column::auto().range(110.0..=175.0).clip(true))
-        .header(TABLE_HEADER_HEIGHT, |mut h| {
-            h.col(|ui| {
-                table_header_label(ui, "Path");
-            });
-            h.col(|ui| {
-                table_header_label(ui, "Size");
-            });
-            h.col(|ui| {
-                table_header_label(ui, "Last change");
-            });
+        .header(TABLE_HEADER_HEIGHT, |mut header| {
+            header.col(|ui| table_header_label(ui, "Path"));
+            header.col(|ui| table_header_label(ui, "Size"));
+            header.col(|ui| table_header_label(ui, "Last change"));
         })
         .body(|mut body| {
             let painter = body.ui_mut().painter().clone();
-            body.rows(TABLE_ROW_HEIGHT, app.largest_files.len(), |mut row| {
-                let file = &app.largest_files[row.index()];
-                let path = file.index_path.clone();
+            body.rows(TABLE_ROW_HEIGHT, count, |mut row| {
+                let index = row.index();
+                let (path, size, physical_size, modified) = match view {
+                    FlatView::LargestFiles => {
+                        let Some(file) = app.largest_files.get(index) else {
+                            return;
+                        };
+                        (
+                            file.index_path.clone(),
+                            file.size,
+                            file.physical_size,
+                            file.modified,
+                        )
+                    }
+                    FlatView::SearchResults => {
+                        let Some(hit) = app.search.results.get(index) else {
+                            return;
+                        };
+                        (
+                            hit.index_path.clone(),
+                            hit.size,
+                            hit.physical_size,
+                            hit.modified,
+                        )
+                    }
+                };
                 row.set_selected(app.selected_path.as_ref() == Some(&path));
                 row.col(|ui| {
                     ui.label(crate::util::display_path(&app.tree.path_for(&path)));
                 });
                 row.col(|ui| {
                     ui.label(human_bytes(if app.use_physical {
-                        file.physical_size
+                        physical_size
                     } else {
-                        file.size
+                        size
                     }));
                 });
                 row.col(|ui| {
-                    ui.label(format_modified(file.modified));
+                    ui.label(format_modified(modified));
                 });
                 let response = row.response();
-                row_hover_edge(&painter, &response, egui::Id::new(("largest_row", &path)));
+                row_hover_edge(
+                    &painter,
+                    &response,
+                    egui::Id::new((view.id_prefix(), &path)),
+                );
                 #[cfg(test)]
-                probe(&TEST_LARGEST_ROW_RECTS).push((row.index(), response.rect));
+                match view {
+                    FlatView::LargestFiles => {
+                        probe(&TEST_LARGEST_ROW_RECTS).push((index, response.rect));
+                    }
+                    FlatView::SearchResults => {
+                        probe(&TEST_SEARCH_ROW_RECTS).push((path.clone(), response.rect));
+                    }
+                }
                 if response.clicked() {
                     selected = Some(path);
                 }
-            })
+            });
         });
-    if let Some(path) = selected {
+    selected
+}
+
+pub(super) fn draw_largest_files(app: &mut GuiApp, ui: &mut egui::Ui) {
+    if let Some(path) = path_size_date_table(app, ui, FlatView::LargestFiles) {
         app.select_path(path);
     }
 }
@@ -133,54 +206,7 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
         });
         return;
     }
-    let mut selected = None;
-    TableBuilder::new(ui)
-        .striped(true)
-        .vscroll(true)
-        .resizable(true)
-        .sense(Sense::click())
-        .column(
-            Column::remainder()
-                .at_least(220.0)
-                .clip(true)
-                .resizable(false),
-        )
-        .column(Column::auto().range(80.0..=120.0).clip(true))
-        .column(Column::auto().range(110.0..=175.0).clip(true))
-        .header(TABLE_HEADER_HEIGHT, |mut header| {
-            header.col(|ui| table_header_label(ui, "Path"));
-            header.col(|ui| table_header_label(ui, "Size"));
-            header.col(|ui| table_header_label(ui, "Last change"));
-        })
-        .body(|mut body| {
-            let painter = body.ui_mut().painter().clone();
-            body.rows(TABLE_ROW_HEIGHT, app.search.results.len(), |mut row| {
-                let hit = &app.search.results[row.index()];
-                let path = hit.index_path.clone();
-                row.set_selected(app.selected_path.as_ref() == Some(&path));
-                row.col(|ui| {
-                    ui.label(crate::util::display_path(&app.tree.path_for(&path)));
-                });
-                row.col(|ui| {
-                    ui.label(human_bytes(if app.use_physical {
-                        hit.physical_size
-                    } else {
-                        hit.size
-                    }));
-                });
-                row.col(|ui| {
-                    ui.label(format_modified(hit.modified));
-                });
-                let response = row.response();
-                row_hover_edge(&painter, &response, egui::Id::new(("search_row", &path)));
-                #[cfg(test)]
-                probe(&TEST_SEARCH_ROW_RECTS).push((path.clone(), response.rect));
-                if response.clicked() {
-                    selected = Some(path);
-                }
-            });
-        });
-    if let Some(path) = selected {
+    if let Some(path) = path_size_date_table(app, ui, FlatView::SearchResults) {
         app.select_path(path);
     }
 }

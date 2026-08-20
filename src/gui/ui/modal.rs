@@ -638,14 +638,31 @@ pub(super) fn confirm_card(
 
 /// A callout block: a tinted panel with an accent edge, used for the
 /// "this cannot be undone" and "needs administrator" notes.
-pub(super) fn callout(
-    ui: &mut egui::Ui,
-    tone: Color32,
-    fill: Color32,
-    text_color: Color32,
-    icon: Icon,
-    text: &str,
-) {
+/// How loud a [`callout`] is.
+///
+/// A callout needs three colours that belong together — a border, a
+/// background, and body text — and every call site used to name all
+/// three. Nothing stopped one pairing `danger` with `warning_bg`, and
+/// nothing would have looked wrong enough to notice.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tone {
+    Danger,
+    Warning,
+}
+
+impl Tone {
+    /// (border, background, text) from the active palette.
+    fn colors(self) -> (Color32, Color32, Color32) {
+        let palette = palette();
+        match self {
+            Tone::Danger => (palette.danger, palette.danger_bg, palette.danger_text),
+            Tone::Warning => (palette.warning, palette.warning_bg, palette.warning_text),
+        }
+    }
+}
+
+pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
+    let (tone, fill, text_color) = tone.colors();
     Frame::none()
         .fill(fill)
         .rounding(egui::Rounding::same(7.0))
