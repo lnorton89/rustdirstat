@@ -73,7 +73,7 @@ mod platform {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::Graphics::Gdi::{
         DeleteObject, GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-        DIB_RGB_COLORS, HGDIOBJ,
+        DIB_RGB_COLORS, HDC, HGDIOBJ, RGBQUAD,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
     use windows_sys::Win32::System::Com::{
@@ -175,6 +175,31 @@ mod platform {
         (!info.hIcon.is_null()).then(|| OwnedIcon(info.hIcon))
     }
 
+    /// Owns the screen device context for as long as it is needed.
+    ///
+    /// The other two handles in this module already release through
+    /// `Drop`; this one was released by a bare call, which only stayed
+    /// correct for as long as nobody put a `?` or an early `return`
+    /// between the two lines. Making it the same shape removes the
+    /// question.
+    struct ScreenDc(HDC);
+
+    impl ScreenDc {
+        fn get() -> Option<Self> {
+            // SAFETY: a null window handle asks for the screen DC, which
+            // is the documented way to get one for a scratch conversion.
+            let dc = unsafe { GetDC(std::ptr::null_mut::<HWND>() as HWND) };
+            (!dc.is_null()).then_some(Self(dc))
+        }
+    }
+
+    impl Drop for ScreenDc {
+        fn drop(&mut self) {
+            // SAFETY: releasing the DC this value owns, exactly once.
+            unsafe { ReleaseDC(std::ptr::null_mut::<HWND>() as HWND, self.0) };
+        }
+    }
+
     /// Copies an icon's colour bitmap out as straight RGBA.
     fn decode(icon: &OwnedIcon) -> Option<IconPixels> {
         let mut icon_info = MaybeUninit::<ICONINFO>::zeroed();
@@ -194,29 +219,45 @@ mod platform {
         }
 
         let size = ICON_SIZE;
-        let mut header: BITMAPINFO = unsafe { std::mem::zeroed() };
-        header.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: size as i32,
-            // Negative height asks GDI for a top-down bitmap, matching
-            // the row order egui expects and saving a flip.
-            biHeight: -(size as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
-            ..unsafe { std::mem::zeroed() }
+        // Written out field by field rather than zeroed through
+        // `unsafe { mem::zeroed() }`. Every field here is an integer, so
+        // there is nothing about the all-zero pattern that needs an
+        // unsafe block to vouch for it — and reaching for one anyway
+        // makes `unsafe` look like a way to save typing, which is
+        // precisely the habit the rest of this module is trying not to
+        // build.
+        let mut header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: size as i32,
+                // Negative height asks GDI for a top-down bitmap,
+                // matching the row order egui expects and saving a flip.
+                biHeight: -(size as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [RGBQUAD {
+                rgbBlue: 0,
+                rgbGreen: 0,
+                rgbRed: 0,
+                rgbReserved: 0,
+            }],
         };
 
         let mut pixels = vec![0_u8; size * size * 4];
-        // SAFETY: a null window handle asks for the screen DC, which is
-        // the documented way to get one for a scratch conversion.
-        let screen = unsafe { GetDC(std::ptr::null_mut::<HWND>() as HWND) };
+        let screen = ScreenDc::get()?;
         // SAFETY: `color.0` is a live bitmap, `pixels` has exactly
         // `biWidth * |biHeight| * 4` bytes as described by `header`, and
-        // `screen` is a valid DC for the duration of the call.
+        // `screen` owns a valid DC for the duration of the call.
         let copied = unsafe {
             GetDIBits(
-                screen,
+                screen.0,
                 color.0 as _,
                 0,
                 size as u32,
@@ -225,8 +266,7 @@ mod platform {
                 DIB_RGB_COLORS,
             )
         };
-        // SAFETY: releasing the DC just acquired, once, on every path.
-        unsafe { ReleaseDC(std::ptr::null_mut::<HWND>() as HWND, screen) };
+        drop(screen);
         if copied == 0 {
             return None;
         }
