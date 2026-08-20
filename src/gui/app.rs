@@ -225,6 +225,41 @@ pub(super) struct TreeRow {
     pub symlink: bool,
 }
 
+impl TreeRow {
+    /// Field-by-field equality, used only by the cache check.
+    ///
+    /// Written as an exhaustive destructure rather than `#[derive(PartialEq)]`
+    /// so that adding a field to `TreeRow` fails to compile here until
+    /// someone decides whether a change in it should count as the rows
+    /// having changed.
+    fn same_as(&self, other: &Self) -> bool {
+        let Self {
+            path,
+            depth,
+            name,
+            is_dir,
+            size,
+            parent_size,
+            files,
+            dirs,
+            modified,
+            unreadable,
+            symlink,
+        } = self;
+        path == &other.path
+            && depth == &other.depth
+            && name == &other.name
+            && is_dir == &other.is_dir
+            && size == &other.size
+            && parent_size == &other.parent_size
+            && files == &other.files
+            && dirs == &other.dirs
+            && modified == &other.modified
+            && unreadable == &other.unreadable
+            && symlink == &other.symlink
+    }
+}
+
 /// Everything the flattened row list depends on.
 ///
 /// This is compared against per frame rather than invalidated by hand at
@@ -1149,9 +1184,22 @@ impl GuiApp {
             expanded: expanded_fingerprint(&self.expanded),
         };
         if self.visible_rows_key.as_ref() == Some(&key) {
+            debug_assert!(
+                self.cached_rows_are_current(),
+                "the row cache reported a hit but the rows it holds are not the rows \
+                 this state produces — some field the row list depends on is missing \
+                 from `RowKey`"
+            );
             return;
         }
 
+        self.visible_rows = self.build_visible_rows();
+        self.visible_rows_key = Some(key);
+    }
+
+    /// Builds the flattened row list from current state, ignoring the
+    /// cache entirely.
+    fn build_visible_rows(&self) -> Vec<TreeRow> {
         let mut rows = Vec::new();
         let root_name = crate::util::display_path(&self.tree.root_path);
         push_tree_rows(
@@ -1163,8 +1211,41 @@ impl GuiApp {
             self,
             &mut rows,
         );
-        self.visible_rows = rows;
-        self.visible_rows_key = Some(key);
+        rows
+    }
+
+    /// Whether the cached rows match what current state would produce.
+    ///
+    /// `RowKey` is compared against per frame rather than invalidated by
+    /// hand, which cannot go stale for the fields it *contains* — but
+    /// nothing stopped a new `GuiApp` field affecting the row list and
+    /// never being added to the key, and the symptom of that is the
+    /// table quietly showing rows from before the change. Debug builds
+    /// therefore check the cache against a fresh build whenever it
+    /// claims a hit, which turns "silently stale" into a failed
+    /// assertion the first time anyone runs the app or the tests.
+    ///
+    /// Bounded by row count, not tree size: the row list only covers
+    /// expanded directories, so this is normally a few hundred rows. The
+    /// cap is there for the case where someone expands a directory with
+    /// a million entries in it, where a per-frame rebuild would be felt.
+    #[cfg(debug_assertions)]
+    fn cached_rows_are_current(&self) -> bool {
+        const VERIFY_LIMIT: usize = 5_000;
+        if self.visible_rows.len() > VERIFY_LIMIT {
+            return true;
+        }
+        let fresh = self.build_visible_rows();
+        fresh.len() == self.visible_rows.len()
+            && fresh
+                .iter()
+                .zip(&self.visible_rows)
+                .all(|(a, b)| a.same_as(b))
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn cached_rows_are_current(&self) -> bool {
+        true
     }
 }
 
@@ -1360,10 +1441,118 @@ impl eframe::App for GuiApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        extension_label, Category, FileView, GuiApp, PaneOrientation, PendingDelete, ViewOptions,
+        extension_label, Category, FileView, GuiApp, Node, PaneOrientation, PendingDelete, Tree,
+        ViewOptions,
     };
     use crate::tui::SortMode;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    /// A tree whose logical and physical sizes differ, so switching size
+    /// mode changes what every row reads.
+    fn app_with_differing_sizes() -> GuiApp {
+        fn file(name: &str, size: u64, physical: u64) -> Node {
+            Node {
+                name: name.to_owned(),
+                is_dir: false,
+                is_symlink: false,
+                size,
+                physical_size: physical,
+                file_count: 1,
+                dir_count: 0,
+                modified: None,
+                children: Vec::new(),
+                error: false,
+                category: Some(Category::NoExtension),
+                ext_totals: Vec::new(),
+                unreadable_count: 0,
+            }
+        }
+        let mut totals = vec![(0, 0, 0); Category::COUNT];
+        totals[Category::NoExtension.index()] = (100, 4096, 1);
+        GuiApp::new(Tree {
+            root_path: PathBuf::from("root"),
+            volume_free: None,
+            volume_total: None,
+            root: Node {
+                name: "root".to_owned(),
+                is_dir: true,
+                is_symlink: false,
+                size: 100,
+                physical_size: 4096,
+                file_count: 1,
+                dir_count: 0,
+                modified: None,
+                children: vec![file("sparse.bin", 100, 4096)],
+                error: false,
+                category: None,
+                ext_totals: totals,
+                unreadable_count: 0,
+            },
+        })
+    }
+
+    /// Changing something the rows are drawn from rebuilds them.
+    ///
+    /// This is the test that drives the cache's own debug check: with a
+    /// row input missing from `RowKey`, the second `refresh_visible_rows`
+    /// takes the early return, the check compares the cached rows against
+    /// a fresh build, and the mismatch trips the assertion. Without a
+    /// test that actually flips an input, that guard never runs.
+    #[test]
+    fn switching_size_mode_rebuilds_the_row_cache() {
+        let mut app = app_with_differing_sizes();
+        app.expanded.insert(Vec::new());
+
+        app.use_physical = false;
+        app.refresh_visible_rows();
+        let logical: Vec<u64> = app.visible_rows.iter().map(|row| row.size).collect();
+
+        app.use_physical = true;
+        app.refresh_visible_rows();
+        let physical: Vec<u64> = app.visible_rows.iter().map(|row| row.size).collect();
+
+        assert_ne!(
+            logical, physical,
+            "the rows should be rebuilt when the size mode changes, not served from cache"
+        );
+        assert!(
+            physical.contains(&4096),
+            "physical mode should show the allocated size: {physical:?}"
+        );
+    }
+
+    /// Same again for sort order and for expanding a directory, so each
+    /// field of `RowKey` is covered by something that exercises it.
+    #[test]
+    fn sorting_and_expanding_both_rebuild_the_row_cache() {
+        let mut app = app_with_differing_sizes();
+        app.expanded.insert(Vec::new());
+
+        app.refresh_visible_rows();
+        let before = app.visible_rows.len();
+
+        app.expanded.clear();
+        app.refresh_visible_rows();
+        assert_ne!(
+            app.visible_rows.len(),
+            before,
+            "collapsing the root should change how many rows there are"
+        );
+
+        app.expanded.insert(Vec::new());
+        app.refresh_visible_rows();
+        assert_eq!(
+            app.visible_rows.len(),
+            before,
+            "and expanding it again should bring them back"
+        );
+
+        app.sort = SortMode::NameAsc;
+        app.refresh_visible_rows();
+        app.sort = SortMode::SizeDesc;
+        app.refresh_visible_rows();
+    }
 
     #[test]
     fn extension_labels_match_windirstat_style() {

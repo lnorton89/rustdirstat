@@ -165,18 +165,53 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
     DupScan { groups, skipped }
 }
 
+/// Buckets every file in the tree by size, iteratively.
+///
+/// One frame per directory being walked, with the path and index path
+/// pushed and popped in step with them — so the depth of the tree being
+/// scanned costs heap rather than call stack. It used to recurse per
+/// level, which put a user-chosen depth on the stack in the one place
+/// that walks a whole drive twice.
 fn collect_by_size(
     node: &Node,
     path: &mut PathBuf,
     index_path: &mut Vec<usize>,
     out: &mut HashMap<u64, Vec<SizeCandidate>>,
 ) {
-    for (i, child) in node.children.iter().enumerate() {
-        index_path.push(i);
+    struct Frame<'a> {
+        node: &'a Node,
+        next: usize,
+    }
+
+    let mut stack = vec![Frame { node, next: 0 }];
+    while let Some(top) = stack.len().checked_sub(1) {
+        let Some(frame) = stack.get_mut(top) else {
+            break;
+        };
+        let parent = frame.node;
+        let Some(child) = parent.children.get(frame.next) else {
+            stack.pop();
+            // The root frame's segments were never pushed by this loop.
+            if !stack.is_empty() {
+                path.pop();
+                index_path.pop();
+            }
+            continue;
+        };
+        let index = frame.next;
+        frame.next += 1;
+
+        index_path.push(index);
         path.push(&child.name);
         if child.is_dir {
-            collect_by_size(child, path, index_path, out);
-        } else if !child.is_symlink && child.size > 0 {
+            // Segments stay pushed; the new frame owns them.
+            stack.push(Frame {
+                node: child,
+                next: 0,
+            });
+            continue;
+        }
+        if !child.is_symlink && child.size > 0 {
             out.entry(child.size)
                 .or_default()
                 .push((index_path.clone(), path.clone()));
@@ -221,7 +256,10 @@ mod tests {
 
         // Two groups of identical files, of two distinct sizes, so the
         // size prefilter puts them in separate buckets.
-        for (folder, size, count) in [("big", 64_usize, 5_usize), ("small", 32, 3)] {
+        // Nested at different depths on purpose: the size prefilter
+        // walks the whole tree, and a walk that only handled the top
+        // level would still find both groups if they sat side by side.
+        for (folder, size, count) in [("big", 64_usize, 5_usize), ("small/a/b/c", 32, 3)] {
             let sub = root.join(folder);
             fs::create_dir_all(&sub)?;
             for i in 0..count {

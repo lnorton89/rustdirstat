@@ -72,7 +72,9 @@ impl SortMode {
 
 /// Every user-triggerable operation, so keyboard and mouse input can share
 /// one code path instead of duplicating behavior.
-#[derive(Clone)]
+///
+/// `Debug` so a failing test can name the action it dispatched.
+#[derive(Clone, Debug)]
 pub(super) enum Action {
     Up,
     Down,
@@ -721,18 +723,60 @@ impl App {
 
     pub(super) fn dispatch(&mut self, action: Action) -> Result<()> {
         if self.pending_delete.is_some() {
-            // The wildcard is the point here, and its default is the safe
-            // one: while a delete is awaiting confirmation, only an
-            // explicit confirmation goes through and literally anything
-            // else cancels. Listing the other forty-odd actions would
-            // invert that -- a newly added action would fall through to
-            // no arm at all and have to be handled by hand, when what it
-            // should do is cancel.
-            #[expect(clippy::wildcard_enum_match_arm, reason = "see the comment above")]
+            // Spelled out rather than wildcarded. This used to be
+            // `_ => self.pending_delete = None`, defended as "cancelling
+            // is the safe default" — but the effect was that every one
+            // of the actions below, and every action added later,
+            // silently dismissed a delete prompt. That is the same
+            // defect the key handler had, and the same rule applies: a
+            // destructive confirmation answers only to the things it
+            // offers.
+            //
+            // The lint stays on so a new `Action` cannot join the enum
+            // without someone deciding which of these three groups it
+            // belongs in.
             match action {
                 Action::ConfirmDelete => self.confirm_delete()?,
                 Action::ConfirmEmpty => self.confirm_empty()?,
-                _ => self.pending_delete = None,
+                Action::CancelDelete => self.pending_delete = None,
+                // Everything else leaves the prompt standing. A stray
+                // click or keystroke aimed at the dialog must not land
+                // on the file list behind it.
+                Action::Up
+                | Action::Down
+                | Action::OpenSelected
+                | Action::Back
+                | Action::CycleSort
+                | Action::ToggleTreemap
+                | Action::RequestDelete
+                | Action::RequestDeletePermanent
+                | Action::OpenInFileManager
+                | Action::OpenItem
+                | Action::CopyPath
+                | Action::StartMove
+                | Action::ToggleProperties
+                | Action::ToggleWinTools
+                | Action::SelectWinTool(_)
+                | Action::ConfirmWinTool
+                | Action::CancelWinTool
+                | Action::Quit
+                | Action::ToggleHighlight(_)
+                | Action::ClearHighlight
+                | Action::SelectRow(_)
+                | Action::NavigateTo(_)
+                | Action::Refresh
+                | Action::ToggleTopFiles
+                | Action::ToggleHelp
+                | Action::ExportReport
+                | Action::StartFilter
+                | Action::StartSubtreeSearch
+                | Action::ToggleDetails
+                | Action::GrowTreemap
+                | Action::ShrinkTreemap
+                | Action::StartResize
+                | Action::TogglePhysicalSize
+                | Action::ToggleDuplicates
+                | Action::ExportCsv => {}
             }
             return Ok(());
         }
@@ -1111,8 +1155,16 @@ impl App {
 
         let mut full_index_path = self.path_indices.clone();
         full_index_path.push(pending.orig_idx);
+        // Resolved fallibly, before anything is deleted. An index path
+        // only means something against the tree it was taken from, and
+        // `node_for` answers about the deepest node that does exist —
+        // which for a delete would mean confirming against the *parent*
+        // directory and removing that instead.
+        let Some(target) = self.tree.try_node_for(&full_index_path) else {
+            self.message = Some(STALE_TARGET.to_string());
+            return Ok(());
+        };
         let path = self.tree.path_for(&full_index_path);
-        let target = self.tree.node_for(&full_index_path);
 
         let unreadable_delta = target.unreadable_count;
         let physical_delta = target.physical_size;
@@ -1149,6 +1201,16 @@ impl App {
             &removed_ext,
         );
         for &idx in &self.path_indices {
+            // Bounds-checked, then indexed. `get_mut` would be the
+            // natural spelling, but it returns a value whose borrow the
+            // compiler cannot shorten across this loop, which stops `n`
+            // being used at all afterwards; indexing is a place
+            // expression and reborrows cleanly. The check above it is
+            // what makes the index infallible rather than merely
+            // unlikely to fail.
+            if idx >= n.children.len() {
+                break;
+            }
             n = &mut n.children[idx];
             subtract_totals(
                 n,
@@ -1160,7 +1222,9 @@ impl App {
                 &removed_ext,
             );
         }
-        n.children.remove(pending.orig_idx);
+        if pending.orig_idx < n.children.len() {
+            n.children.remove(pending.orig_idx);
+        }
 
         let len = self.display_children().len();
         if self.selected >= len {
@@ -1195,8 +1259,13 @@ impl App {
 
         let mut full_index_path = self.path_indices.clone();
         full_index_path.push(pending.orig_idx);
+        // Same as `confirm_delete`: a stale path must not resolve to the
+        // nearest surviving ancestor and empty *that*.
+        let Some(target) = self.tree.try_node_for(&full_index_path) else {
+            self.message = Some(STALE_TARGET.to_string());
+            return Ok(());
+        };
         let path = self.tree.path_for(&full_index_path);
-        let target = self.tree.node_for(&full_index_path);
 
         let unreadable_delta = target.unreadable_count;
         let physical_delta = target.physical_size;
@@ -1225,6 +1294,16 @@ impl App {
             &removed_ext,
         );
         for &idx in &self.path_indices {
+            // Bounds-checked, then indexed. `get_mut` would be the
+            // natural spelling, but it returns a value whose borrow the
+            // compiler cannot shorten across this loop, which stops `n`
+            // being used at all afterwards; indexing is a place
+            // expression and reborrows cleanly. The check above it is
+            // what makes the index infallible rather than merely
+            // unlikely to fail.
+            if idx >= n.children.len() {
+                break;
+            }
             n = &mut n.children[idx];
             subtract_totals(
                 n,
@@ -1236,7 +1315,9 @@ impl App {
                 &removed_ext,
             );
         }
-        let node = &mut n.children[pending.orig_idx];
+        let Some(node) = n.children.get_mut(pending.orig_idx) else {
+            return Ok(());
+        };
         node.size = 0;
         node.physical_size = 0;
         node.file_count = 0;
@@ -1257,6 +1338,13 @@ impl App {
         Ok(())
     }
 }
+
+/// Shown when a queued deletion names something the tree no longer has.
+///
+/// The usual way to get one is a rescan between queuing the delete and
+/// confirming it: index paths are only meaningful against the tree they
+/// came from.
+const STALE_TARGET: &str = "That item is no longer in the scan — rescan and try again";
 
 enum RemovedExt {
     File(Option<Category>),
@@ -1311,6 +1399,83 @@ mod tests {
         app
     }
 
+    /// Only the three confirmation actions touch a pending delete.
+    ///
+    /// `dispatch` used to end its pending-delete guard with
+    /// `_ => self.pending_delete = None`, so every other action — and
+    /// every action added afterwards — quietly dismissed the prompt.
+    /// A click landing anywhere behind the dialog took it down.
+    #[test]
+    fn only_the_confirmation_actions_answer_a_pending_delete() -> Result<()> {
+        let ignored = [
+            Action::Up,
+            Action::Down,
+            Action::Back,
+            Action::CycleSort,
+            Action::Refresh,
+            Action::ToggleHelp,
+            Action::SelectRow(3),
+            Action::ToggleTreemap,
+            Action::TogglePhysicalSize,
+        ];
+        for action in ignored {
+            let mut app = app_awaiting_delete_confirmation(true);
+            let name = format!("{action:?}");
+            app.dispatch(action)?;
+            assert!(
+                app.pending_delete.is_some(),
+                "{name} dismissed the delete prompt, but it is not one of the \
+                 actions the prompt offers"
+            );
+        }
+
+        let mut app = app_awaiting_delete_confirmation(true);
+        app.dispatch(Action::CancelDelete)?;
+        assert!(
+            app.pending_delete.is_none(),
+            "CancelDelete is what the dialog's No button sends, and must cancel"
+        );
+        Ok(())
+    }
+
+    /// A delete queued against a tree that no longer has that entry is
+    /// refused, not applied to whatever now sits at those indices.
+    ///
+    /// `node_for` answers about the deepest node that exists, so a stale
+    /// index path resolves to the target's *parent*. For a delete that
+    /// is worse than a crash: the confirmation would read the parent
+    /// directory's size and then remove it.
+    #[test]
+    fn a_delete_queued_against_a_vanished_entry_is_refused() -> Result<()> {
+        let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+        // The placeholder root has no children at all, so index 0 is
+        // already past the end.
+        app.pending_delete = Some(PendingDelete {
+            orig_idx: 0,
+            name: "gone".to_owned(),
+            permanent: true,
+            is_dir: false,
+        });
+
+        app.dispatch(Action::ConfirmDelete)?;
+
+        assert!(
+            app.pending_delete.is_none(),
+            "the prompt should be dismissed either way"
+        );
+        assert_eq!(
+            app.message.as_deref(),
+            Some(STALE_TARGET),
+            "the user should be told the target is gone rather than something else being deleted"
+        );
+        assert_eq!(
+            app.tree.root.children.len(),
+            0,
+            "nothing should have been removed from the tree"
+        );
+        Ok(())
+    }
+
     /// Only the keys the confirmation dialog offers do anything to it.
     ///
     /// It used to treat every key other than Y (and E for folders) as a
@@ -1318,6 +1483,7 @@ mod tests {
     /// dialog — and the keystroke the user then aimed at it went to the
     /// file list instead. The dialog itself only ever advertised
     /// `[Y]es`, `[E]mpty` and `[N]o`.
+
     #[test]
     fn a_key_the_delete_dialog_does_not_offer_leaves_it_standing() -> Result<()> {
         for code in [
