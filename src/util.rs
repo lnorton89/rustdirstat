@@ -146,6 +146,13 @@ pub fn open_path(path: &std::path::Path) -> std::io::Result<()> {
 /// selections are "owned" by a live process, not stored centrally the way
 /// Windows/macOS clipboards are) — not waiting on the spawned child and not
 /// keeping its handle around is deliberate, not an oversight.
+///
+/// On Windows the text goes over as UTF-16LE behind a byte-order mark,
+/// which is the one encoding `clip.exe` reads unambiguously. Raw UTF-8
+/// used to be piped straight in, and `clip.exe` decodes unmarked input
+/// using the console code page — so every path with an accent or a CJK
+/// character in it arrived mangled. Copying paths is the entire purpose
+/// of this function.
 pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -165,10 +172,44 @@ pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
             .spawn()?,
     };
 
+    #[cfg(target_os = "windows")]
+    let payload = utf16le_with_bom(text);
+    #[cfg(not(target_os = "windows"))]
+    let payload = text.as_bytes().to_vec();
+
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(text.as_bytes())?;
+        stdin.write_all(&payload)?;
+        // Dropped before waiting, so the child sees end-of-input rather
+        // than blocking on a pipe that is still open.
+        drop(stdin);
+    }
+
+    // Waited for only where the clipboard is a central store the child
+    // fills and exits. Under X11/Wayland the child *is* the clipboard for
+    // as long as the selection lives, so waiting here would block until
+    // the user next copied something. That asymmetry is why the failure
+    // of `clip`/`pbcopy` went unreported before: nothing ever looked.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(std::io::Error::other(format!(
+                "the clipboard helper exited with {status}"
+            )));
+        }
     }
     Ok(())
+}
+
+/// UTF-16LE with a leading byte-order mark, the form `clip.exe` detects.
+#[cfg(target_os = "windows")]
+fn utf16le_with_bom(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() * 2 + 2);
+    out.extend_from_slice(&[0xFF, 0xFE]);
+    for unit in text.encode_utf16() {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
 }
 
 /// Moves `source` to `dest`. Tries a plain rename first (atomic, cheap —
@@ -323,5 +364,43 @@ mod tests {
 
         std::fs::remove_dir_all(&dir)?;
         Ok(())
+    }
+}
+
+/// Windows-only, because the encoding it checks is: the crate denies
+/// dead code, so the helper itself is gated too rather than sitting
+/// unused in every Linux and macOS build.
+#[cfg(all(test, target_os = "windows"))]
+mod clipboard_tests {
+    use super::*;
+
+    /// The Windows clipboard payload is UTF-16LE behind a BOM.
+    ///
+    /// Raw UTF-8 used to be piped to `clip.exe`, which decodes unmarked
+    /// input using the console code page — so a path with an accent or a
+    /// CJK character in it landed on the clipboard mangled. Copying
+    /// paths is the whole point of the function.
+    #[test]
+    fn clipboard_text_is_encoded_for_clip_exe() {
+        let bytes = utf16le_with_bom("a/Ω/文.txt");
+        assert_eq!(
+            &bytes[..2],
+            &[0xFF, 0xFE],
+            "clip.exe only reads UTF-16 unambiguously when it is marked as such"
+        );
+
+        // Decoded back, it must be the same string.
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .filter_map(|pair| <[u8; 2]>::try_from(pair).ok())
+            .map(u16::from_le_bytes)
+            .collect();
+        let decoded = String::from_utf16(&units);
+        assert!(decoded.is_ok(), "the payload should decode as UTF-16");
+        assert_eq!(decoded.unwrap_or_default(), "a/Ω/文.txt");
+
+        // ASCII is not passed through as bytes either: two 16-bit units
+        // behind the mark, which is what catches a plain byte copy.
+        assert_eq!(utf16le_with_bom("ab").len(), 2 + 4);
     }
 }

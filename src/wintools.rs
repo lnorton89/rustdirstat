@@ -208,16 +208,68 @@ pub fn run(index: usize, volume_path: &std::path::Path) -> Result<ToolOutput, St
             "vssadmin",
             &["delete", "shadows", "/for", &volume, "/all", "/quiet"],
         ),
-        // Clear-RecycleBin is a modern PowerShell cmdlet (Windows 10+) —
-        // simpler and less error-prone than hand-writing the SHEmptyRecycleBinW
-        // FFI call for what's ultimately a one-shot, non-interactive operation.
-        9 => run_and_wait(
-            "powershell",
-            &["-NoProfile", "-Command", "Clear-RecycleBin -Force"],
-        ),
+        9 => empty_recycle_bin(),
         _ => Err("Unknown tool".to_string()),
     }
 }
+
+/// Empties the Recycle Bin for every drive.
+///
+/// This used to shell out to `powershell -Command "Clear-RecycleBin
+/// -Force"`, on the reasoning that a cmdlet beats hand-written FFI for a
+/// one-shot operation. In practice the cmdlet is the more fragile of the
+/// two: it costs a PowerShell startup, it is refused outright under a
+/// restrictive execution policy, and it did not exist before Windows 10.
+/// `SHEmptyRecycleBinW` is one documented shell call with no interpreter
+/// in front of it, and `Win32_UI_Shell` was already a dependency for the
+/// file-type icons.
+///
+/// A null window handle and a null root path mean "no owner window, all
+/// drives". Confirmation, progress and sound UI are all suppressed: this
+/// runs behind the app's own confirmation, and a second dialog appearing
+/// from nowhere reads as the app having lost control of it.
+#[cfg(windows)]
+fn empty_recycle_bin() -> Result<ToolOutput, String> {
+    use windows_sys::Win32::UI::Shell::{
+        SHEmptyRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND,
+    };
+
+    // SAFETY: both pointers are null, which this call documents as "no
+    // owner window" and "every drive" rather than as pointers it will
+    // dereference. The flags are the documented `SHERB_*` constants.
+    let hresult = unsafe {
+        SHEmptyRecycleBinW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND,
+        )
+    };
+
+    match hresult {
+        S_OK => Ok(ToolOutput {
+            summary: "Recycle Bin emptied".to_string(),
+            detail: String::new(),
+        }),
+        // An already-empty bin reports `S_FALSE`, and telling someone who
+        // asked for an empty Recycle Bin, and now has one, that it failed
+        // is not useful.
+        S_FALSE => Ok(ToolOutput {
+            summary: "Recycle Bin was already empty".to_string(),
+            detail: String::new(),
+        }),
+        other => Err(format!(
+            "Emptying the Recycle Bin failed (HRESULT 0x{:08X})",
+            other as u32
+        )),
+    }
+}
+
+#[cfg(windows)]
+const S_OK: i32 = 0;
+
+/// Returned by `SHEmptyRecycleBinW` when there was nothing to delete.
+#[cfg(windows)]
+const S_FALSE: i32 = 1;
 
 #[cfg(windows)]
 fn volume_root_arg(path: &std::path::Path) -> String {
