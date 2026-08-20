@@ -94,19 +94,23 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
     // which starves the app's list/treemap rendering of anything
     // meaningful to lay out and makes the flood a much weaker test of
     // real redraw behavior.
-    let winsize = libc::winsize {
+    let mut winsize = libc::winsize {
         ws_row: 50,
         ws_col: 200,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+    // The termios and winsize arguments are `*const` on Linux but `*mut`
+    // on the BSDs, macOS included. `*mut` weakens to `*const` implicitly,
+    // so passing mutable pointers is the spelling that compiles on both;
+    // `openpty` only reads them.
     let rc = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            &winsize,
+            std::ptr::null_mut(),
+            &mut winsize,
         )
     };
     assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());

@@ -1037,15 +1037,23 @@ mod tests {
         assert_eq!(extension_label("archive.tar.gz"), ".gz");
     }
 
+    /// A scratch directory no other test can collide with.
+    ///
+    /// The counter is the part that matters. Tests run in parallel, and a
+    /// clock alone is not enough to separate them: `SystemTime::now` has
+    /// coarse enough resolution on Windows that two calls can return the
+    /// same value, at which point both tests share a directory and
+    /// whichever finishes first deletes it out from under the other. That
+    /// surfaced as an intermittent `PermissionDenied` from
+    /// `remove_dir_all` on Windows CI.
     fn test_dir(name: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         std::env::temp_dir().join(format!(
             "rustdirstat_gui_{}_{}_{}",
             std::process::id(),
             name,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            unique
         ))
     }
 
