@@ -52,6 +52,13 @@ dirs = "6"
 regex = "1"
 unicode-width = "0.2"
 
+# Text-only clipboard. `default-features = false` drops `image-data`,
+# which pulls the whole `image` crate to support copying bitmaps that
+# nothing here copies.
+arboard = { version = "3", default-features = false, features = [
+    "wayland-data-control",
+] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
