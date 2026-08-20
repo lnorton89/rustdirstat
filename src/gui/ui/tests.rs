@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::tests
+// Description:  Interaction tests that drive the real drawing code through an
+//               egui context and assert against the geometry it recorded.
+//
+// Dependencies: eframe::egui, anyhow; super::probes, crate::model::{Node,
+//               Tree}
+// ============================================================================
+
 //! Interaction tests: drive the real drawing code through an egui
 //! context, then assert against the geometry it recorded in
 //! [`super::probes`].
@@ -2307,7 +2316,7 @@ fn both_kinds_of_table_header_start_their_text_in_the_same_place() -> anyhow::Re
         apply_style(ctx, themes::Palette::default());
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
-                sortable_header(ui, "Size", None);
+                sortable_header(ui, "Size", None, true);
                 table_header_label(ui, "Size");
             });
         });
@@ -2644,4 +2653,50 @@ fn a_truncated_label_fits_its_width_and_keeps_everything_that_does() {
             }
         });
     });
+}
+
+/// A pane that was once wider does not keep a scrollbar it no longer
+/// needs.
+///
+/// Widening the window and narrowing it again used to leave the table at
+/// its widest, with a horizontal scrollbar over space it had given back.
+/// The cause was ours, not `egui_extras`: a column heading allocated its
+/// whole cell, so the table recorded that width as the column's content
+/// width — and for the `remainder()` column that becomes a floor it can
+/// never shrink below. Headings now paint and sense across the full cell
+/// while allocating only what their text needs.
+///
+/// One `Context` across all three sizes on purpose: the bug only exists
+/// as a memory of having once been wider.
+#[test]
+fn a_table_gives_back_width_when_its_pane_shrinks() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+
+    let mut render_at = |width: f32| {
+        probe(&TEST_DIRECTORY_SCROLL).clear();
+        for _ in 0..4 {
+            render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), width));
+        }
+        probe(&TEST_DIRECTORY_SCROLL)
+            .last()
+            .copied()
+            .unwrap_or_default()
+    };
+
+    let (content, viewport) = render_at(1400.0);
+    assert!(
+        content <= viewport + 1.0,
+        "a fresh 1400px pane should not scroll: {content:.0}px of content in {viewport:.0}px"
+    );
+
+    render_at(1500.0);
+
+    let (content, viewport) = render_at(1400.0);
+    assert!(
+        content <= viewport + 1.0,
+        "after being 1500px wide, a 1400px pane still reports {content:.0}px of content \
+         in {viewport:.0}px of viewport — the table kept width it no longer has"
+    );
 }

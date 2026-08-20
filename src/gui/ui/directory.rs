@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::directory
+// Description:  The directory tree pane: the main file view, its reorderable
+//               sortable columns, and the per-cell painting behind them.
+//
+// Dependencies: eframe::egui, egui_extras (TableBuilder);
+//               crate::gui::app::{GuiApp, TreeRow}
+// ============================================================================
+
 //! The directory tree: the main file view, its reorderable and
 //! sortable columns, and the per-cell painting behind them.
 
@@ -306,12 +315,20 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
             }
             table
                 .header(TABLE_HEADER_HEIGHT, |mut h| {
-                    for column in &columns {
+                    for (index, column) in columns.iter().enumerate() {
                         let column = *column;
                         h.col(|ui| {
                             let label = directory_column_label(column);
-                            let response =
-                                sortable_header(ui, label, directory_sort_icon(app.sort, column));
+                            // The last heading does not claim its cell's
+                            // width; see `sortable_header`. It is the
+                            // `remainder()` column, and a claim there
+                            // becomes a floor it can never shrink below.
+                            let response = sortable_header(
+                                ui,
+                                label,
+                                directory_sort_icon(app.sort, column),
+                                index != last,
+                            );
                             response.dnd_set_drag_payload(column);
                             if response.dnd_hover_payload::<DirectoryColumn>().is_some() {
                                 ui.painter().rect_stroke(

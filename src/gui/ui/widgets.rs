@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::widgets
+// Description:  Controls shared by more than one part of the window: menu
+//               rows, toolbar buttons, table headers, view tabs, and the hover
+//               ramp.
+//
+// Dependencies: eframe::egui; super::{probes, theme}
+// ============================================================================
+
 //! Controls shared by more than one part of the window: menu rows,
 //! toolbar buttons, table headers, and the view tabs.
 //!
@@ -502,10 +511,24 @@ pub(super) const HEADER_RESIZE_MARGIN: f32 = 8.0;
 /// by side had their column names in two different places.
 pub(super) const HEADER_TEXT_INSET: f32 = 7.0;
 
+/// A column heading: fills its cell, sorts on click, reorders on drag.
+///
+/// `claims_width` is what the cell reports *needing*, which is not the
+/// same as what it covers. `egui_extras` records the widest thing a
+/// column ever allocated and, for the `remainder()` column, refuses to
+/// shrink the column below it — so a header that allocates its whole
+/// cell pins the column at the widest it has ever been. Widen the window
+/// and narrow it again and the table kept the wider layout, showing a
+/// horizontal scrollbar for space it no longer needed.
+///
+/// So the last column's header allocates only the room its text wants,
+/// while still painting and sensing across the full cell. It looks and
+/// behaves identically; it just stops claiming the width as a floor.
 pub(super) fn sortable_header(
     ui: &mut egui::Ui,
     label: &'static str,
     direction: Option<Icon>,
+    claims_width: bool,
 ) -> egui::Response {
     const ICON_SIZE: f32 = 12.0;
     const ICON_GAP: f32 = 5.0;
@@ -515,7 +538,19 @@ pub(super) fn sortable_header(
         f32::INFINITY,
         TextStyle::Button,
     );
-    let size = ui.available_size_before_wrap();
+    let full = ui.available_size_before_wrap();
+    let size = if claims_width {
+        full
+    } else {
+        let wanted = galley.size().x
+            + HEADER_TEXT_INSET * 2.0
+            + if direction.is_some() {
+                ICON_SIZE + ICON_GAP
+            } else {
+                0.0
+            };
+        egui::vec2(wanted.min(full.x), full.y)
+    };
     // The header fills the column, but it must not *sense* the whole of
     // it: `egui_extras` puts the column's resize handle on the boundary
     // at the right-hand edge, and a header that senses drags across its
@@ -523,7 +558,13 @@ pub(super) fn sortable_header(
     // is why resizing stopped working the moment headers became
     // draggable. Leaving the last few pixels unclaimed gives the
     // resizer its grab strip back.
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let (allocated, _) = ui.allocate_exact_size(size, Sense::hover());
+    // Painted and sensed across the whole cell whatever was allocated,
+    // so a heading that claims less still looks like a full-width one.
+    let rect = egui::Rect::from_min_max(
+        allocated.min,
+        egui::pos2(allocated.left() + full.x, allocated.bottom()),
+    );
     let mut draggable = rect;
     draggable.max.x = (draggable.max.x - HEADER_RESIZE_MARGIN).max(draggable.min.x);
     let response = ui.interact(

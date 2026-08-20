@@ -1,3 +1,12 @@
+// ============================================================================
+// Module:       gui::ui::extensions
+// Description:  The per-extension list beside the file views, each row
+//               carrying the colour the treemap paints that extension in.
+//
+// Dependencies: eframe::egui, egui_extras (TableBuilder);
+//               crate::gui::app::GuiApp
+// ============================================================================
+
 //! The extension list beside the file views -- one row per file
 //! extension, with the color the treemap paints that extension in.
 
@@ -208,13 +217,14 @@ pub(super) fn draw_extension_header(
     ui: &mut egui::Ui,
     app: &GuiApp,
     column: ExtensionColumn,
+    claims_width: bool,
 ) -> (
     Option<ExtensionSortMode>,
     Option<(ExtensionColumn, ExtensionColumn)>,
 ) {
     let label = extension_column_label(column);
     let direction = extension_sort_icon(app.extension_sort, column);
-    let response = sortable_header(ui, label, direction);
+    let response = sortable_header(ui, label, direction, claims_width);
     response.dnd_set_drag_payload(column);
     if response.dnd_hover_payload::<ExtensionColumn>().is_some() {
         ui.painter().rect_stroke(
@@ -332,9 +342,12 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
         }
         table
             .header(TABLE_HEADER_HEIGHT, |mut h| {
-                for column in &columns {
+                for (index, column) in columns.iter().enumerate() {
                     h.col(|ui| {
-                        let (new_sort, new_reorder) = draw_extension_header(ui, app, *column);
+                        // The last heading does not claim its cell's
+                        // width; see `sortable_header`.
+                        let (new_sort, new_reorder) =
+                            draw_extension_header(ui, app, *column, index != last);
                         sort = new_sort.or(sort);
                         reorder = new_reorder.or(reorder);
                     });
