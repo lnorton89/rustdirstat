@@ -121,13 +121,13 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             // each side of a 3px tile leaves one pixel of colour, so
             // gridding the dense regions turned them into black mush and
             // cost a stroke per tile to do it.
-            if app.show_grid && rect.width() >= MIN_GRID_PX && rect.height() >= MIN_GRID_PX {
+            if app.view.grid && rect.width() >= MIN_GRID_PX && rect.height() >= MIN_GRID_PX {
                 painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, palette().treemap_grid));
             }
             if app.selected_path.as_ref() == Some(&tile.index_path) {
                 selected_rect = treemap_selection_rect(rect);
             }
-            if app.show_labels && tile.can_label && tile.w >= 48.0 && tile.h >= label_strip {
+            if app.view.labels && tile.can_label && tile.w >= 48.0 && tile.h >= label_strip {
                 painter.text(
                     rect.min + egui::vec2(4.0, LABEL_TEXT_PADDING),
                     egui::Align2::LEFT_TOP,

@@ -78,7 +78,7 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         section_title(ui, Icon::Search, "Search");
         ui.label(
-            RichText::new(format!("{} results", app.search_results.len()))
+            RichText::new(format!("{} results", app.search.results.len()))
                 .small()
                 .color(palette().secondary_text),
         );
@@ -94,7 +94,7 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let search_width = ui.available_width().min(420.0);
         let edit = ui.add(
-            egui::TextEdit::singleline(&mut app.search_query)
+            egui::TextEdit::singleline(&mut app.search.query)
                 .hint_text("*.{iso,img} or re:^archive-")
                 .desired_width(search_width),
         );
@@ -108,11 +108,11 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
     if run {
         app.run_search();
     }
-    if let Some(error) = &app.search_error {
+    if let Some(error) = &app.search.error {
         ui.colored_label(palette().danger, error);
     }
     section_rule(ui);
-    if app.search_results.is_empty() && app.search_error.is_none() {
+    if app.search.results.is_empty() && app.search.error.is_none() {
         ui.vertical_centered(|ui| {
             ui.add_space(SPACE_LG + SPACE_SM);
             paint_inline_icon(ui, Icon::Search, 40.0, palette().secondary_text);
@@ -145,8 +145,8 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
         })
         .body(|mut body| {
             let painter = body.ui_mut().painter().clone();
-            body.rows(TABLE_ROW_HEIGHT, app.search_results.len(), |mut row| {
-                let hit = &app.search_results[row.index()];
+            body.rows(TABLE_ROW_HEIGHT, app.search.results.len(), |mut row| {
+                let hit = &app.search.results[row.index()];
                 let path = hit.index_path.clone();
                 row.set_selected(app.selected_path.as_ref() == Some(&path));
                 row.col(|ui| {

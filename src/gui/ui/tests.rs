@@ -1655,7 +1655,7 @@ fn clicking_a_rendered_search_result_changes_selection() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
-    app.search_query = "*".to_string();
+    app.search.query = "*".to_string();
     app.run_search();
     probe(&TEST_SEARCH_ROW_RECTS).clear();
     for _ in 0..4 {
@@ -1817,12 +1817,12 @@ fn escape_unwinds_one_layer_at_a_time() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = app_with_one_file();
     app.open_modal(super::modal::ModalPage::Maintenance);
-    app.pending_windows_tool = Some(4);
+    app.tools.pending = Some(4);
 
     // The confirmation goes first. Closing both at once would answer a
     // question the user was still being asked.
     super::modal::dismiss_top(&mut app);
-    assert_eq!(app.pending_windows_tool, None);
+    assert_eq!(app.tools.pending, None);
     assert_eq!(app.modal, Some(super::modal::ModalPage::Maintenance));
 
     super::modal::dismiss_top(&mut app);
@@ -1911,7 +1911,7 @@ fn every_destructive_tool_is_marked_before_it_is_clicked() -> anyhow::Result<()>
 fn a_tool_report_outlives_the_status_line_that_announced_it() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = app_with_one_file();
-    app.tool_log.push(crate::gui::app::ToolOutcome {
+    app.tools.log.push(crate::gui::app::ToolOutcome {
         tool: "Analyze Component Store".to_string(),
         summary: "dism completed successfully".to_string(),
         detail: "Actual Size of Component Store : 6.21 GB".to_string(),
@@ -1921,7 +1921,7 @@ fn a_tool_report_outlives_the_status_line_that_announced_it() {
     // tool was run to produce, and it used to be discarded alongside it.
     app.status = Some("Scanning…".to_string());
 
-    let kept = app.tool_log.last().map(|entry| entry.detail.as_str());
+    let kept = app.tools.log.last().map(|entry| entry.detail.as_str());
     assert_eq!(kept, Some("Actual Size of Component Store : 6.21 GB"));
 }
 

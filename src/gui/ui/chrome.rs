@@ -174,22 +174,22 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                 menu_bar_button(ui, "Treemap", |ui| {
                     if menu_choice(
                         ui,
-                        app.orientation == PaneOrientation::Horizontal,
+                        app.view.orientation == PaneOrientation::Horizontal,
                         "Horizontal — below",
                     )
                     .clicked()
                     {
-                        app.orientation = PaneOrientation::Horizontal;
+                        app.view.orientation = PaneOrientation::Horizontal;
                         ui.close_menu();
                     }
                     if menu_choice(
                         ui,
-                        app.orientation == PaneOrientation::Vertical,
+                        app.view.orientation == PaneOrientation::Vertical,
                         "Vertical — right",
                     )
                     .clicked()
                     {
-                        app.orientation = PaneOrientation::Vertical;
+                        app.view.orientation = PaneOrientation::Vertical;
                         ui.close_menu();
                     }
                     ui.separator();
@@ -202,9 +202,9 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         app.refresh_extensions();
                     }
                     ui.separator();
-                    menu_toggle(ui, &mut app.show_grid, "Grid lines");
-                    menu_toggle(ui, &mut app.show_labels, "File labels");
-                    menu_toggle(ui, &mut app.show_free_space, "Free space");
+                    menu_toggle(ui, &mut app.view.grid, "Grid lines");
+                    menu_toggle(ui, &mut app.view.labels, "File labels");
+                    menu_toggle(ui, &mut app.view.free_space, "Free space");
                     ui.separator();
                     if menu_action(ui, true, Icon::ZoomIn, "Zoom in", "+").clicked() {
                         app.zoom_in();
@@ -229,10 +229,10 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                     }
                     view_menu_item(app, ui, FileView::SearchResults);
                     ui.separator();
-                    menu_toggle(ui, &mut app.show_extension_view, "Extension list");
-                    menu_toggle(ui, &mut app.show_treemap, "Treemap");
-                    menu_toggle(ui, &mut app.show_toolbar, "Toolbar");
-                    menu_toggle(ui, &mut app.show_status_bar, "Status bar");
+                    menu_toggle(ui, &mut app.view.extension_pane, "Extension list");
+                    menu_toggle(ui, &mut app.view.treemap, "Treemap");
+                    menu_toggle(ui, &mut app.view.toolbar, "Toolbar");
+                    menu_toggle(ui, &mut app.view.status_bar, "Status bar");
                     ui.separator();
                     if icon_button(ui, true, Icon::Palette, "Appearance…").clicked() {
                         app.open_modal(ModalPage::Appearance);
@@ -358,7 +358,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                     app.reset_zoom();
                 }
                 toolbar_separator(ui);
-                let orient = if app.orientation == PaneOrientation::Horizontal {
+                let orient = if app.view.orientation == PaneOrientation::Horizontal {
                     Icon::LayoutHorizontal
                 } else {
                     Icon::LayoutVertical
@@ -366,11 +366,11 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                 if tool(
                     ui,
                     orient,
-                    &format!("Layout: {} (click to switch)", app.orientation.label()),
+                    &format!("Layout: {} (click to switch)", app.view.orientation.label()),
                 )
                 .clicked()
                 {
-                    app.orientation.toggle();
+                    app.view.orientation.toggle();
                 }
                 if tool(ui, Icon::Palette, "Appearance and theme").clicked() {
                     app.open_modal(ModalPage::Appearance);

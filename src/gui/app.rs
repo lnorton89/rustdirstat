@@ -268,6 +268,88 @@ pub(super) struct PendingDelete {
     pub permanent: bool,
 }
 
+/// Which parts of the window are showing, and how they are arranged.
+///
+/// These are the toggles the View menu offers and the ones saved to the
+/// config between runs, so they travel together everywhere: the menu
+/// writes them, the layout reads them, `to_config` persists them.
+pub(super) struct ViewOptions {
+    pub toolbar: bool,
+    pub status_bar: bool,
+    pub extension_pane: bool,
+    pub treemap: bool,
+    pub free_space: bool,
+    pub grid: bool,
+    pub labels: bool,
+    pub orientation: PaneOrientation,
+}
+
+impl ViewOptions {
+    /// Reads the toggles back out of a saved config, defaulting anything
+    /// absent to shown.
+    ///
+    /// A pair with [`Self::to_config`], and separate from `GuiApp::new`
+    /// so the two can be tested against each other. `new` loads the real
+    /// config from disk, so nothing that goes through it can be checked
+    /// without touching the user's own settings.
+    fn from_config(config: &crate::config::Config) -> Self {
+        Self {
+            toolbar: config.gui_show_toolbar.unwrap_or(true),
+            status_bar: config.gui_show_status_bar.unwrap_or(true),
+            extension_pane: config.gui_show_extensions.unwrap_or(true),
+            treemap: config.show_treemap.unwrap_or(true),
+            free_space: config.gui_show_free_space.unwrap_or(true),
+            grid: config.gui_show_grid.unwrap_or(true),
+            labels: config.gui_show_labels.unwrap_or(true),
+            orientation: match config.gui_orientation.as_deref() {
+                Some("vertical") => PaneOrientation::Vertical,
+                _ => PaneOrientation::Horizontal,
+            },
+        }
+    }
+
+    /// The inverse of [`Self::from_config`], as a partial config to be
+    /// spread over the rest of the saved settings.
+    fn to_config(&self) -> crate::config::Config {
+        crate::config::Config {
+            show_treemap: Some(self.treemap),
+            gui_orientation: Some(match self.orientation {
+                PaneOrientation::Horizontal => "horizontal".to_string(),
+                PaneOrientation::Vertical => "vertical".to_string(),
+            }),
+            gui_show_extensions: Some(self.extension_pane),
+            gui_show_toolbar: Some(self.toolbar),
+            gui_show_status_bar: Some(self.status_bar),
+            gui_show_free_space: Some(self.free_space),
+            gui_show_grid: Some(self.grid),
+            gui_show_labels: Some(self.labels),
+            ..crate::config::Config::default()
+        }
+    }
+}
+
+/// The search box and its last results.
+#[derive(Default)]
+pub(super) struct SearchState {
+    pub query: String,
+    pub results: Vec<search::SearchHit>,
+    pub error: Option<String>,
+}
+
+/// The Windows maintenance tools: what is queued, what is running, and
+/// what has already run.
+#[derive(Default)]
+pub(super) struct ToolsState {
+    /// Set while a tool waits on its confirmation.
+    pub pending: Option<usize>,
+    pub rx: Option<mpsc::Receiver<Result<crate::wintools::ToolOutput, String>>>,
+    pub active_name: Option<String>,
+    /// Index of the tool currently running, so its own row can show the
+    /// spinner instead of the page closing out from under it.
+    pub running: Option<usize>,
+    pub log: Vec<ToolOutcome>,
+}
+
 pub(super) struct GuiApp {
     pub tree: Arc<Tree>,
     pub zoom_path: Vec<usize>,
@@ -293,20 +375,11 @@ pub(super) struct GuiApp {
     /// so a rename of the field cannot quietly put a table lookup on a
     /// draw path.
     pub palette: Palette,
-    pub show_toolbar: bool,
-    pub show_status_bar: bool,
-    pub show_extension_view: bool,
-    pub show_treemap: bool,
-    pub show_free_space: bool,
-    pub show_grid: bool,
-    pub show_labels: bool,
-    pub orientation: PaneOrientation,
+    pub view: ViewOptions,
     pub file_view: FileView,
     pub largest_files: Vec<top_files::TopFile>,
     pub duplicate_groups: Vec<DupGroup>,
-    pub search_query: String,
-    pub search_results: Vec<search::SearchHit>,
-    pub search_error: Option<String>,
+    pub search: SearchState,
     pub scan_progress: Option<Arc<crate::scanner::Progress>>,
     /// Directory rows currently on screen, rebuilt only when something
     /// they depend on changes rather than on every frame. On a
@@ -326,13 +399,7 @@ pub(super) struct GuiApp {
     scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
     scan_resets_workspace: bool,
     duplicate_rx: Option<mpsc::Receiver<crate::duplicates::DupScan>>,
-    pub pending_windows_tool: Option<usize>,
-    tool_rx: Option<mpsc::Receiver<Result<crate::wintools::ToolOutput, String>>>,
-    active_tool_name: Option<String>,
-    /// Index of the tool currently running, so its own row can show the
-    /// spinner instead of the page closing out from under it.
-    pub running_tool: Option<usize>,
-    pub tool_log: Vec<ToolOutcome>,
+    pub tools: ToolsState,
 }
 
 impl GuiApp {
@@ -369,23 +436,11 @@ impl GuiApp {
             backdrop: Backdrop::Idle,
             theme_id: theme_id.clone(),
             palette: super::ui::palette_for(&theme_id),
-            show_toolbar: config.gui_show_toolbar.unwrap_or(true),
-            show_status_bar: config.gui_show_status_bar.unwrap_or(true),
-            show_extension_view: config.gui_show_extensions.unwrap_or(true),
-            show_treemap: config.show_treemap.unwrap_or(true),
-            show_free_space: config.gui_show_free_space.unwrap_or(true),
-            show_grid: config.gui_show_grid.unwrap_or(true),
-            show_labels: config.gui_show_labels.unwrap_or(true),
-            orientation: match config.gui_orientation.as_deref() {
-                Some("vertical") => PaneOrientation::Vertical,
-                _ => PaneOrientation::Horizontal,
-            },
+            view: ViewOptions::from_config(&config),
             file_view: FileView::AllFiles,
             largest_files: Vec::new(),
             duplicate_groups: Vec::new(),
-            search_query: String::new(),
-            search_results: Vec::new(),
-            search_error: None,
+            search: SearchState::default(),
             scan_progress: None,
             visible_rows: Vec::new(),
             visible_rows_key: None,
@@ -395,11 +450,7 @@ impl GuiApp {
             scan_rx: None,
             scan_resets_workspace: false,
             duplicate_rx: None,
-            pending_windows_tool: None,
-            tool_rx: None,
-            active_tool_name: None,
-            running_tool: None,
-            tool_log: Vec::new(),
+            tools: ToolsState::default(),
         };
         app.refresh_extensions();
         app.refresh_largest_files();
@@ -523,14 +574,14 @@ impl GuiApp {
     }
 
     pub(super) fn run_search(&mut self) {
-        let outcome = search::search(&self.tree.root, &self.search_query);
-        self.search_results = outcome.hits;
-        self.search_error = outcome.error;
+        let outcome = search::search(&self.tree.root, &self.search.query);
+        self.search.results = outcome.hits;
+        self.search.error = outcome.error;
         self.file_view = FileView::SearchResults;
         self.status = Some(if outcome.truncated {
             "Search capped at 2,000 results".to_string()
         } else {
-            format!("{} search result(s)", self.search_results.len())
+            format!("{} search result(s)", self.search.results.len())
         });
     }
 
@@ -620,7 +671,7 @@ impl GuiApp {
     }
 
     pub(super) fn is_busy(&self) -> bool {
-        self.scan_rx.is_some() || self.duplicate_rx.is_some() || self.tool_rx.is_some()
+        self.scan_rx.is_some() || self.duplicate_rx.is_some() || self.tools.rx.is_some()
     }
 
     pub(super) fn busy_text(&self) -> Option<String> {
@@ -636,7 +687,8 @@ impl GuiApp {
             .as_ref()
             .map(|_| "Hashing duplicate candidates…".to_string())
             .or_else(|| {
-                self.active_tool_name
+                self.tools
+                    .active_name
                     .as_ref()
                     .map(|name| format!("Running {name}…"))
             })
@@ -662,14 +714,14 @@ impl GuiApp {
             return;
         };
         if tool.destructive {
-            self.pending_windows_tool = Some(index);
+            self.tools.pending = Some(index);
         } else {
             self.start_windows_tool(index);
         }
     }
 
     pub(super) fn confirm_windows_tool(&mut self) {
-        if let Some(index) = self.pending_windows_tool.take() {
+        if let Some(index) = self.tools.pending.take() {
             self.start_windows_tool(index);
         }
     }
@@ -688,9 +740,9 @@ impl GuiApp {
         std::thread::spawn(move || {
             let _ = tx.send(crate::wintools::run(index, &root));
         });
-        self.active_tool_name = Some(name.clone());
-        self.running_tool = Some(index);
-        self.tool_rx = Some(rx);
+        self.tools.active_name = Some(name.clone());
+        self.tools.running = Some(index);
+        self.tools.rx = Some(rx);
         self.status = Some(format!("Running {name}…"));
         // The page stays open. A DISM run takes minutes, and closing the
         // window that started it left a one-line status bar as the only
@@ -728,8 +780,8 @@ impl GuiApp {
         self.file_view = FileView::AllFiles;
         self.highlighted_extension = None;
         self.highlighted_category = None;
-        self.search_query.clear();
-        self.search_error = None;
+        self.search.query.clear();
+        self.search.error = None;
     }
 
     /// Gives up the scanned tree without paying to tear it down, for use
@@ -743,7 +795,7 @@ impl GuiApp {
         self.treemap_key = None;
         self.largest_files = Vec::new();
         self.duplicate_groups = Vec::new();
-        self.search_results = Vec::new();
+        self.search.results = Vec::new();
         let root_path = self.tree.root_path.clone();
         drop_in_background(std::mem::replace(
             &mut self.tree,
@@ -789,7 +841,7 @@ impl GuiApp {
                     self.extensions = extensions;
                     self.sort_extensions();
                     self.largest_files = largest_files;
-                    self.search_results.clear();
+                    self.search.results.clear();
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
                 }
@@ -828,7 +880,7 @@ impl GuiApp {
             }
         }
 
-        let tool_result = self.tool_rx.as_ref().and_then(|rx| match rx.try_recv() {
+        let tool_result = self.tools.rx.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => Some(Err(
@@ -836,9 +888,9 @@ impl GuiApp {
             )),
         });
         if let Some(result) = tool_result {
-            self.tool_rx = None;
-            let tool = self.active_tool_name.take().unwrap_or_default();
-            self.running_tool = None;
+            self.tools.rx = None;
+            let tool = self.tools.active_name.take().unwrap_or_default();
+            self.tools.running = None;
             let outcome = match result {
                 Ok(output) => ToolOutcome {
                     tool,
@@ -858,7 +910,7 @@ impl GuiApp {
             } else {
                 outcome.summary.clone()
             });
-            self.tool_log.push(outcome);
+            self.tools.log.push(outcome);
         }
 
         if self.is_busy() {
@@ -902,20 +954,9 @@ impl GuiApp {
     fn save_preferences(&self) {
         crate::config::save(&crate::config::Config {
             sort: Some(self.sort),
-            show_treemap: Some(self.show_treemap),
             use_physical: Some(self.use_physical),
-            gui_orientation: Some(match self.orientation {
-                PaneOrientation::Horizontal => "horizontal".to_string(),
-                PaneOrientation::Vertical => "vertical".to_string(),
-            }),
-            gui_show_extensions: Some(self.show_extension_view),
-            gui_show_toolbar: Some(self.show_toolbar),
-            gui_show_status_bar: Some(self.show_status_bar),
-            gui_show_free_space: Some(self.show_free_space),
-            gui_show_grid: Some(self.show_grid),
-            gui_show_labels: Some(self.show_labels),
             gui_theme: Some(self.theme_id.clone()),
-            ..crate::config::Config::default()
+            ..self.view.to_config()
         });
     }
 
@@ -1018,7 +1059,7 @@ impl GuiApp {
             treemap_layout::MAX_TILES
         };
         let show_free_space =
-            self.show_free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
+            self.view.free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
         let free_space = if show_free_space {
             self.tree.volume_free
         } else {
@@ -1289,7 +1330,9 @@ impl eframe::App for GuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{extension_label, Category, FileView, GuiApp, PendingDelete};
+    use super::{
+        extension_label, Category, FileView, GuiApp, PaneOrientation, PendingDelete, ViewOptions,
+    };
     use crate::tui::SortMode;
     use std::time::{Duration, Instant};
 
@@ -1555,8 +1598,8 @@ mod tests {
         app.select_path(alpha);
         app.highlighted_extension = Some(".bin".to_string());
         app.highlighted_category = Some(Category::Programs);
-        app.search_query = "large".to_string();
-        app.search_error = Some("stale".to_string());
+        app.search.query = "large".to_string();
+        app.search.error = Some("stale".to_string());
         app.file_view = FileView::SearchResults;
 
         app.open_folder(&second)?;
@@ -1571,8 +1614,8 @@ mod tests {
         // search naming things that are not in the new tree at all.
         assert!(app.highlighted_extension.is_none(), "highlight outlived it");
         assert!(app.highlighted_category.is_none(), "highlight outlived it");
-        assert!(app.search_query.is_empty(), "search query outlived it");
-        assert!(app.search_error.is_none(), "search error outlived it");
+        assert!(app.search.query.is_empty(), "search query outlived it");
+        assert!(app.search.error.is_none(), "search error outlived it");
 
         std::fs::remove_dir_all(first)?;
         std::fs::remove_dir_all(second)?;
@@ -1626,5 +1669,57 @@ mod tests {
         assert!(dir.exists());
         std::fs::remove_dir_all(dir)?;
         Ok(())
+    }
+
+    /// Every view toggle survives a save and reload.
+    ///
+    /// The toggles used to be eight loose fields on `GuiApp`, each wired
+    /// to its own config key by hand in two separate places. Nothing
+    /// checked that the two agreed, so a field read from the wrong key —
+    /// or, once they were grouped into `ViewOptions`, quietly dropped from
+    /// one side — would show up only as a setting that forgets itself
+    /// between runs.
+    #[test]
+    fn view_toggles_survive_a_config_round_trip() {
+        // Every flag flipped away from its default of `true`, so a
+        // mapping that loses one falls back to `true` and is caught.
+        let saved = ViewOptions {
+            toolbar: false,
+            status_bar: false,
+            extension_pane: false,
+            treemap: false,
+            free_space: false,
+            grid: false,
+            labels: false,
+            orientation: PaneOrientation::Vertical,
+        };
+
+        let restored = ViewOptions::from_config(&saved.to_config());
+
+        assert!(!restored.toolbar, "toolbar");
+        assert!(!restored.status_bar, "status_bar");
+        assert!(!restored.extension_pane, "extension_pane");
+        assert!(!restored.treemap, "treemap");
+        assert!(!restored.free_space, "free_space");
+        assert!(!restored.grid, "grid");
+        assert!(!restored.labels, "labels");
+        assert_eq!(restored.orientation, PaneOrientation::Vertical);
+
+        // And the other way, so neither direction can be the one that
+        // silently pins a value.
+        let all_on = ViewOptions {
+            toolbar: true,
+            status_bar: true,
+            extension_pane: true,
+            treemap: true,
+            free_space: true,
+            grid: true,
+            labels: true,
+            orientation: PaneOrientation::Horizontal,
+        };
+        let restored = ViewOptions::from_config(&all_on.to_config());
+        assert!(restored.toolbar && restored.status_bar && restored.extension_pane);
+        assert!(restored.treemap && restored.free_space && restored.grid && restored.labels);
+        assert_eq!(restored.orientation, PaneOrientation::Horizontal);
     }
 }

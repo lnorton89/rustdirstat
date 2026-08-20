@@ -50,10 +50,10 @@ use self::widgets::*;
 pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
     apply_style(ctx, app.palette);
     draw_menu_bar(app, ctx);
-    if app.show_toolbar {
+    if app.view.toolbar {
         draw_toolbar(app, ctx);
     }
-    if app.show_status_bar {
+    if app.view.status_bar {
         draw_status_bar(app, ctx);
     }
     draw_workspace(app, ctx);
@@ -62,7 +62,7 @@ pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
 }
 
 pub(super) fn draw_workspace(app: &mut GuiApp, ctx: &egui::Context) {
-    match (app.show_treemap, app.orientation) {
+    match (app.view.treemap, app.view.orientation) {
         (true, PaneOrientation::Horizontal) => {
             egui::TopBottomPanel::bottom("treemap_horizontal")
                 .resizable(true)
@@ -81,9 +81,11 @@ pub(super) fn draw_workspace(app: &mut GuiApp, ctx: &egui::Context) {
                 .show(ctx, |ui| draw_treemap(app, ui));
             draw_upper_workspace(app, ctx, false);
         }
-        (false, _) => {
-            draw_upper_workspace(app, ctx, app.orientation == PaneOrientation::Horizontal)
-        }
+        (false, _) => draw_upper_workspace(
+            app,
+            ctx,
+            app.view.orientation == PaneOrientation::Horizontal,
+        ),
     }
 }
 
@@ -92,7 +94,7 @@ pub(super) fn draw_upper_workspace(
     ctx: &egui::Context,
     extension_on_right: bool,
 ) {
-    if app.show_extension_view {
+    if app.view.extension_pane {
         if extension_on_right {
             egui::SidePanel::right("extension_right")
                 .resizable(true)

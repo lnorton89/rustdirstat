@@ -121,10 +121,10 @@ fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
         app.set_theme(id);
     }
     group(ui, Icon::App, "Treemap", |ui| {
-        ui.checkbox(&mut app.show_grid, "Grid lines between tiles");
-        ui.checkbox(&mut app.show_labels, "File labels on large tiles");
+        ui.checkbox(&mut app.view.grid, "Grid lines between tiles");
+        ui.checkbox(&mut app.view.labels, "File labels on large tiles");
         ui.checkbox(
-            &mut app.show_free_space,
+            &mut app.view.free_space,
             "Free-space tile for whole-drive scans",
         );
     });
@@ -213,12 +213,12 @@ fn theme_row(ui: &mut egui::Ui, selected: bool, spec: &themes::ThemeSpec) -> egu
 fn draw_layout(app: &mut GuiApp, ui: &mut egui::Ui) {
     group(ui, Icon::LayoutHorizontal, "Treemap position", |ui| {
         ui.radio_value(
-            &mut app.orientation,
+            &mut app.view.orientation,
             PaneOrientation::Horizontal,
             "Horizontal — treemap below the lists",
         );
         ui.radio_value(
-            &mut app.orientation,
+            &mut app.view.orientation,
             PaneOrientation::Vertical,
             "Vertical — treemap to the right",
         );
@@ -238,12 +238,12 @@ fn draw_layout(app: &mut GuiApp, ui: &mut egui::Ui) {
 
 fn draw_views(app: &mut GuiApp, ui: &mut egui::Ui) {
     group(ui, Icon::Tree, "Panes", |ui| {
-        ui.checkbox(&mut app.show_extension_view, "Extension list");
-        ui.checkbox(&mut app.show_treemap, "Treemap");
+        ui.checkbox(&mut app.view.extension_pane, "Extension list");
+        ui.checkbox(&mut app.view.treemap, "Treemap");
     });
     group(ui, Icon::Settings, "Window chrome", |ui| {
-        ui.checkbox(&mut app.show_toolbar, "Toolbar");
-        ui.checkbox(&mut app.show_status_bar, "Status bar");
+        ui.checkbox(&mut app.view.toolbar, "Toolbar");
+        ui.checkbox(&mut app.view.status_bar, "Status bar");
     });
     see_also(
         ui,
@@ -356,12 +356,12 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
         app.request_windows_tool(index);
     }
 
-    if !app.tool_log.is_empty() {
+    if !app.tools.log.is_empty() {
         separator(ui);
         ui.add_space(12.0);
         ui.label(RichText::new("Results").strong());
         ui.add_space(8.0);
-        for entry in app.tool_log.iter().rev() {
+        for entry in app.tools.log.iter().rev() {
             result_row(ui, entry);
         }
     }
@@ -390,7 +390,7 @@ fn tool_row(
     const SEVERITY_BAR: f32 = 4.0;
 
     let palette = palette();
-    let running = app.running_tool == Some(index);
+    let running = app.tools.running == Some(index);
     let mut clicked = false;
     let frame = Frame::none()
         .fill(palette.raised)
@@ -691,7 +691,7 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
 
 fn draw_tool_confirm(app: &mut GuiApp, ctx: &egui::Context, index: usize, opening: f32) {
     let Some(tool) = crate::wintools::TOOLS.get(index) else {
-        app.pending_windows_tool = None;
+        app.tools.pending = None;
         return;
     };
     let palette = palette();
@@ -763,6 +763,6 @@ fn draw_tool_confirm(app: &mut GuiApp, ctx: &egui::Context, index: usize, openin
         app.confirm_windows_tool();
     }
     if cancel {
-        app.pending_windows_tool = None;
+        app.tools.pending = None;
     }
 }

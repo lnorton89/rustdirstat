@@ -149,7 +149,7 @@ pub(super) fn confirm_kind(app: &GuiApp) -> Option<ConfirmKind> {
     if app.pending_delete.is_some() {
         return Some(ConfirmKind::Delete);
     }
-    app.pending_windows_tool.map(ConfirmKind::WindowsTool)
+    app.tools.pending.map(ConfirmKind::WindowsTool)
 }
 
 /// Paints the whole modal layer, or nothing at all when none is open.
@@ -363,7 +363,7 @@ pub(super) fn dismiss_top(app: &mut GuiApp) {
     if app.pending_delete.take().is_some() {
         return;
     }
-    if app.pending_windows_tool.take().is_some() {
+    if app.tools.pending.take().is_some() {
         return;
     }
     app.modal = None;
