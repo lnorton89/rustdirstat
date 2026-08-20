@@ -159,6 +159,12 @@ fn scan_with_progress<B: ratatui::backend::Backend>(
 /// interval regardless of input would just waste CPU recomputing the
 /// treemap layout and list for no visible change, which matters on a
 /// directory with hundreds of thousands of entries.
+// The matches here are over crossterm's `Event` and `MouseEventKind`,
+// foreign enums that grow variants between releases. "Anything else is
+// not input this app acts on" is the complete handling, and enumerating
+// them would break on every crossterm upgrade. See the matching note on
+// `App::handle_key`.
+#[expect(clippy::wildcard_enum_match_arm, reason = "see the comment above")]
 fn browse<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,

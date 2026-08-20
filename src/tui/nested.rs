@@ -9,7 +9,7 @@ use crate::model::Node;
 use crate::treemap;
 use crate::treemap::Rect;
 
-pub struct TreemapItem {
+pub(super) struct TreemapItem {
     pub x: u16,
     pub y: u16,
     pub w: u16,
@@ -83,7 +83,7 @@ const MAX_ITEMS: usize = 3000;
 /// visible at a glance, the way WinDirStat's own treemap does for a
 /// whole-volume scan. It's not part of `node`'s children and never
 /// recursed into.
-pub fn build(
+pub(super) fn build(
     node: &Node,
     x: u16,
     y: u16,

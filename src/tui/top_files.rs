@@ -9,7 +9,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::SystemTime;
 
-pub struct TopFile {
+pub(crate) struct TopFile {
     /// Indices from the directory being browsed down to this file.
     pub index_path: Vec<usize>,
     pub name: String,
@@ -43,7 +43,7 @@ impl Ord for Entry {
 }
 
 /// The `k` largest files anywhere in `node`'s subtree, largest first.
-pub fn top_k(node: &Node, k: usize) -> Vec<TopFile> {
+pub(crate) fn top_k(node: &Node, k: usize) -> Vec<TopFile> {
     let mut heap: BinaryHeap<Reverse<Entry>> = BinaryHeap::with_capacity(k + 1);
     let mut path = Vec::new();
     visit(node, &mut path, &mut heap, k);

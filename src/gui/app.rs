@@ -13,19 +13,19 @@ use std::time::Duration;
 use super::treemap_layout;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PaneOrientation {
+pub(super) enum PaneOrientation {
     Horizontal,
     Vertical,
 }
 
 impl PaneOrientation {
-    pub fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Horizontal => "Treemap below",
             Self::Vertical => "Treemap right",
         }
     }
-    pub fn toggle(&mut self) {
+    pub(super) fn toggle(&mut self) {
         *self = match self {
             Self::Horizontal => Self::Vertical,
             Self::Vertical => Self::Horizontal,
@@ -34,7 +34,7 @@ impl PaneOrientation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FileView {
+pub(super) enum FileView {
     AllFiles,
     LargestFiles,
     DuplicateFiles,
@@ -42,7 +42,7 @@ pub enum FileView {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum DirectoryColumn {
+pub(super) enum DirectoryColumn {
     Name,
     Size,
     SubtreePercentage,
@@ -54,7 +54,7 @@ pub enum DirectoryColumn {
 }
 
 impl DirectoryColumn {
-    pub const DEFAULT_ORDER: [Self; 8] = [
+    pub(super) const DEFAULT_ORDER: [Self; 8] = [
         Self::Name,
         Self::Size,
         Self::SubtreePercentage,
@@ -67,7 +67,7 @@ impl DirectoryColumn {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ExtensionColumn {
+pub(super) enum ExtensionColumn {
     Extension,
     Color,
     Description,
@@ -77,7 +77,7 @@ pub enum ExtensionColumn {
 }
 
 impl ExtensionColumn {
-    pub const DEFAULT_ORDER: [Self; 6] = [
+    pub(super) const DEFAULT_ORDER: [Self; 6] = [
         Self::Extension,
         Self::Color,
         Self::Description,
@@ -88,7 +88,7 @@ impl ExtensionColumn {
 }
 
 impl FileView {
-    pub fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::AllFiles => "All Files",
             Self::LargestFiles => "Largest Files",
@@ -99,7 +99,7 @@ impl FileView {
 }
 
 #[derive(Clone)]
-pub struct ExtensionRow {
+pub(super) struct ExtensionRow {
     pub extension: String,
     pub category: Category,
     pub size: u64,
@@ -107,7 +107,7 @@ pub struct ExtensionRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ExtensionSortMode {
+pub(super) enum ExtensionSortMode {
     ExtensionAsc,
     ExtensionDesc,
     ColorAsc,
@@ -152,7 +152,7 @@ fn reorder_column<T: Copy + Eq>(columns: &mut Vec<T>, source: T, target: T) {
 /// derived model state that gets cached across frames — see
 /// [`GuiApp::refresh_visible_rows`].
 #[derive(Clone)]
-pub struct TreeRow {
+pub(super) struct TreeRow {
     pub path: Vec<usize>,
     pub depth: usize,
     pub name: String,
@@ -212,14 +212,14 @@ fn expanded_fingerprint(expanded: &HashSet<Vec<usize>>) -> u64 {
     xor ^ sum.rotate_left(17) ^ (expanded.len() as u64)
 }
 
-pub struct PendingDelete {
+pub(super) struct PendingDelete {
     pub index_path: Vec<usize>,
     pub name: String,
     pub is_dir: bool,
     pub permanent: bool,
 }
 
-pub struct GuiApp {
+pub(super) struct GuiApp {
     pub tree: Arc<Tree>,
     pub zoom_path: Vec<usize>,
     pub selected_path: Option<Vec<usize>>,
@@ -274,13 +274,13 @@ pub struct GuiApp {
 }
 
 impl GuiApp {
-    pub fn loading(root: PathBuf) -> Self {
+    pub(super) fn loading(root: PathBuf) -> Self {
         let mut app = Self::new(Tree::placeholder(root.clone()));
         app.start_scan(root, true);
         app
     }
 
-    pub fn new(tree: Tree) -> Self {
+    pub(super) fn new(tree: Tree) -> Self {
         let mut expanded = HashSet::new();
         expanded.insert(Vec::new());
         let config = crate::config::load();
@@ -337,20 +337,20 @@ impl GuiApp {
         app
     }
 
-    pub fn zoom_node(&self) -> &Node {
+    pub(super) fn zoom_node(&self) -> &Node {
         self.tree.node_for(&self.zoom_path)
     }
-    pub fn zoom_fs_path(&self) -> PathBuf {
+    pub(super) fn zoom_fs_path(&self) -> PathBuf {
         self.tree.path_for(&self.zoom_path)
     }
-    pub fn selected_node(&self) -> Option<&Node> {
+    pub(super) fn selected_node(&self) -> Option<&Node> {
         self.selected_path.as_deref().map(|p| self.tree.node_for(p))
     }
-    pub fn selected_fs_path(&self) -> Option<PathBuf> {
+    pub(super) fn selected_fs_path(&self) -> Option<PathBuf> {
         self.selected_path.as_deref().map(|p| self.tree.path_for(p))
     }
 
-    pub fn select_path(&mut self, path: Vec<usize>) {
+    pub(super) fn select_path(&mut self, path: Vec<usize>) {
         self.expand_ancestors(&path);
         self.selected_path = Some(path.clone());
         let selected = self.tree.node_for(&path);
@@ -363,7 +363,7 @@ impl GuiApp {
         }
     }
 
-    pub fn toggle_expanded(&mut self, path: &[usize]) {
+    pub(super) fn toggle_expanded(&mut self, path: &[usize]) {
         if self.expanded.contains(path) {
             self.expanded.remove(path);
         } else {
@@ -371,14 +371,14 @@ impl GuiApp {
         }
     }
 
-    pub fn expand_ancestors(&mut self, path: &[usize]) {
+    pub(super) fn expand_ancestors(&mut self, path: &[usize]) {
         self.expanded.insert(Vec::new());
         for len in 1..path.len() {
             self.expanded.insert(path[..len].to_vec());
         }
     }
 
-    pub fn refresh_extensions(&mut self) {
+    pub(super) fn refresh_extensions(&mut self) {
         let mut by_ext: HashMap<String, (Category, u64, u64)> = HashMap::new();
         collect_extensions(self.zoom_node(), self.use_physical, &mut by_ext);
         let rows: Vec<_> = by_ext
@@ -394,7 +394,7 @@ impl GuiApp {
         self.sort_extensions();
     }
 
-    pub fn sort_extensions(&mut self) {
+    pub(super) fn sort_extensions(&mut self) {
         let by_extension = |a: &ExtensionRow, b: &ExtensionRow| {
             a.extension.to_lowercase().cmp(&b.extension.to_lowercase())
         };
@@ -444,19 +444,27 @@ impl GuiApp {
         }
     }
 
-    pub fn reorder_directory_column(&mut self, source: DirectoryColumn, target: DirectoryColumn) {
+    pub(super) fn reorder_directory_column(
+        &mut self,
+        source: DirectoryColumn,
+        target: DirectoryColumn,
+    ) {
         reorder_column(&mut self.directory_column_order, source, target);
     }
 
-    pub fn reorder_extension_column(&mut self, source: ExtensionColumn, target: ExtensionColumn) {
+    pub(super) fn reorder_extension_column(
+        &mut self,
+        source: ExtensionColumn,
+        target: ExtensionColumn,
+    ) {
         reorder_column(&mut self.extension_column_order, source, target);
     }
 
-    pub fn refresh_largest_files(&mut self) {
+    pub(super) fn refresh_largest_files(&mut self) {
         self.largest_files = top_files::top_k(&self.tree.root, 200);
     }
 
-    pub fn run_search(&mut self) {
+    pub(super) fn run_search(&mut self) {
         let outcome = search::search(&self.tree.root, &self.search_query);
         self.search_results = outcome.hits;
         self.search_error = outcome.error;
@@ -468,7 +476,7 @@ impl GuiApp {
         });
     }
 
-    pub fn find_duplicates(&mut self) {
+    pub(super) fn find_duplicates(&mut self) {
         if self.is_busy() {
             self.status = Some("Another background operation is already running".to_string());
             return;
@@ -484,14 +492,14 @@ impl GuiApp {
         self.duplicate_rx = Some(rx);
     }
 
-    pub fn navigate_to_absolute(&mut self, index_path: Vec<usize>) {
+    pub(super) fn navigate_to_absolute(&mut self, index_path: Vec<usize>) {
         if !index_path.is_empty() {
             self.select_path(index_path);
             self.file_view = FileView::AllFiles;
         }
     }
 
-    pub fn zoom_in(&mut self) {
+    pub(super) fn zoom_in(&mut self) {
         let Some(path) = self.selected_path.clone() else {
             return;
         };
@@ -503,23 +511,23 @@ impl GuiApp {
         };
         self.refresh_extensions();
     }
-    pub fn zoom_out(&mut self) {
+    pub(super) fn zoom_out(&mut self) {
         if !self.zoom_path.is_empty() {
             self.zoom_path.pop();
             self.refresh_extensions();
         }
     }
-    pub fn reset_zoom(&mut self) {
+    pub(super) fn reset_zoom(&mut self) {
         self.zoom_path.clear();
         self.refresh_extensions();
     }
 
-    pub fn refresh_scan(&mut self) -> anyhow::Result<()> {
+    pub(super) fn refresh_scan(&mut self) -> anyhow::Result<()> {
         self.start_scan(self.tree.root_path.clone(), false);
         Ok(())
     }
 
-    pub fn open_folder(&mut self, root: &Path) -> anyhow::Result<()> {
+    pub(super) fn open_folder(&mut self, root: &Path) -> anyhow::Result<()> {
         self.start_scan(root.to_path_buf(), true);
         Ok(())
     }
@@ -544,11 +552,11 @@ impl GuiApp {
         self.status = Some(format!("Scanning {display}…"));
     }
 
-    pub fn is_busy(&self) -> bool {
+    pub(super) fn is_busy(&self) -> bool {
         self.scan_rx.is_some() || self.duplicate_rx.is_some() || self.tool_rx.is_some()
     }
 
-    pub fn busy_text(&self) -> Option<String> {
+    pub(super) fn busy_text(&self) -> Option<String> {
         if let Some(progress) = &self.scan_progress {
             return Some(format!(
                 "Scanning · {} files · {} folders · {}",
@@ -567,11 +575,11 @@ impl GuiApp {
             })
     }
 
-    pub fn duplicate_running(&self) -> bool {
+    pub(super) fn duplicate_running(&self) -> bool {
         self.duplicate_rx.is_some()
     }
 
-    pub fn request_windows_tool(&mut self, index: usize) {
+    pub(super) fn request_windows_tool(&mut self, index: usize) {
         let Some(tool) = crate::wintools::TOOLS.get(index) else {
             return;
         };
@@ -582,7 +590,7 @@ impl GuiApp {
         }
     }
 
-    pub fn confirm_windows_tool(&mut self) {
+    pub(super) fn confirm_windows_tool(&mut self) {
         if let Some(index) = self.pending_windows_tool.take() {
             self.start_windows_tool(index);
         }
@@ -634,7 +642,7 @@ impl GuiApp {
         ));
     }
 
-    pub fn poll_background(&mut self, ctx: &egui::Context) {
+    pub(super) fn poll_background(&mut self, ctx: &egui::Context) {
         let scan_result = self.scan_rx.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -736,7 +744,7 @@ impl GuiApp {
         });
     }
 
-    pub fn request_delete_selected(&mut self, permanent: bool) {
+    pub(super) fn request_delete_selected(&mut self, permanent: bool) {
         let Some(index_path) = self.selected_path.clone() else {
             return;
         };
@@ -755,7 +763,7 @@ impl GuiApp {
         });
     }
 
-    pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
+    pub(super) fn confirm_delete(&mut self) -> anyhow::Result<()> {
         let Some(pending) = self.pending_delete.take() else {
             return Ok(());
         };
@@ -782,7 +790,7 @@ impl GuiApp {
         self.refresh_scan()
     }
 
-    pub fn confirm_empty(&mut self) -> anyhow::Result<()> {
+    pub(super) fn confirm_empty(&mut self) -> anyhow::Result<()> {
         let Some(pending) = self.pending_delete.take() else {
             return Ok(());
         };
@@ -801,7 +809,7 @@ impl GuiApp {
     /// Rebuilds [`Self::treemap_tiles`] if the panel rect or anything the
     /// layout depends on has changed since the last frame, and otherwise
     /// leaves the existing tiles in place.
-    pub fn refresh_treemap(&mut self, x: f32, y: f32, w: f32, h: f32) {
+    pub(super) fn refresh_treemap(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let show_free_space =
             self.show_free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
         let free_space = if show_free_space {
@@ -843,7 +851,7 @@ impl GuiApp {
 
     /// Rebuilds [`Self::visible_rows`] if the tree, sort order, size mode,
     /// or expanded set has changed since the last frame.
-    pub fn refresh_visible_rows(&mut self) {
+    pub(super) fn refresh_visible_rows(&mut self) {
         let key = RowKey {
             tree: Arc::as_ptr(&self.tree) as usize,
             sort: self.sort,
@@ -913,7 +921,7 @@ fn push_tree_rows(
     }
 }
 
-pub fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) {
+pub(super) fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) {
     match sort {
         SortMode::SizeDesc => nodes.sort_by(|a, b| {
             b.1.effective_size(physical)
@@ -967,7 +975,7 @@ fn valid_prefix(tree: &Tree, requested: &[usize]) -> Vec<usize> {
     valid
 }
 
-pub fn extension_label(name: &str) -> String {
+pub(super) fn extension_label(name: &str) -> String {
     Path::new(name)
         .extension()
         .and_then(|s| s.to_str())
@@ -996,7 +1004,7 @@ fn collect_extensions(
     }
 }
 
-pub fn size_label(bytes: u64, physical: bool) -> String {
+pub(super) fn size_label(bytes: u64, physical: bool) -> String {
     format!(
         "{}{}",
         human_bytes(bytes),

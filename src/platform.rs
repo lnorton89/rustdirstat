@@ -67,7 +67,7 @@ mod imp {
     use std::path::Path;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
-    pub fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
+    pub(super) fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
         let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
         wide.push(0);
 

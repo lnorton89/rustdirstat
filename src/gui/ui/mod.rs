@@ -40,7 +40,7 @@ use self::theme::*;
 use self::treemap::*;
 use self::widgets::*;
 
-pub fn draw(app: &mut GuiApp, ctx: &egui::Context) {
+pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
     apply_style(ctx);
     draw_menu_bar(app, ctx);
     if app.show_toolbar {

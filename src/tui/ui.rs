@@ -15,7 +15,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
+pub(super) fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
     let area = f.area();
     let files = progress.files.load(Ordering::Relaxed);
     let dirs = progress.dirs.load(Ordering::Relaxed);
@@ -53,7 +53,7 @@ pub fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
     f.render_widget(p, area);
 }
 
-pub fn draw_duplicate_progress(
+pub(super) fn draw_duplicate_progress(
     f: &mut Frame,
     progress: &crate::duplicates::DupProgress,
     started: Instant,
@@ -101,7 +101,7 @@ pub fn draw_duplicate_progress(
     f.render_widget(p, area);
 }
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub(super) fn draw(f: &mut Frame, app: &mut App) {
     app.click_zones.clear();
 
     let area = f.area();

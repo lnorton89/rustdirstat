@@ -48,7 +48,7 @@ impl SortMode {
 /// Every user-triggerable operation, so keyboard and mouse input can share
 /// one code path instead of duplicating behavior.
 #[derive(Clone)]
-pub enum Action {
+pub(super) enum Action {
     Up,
     Down,
     OpenSelected,
@@ -92,7 +92,7 @@ pub enum Action {
 /// One row of the flattened duplicate-groups view: either a group header
 /// (not itself navigable — just a size/count label) or a member file
 /// (navigable, like a search hit).
-pub enum DupRow {
+pub(super) enum DupRow {
     Header { size: u64, count: usize },
     Member { index_path: Vec<usize> },
 }
@@ -100,7 +100,7 @@ pub enum DupRow {
 /// A screen region registered during the last draw that maps a mouse click
 /// to an `Action`. Rebuilt every frame in `ui::draw`.
 #[derive(Clone)]
-pub struct ClickZone {
+pub(super) struct ClickZone {
     pub x: u16,
     pub y: u16,
     pub w: u16,
@@ -109,12 +109,12 @@ pub struct ClickZone {
 }
 
 impl ClickZone {
-    pub fn contains(&self, x: u16, y: u16) -> bool {
+    pub(super) fn contains(&self, x: u16, y: u16) -> bool {
         x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
     }
 }
 
-pub struct PendingDelete {
+pub(super) struct PendingDelete {
     pub orig_idx: usize,
     pub name: String,
     pub permanent: bool,
@@ -124,7 +124,7 @@ pub struct PendingDelete {
     pub is_dir: bool,
 }
 
-pub struct App {
+pub(super) struct App {
     pub tree: Tree,
     /// Indices (into each level's original, unsorted `children` vec) from
     /// the root down to the directory currently being browsed.
@@ -202,7 +202,7 @@ const TREEMAP_SPLIT_STEP: u16 = 5;
 const TOP_FILES_LIMIT: usize = 500;
 
 impl App {
-    pub fn new(tree: Tree) -> Self {
+    pub(super) fn new(tree: Tree) -> Self {
         let mut app = Self {
             tree,
             path_indices: vec![],
@@ -254,7 +254,7 @@ impl App {
     /// Applies persisted preferences loaded at startup. Every field is
     /// optional, so a first run (no config file yet) or a config missing a
     /// newer field just leaves that setting at its built-in default.
-    pub fn apply_config(&mut self, cfg: &Config) {
+    pub(super) fn apply_config(&mut self, cfg: &Config) {
         if let Some(sort) = cfg.sort {
             self.sort = sort;
         }
@@ -277,7 +277,7 @@ impl App {
     /// filters, search state, highlighted category) — those are session
     /// state, not preferences, and restoring them on an unrelated future
     /// scan would be surprising rather than helpful.
-    pub fn to_config(&self) -> Config {
+    pub(super) fn to_config(&self) -> Config {
         Config {
             sort: Some(self.sort),
             show_treemap: Some(self.show_treemap),
@@ -292,7 +292,7 @@ impl App {
     /// before a rescan, matching by path since node indices aren't stable
     /// across scans. Falls back to the root if it can't be found (e.g. the
     /// directory was deleted).
-    pub fn restore_path(&mut self, target: &std::path::Path) {
+    pub(super) fn restore_path(&mut self, target: &std::path::Path) {
         let mut node = &self.tree.root;
         let mut indices = Vec::new();
         let mut current = self.tree.root_path.clone();
@@ -328,11 +328,11 @@ impl App {
         self.refresh_ext_stats();
     }
 
-    pub fn current_node(&self) -> &Node {
+    pub(super) fn current_node(&self) -> &Node {
         self.tree.node_for(&self.path_indices)
     }
 
-    pub fn current_path(&self) -> PathBuf {
+    pub(super) fn current_path(&self) -> PathBuf {
         self.tree.path_for(&self.path_indices)
     }
 
@@ -340,7 +340,7 @@ impl App {
     /// term and sorted for display, paired with their index in the
     /// original (unsorted) `children` vec so navigation and deletion stay
     /// stable regardless of sort/filter.
-    pub fn display_children(&self) -> Vec<(usize, &Node)> {
+    pub(super) fn display_children(&self) -> Vec<(usize, &Node)> {
         let node = self.current_node();
         let mut v: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
         if !self.filter.is_empty() {
@@ -420,7 +420,7 @@ impl App {
     /// long tail of smaller groups.
     const MAX_DUPLICATE_DISPLAY_GROUPS: usize = 500;
 
-    pub fn set_duplicate_results(&mut self, groups: Vec<DupGroup>) {
+    pub(super) fn set_duplicate_results(&mut self, groups: Vec<DupGroup>) {
         self.duplicate_group_count = groups.len();
         self.duplicate_truncated = groups.len() > Self::MAX_DUPLICATE_DISPLAY_GROUPS;
         self.duplicate_total_wasted = groups
@@ -457,7 +457,15 @@ impl App {
         self.selected = 0;
     }
 
-    pub fn handle_key(&mut self, code: KeyCode) -> Result<()> {
+    // Every match below is over `crossterm::event::KeyCode`, which has
+    // dozens of variants (function keys, media keys, modifier keys, and
+    // more added each release). Enumerating them to satisfy
+    // `wildcard_enum_match_arm` would be unreadable and would break on
+    // every crossterm upgrade, and "any other key does nothing here" is
+    // the correct and complete handling. The lint earns its keep on our
+    // own enums, not on a foreign keyboard model.
+    #[expect(clippy::wildcard_enum_match_arm, reason = "see the comment above")]
+    pub(super) fn handle_key(&mut self, code: KeyCode) -> Result<()> {
         if self.show_help {
             self.show_help = false;
             return Ok(());
@@ -598,7 +606,7 @@ impl App {
 
     /// Look up whatever click zone (if any) contains `(x, y)` — the most
     /// recently drawn zone wins, so popups drawn last take priority.
-    pub fn handle_click(&mut self, x: u16, y: u16) -> Result<()> {
+    pub(super) fn handle_click(&mut self, x: u16, y: u16) -> Result<()> {
         if self.show_help {
             self.show_help = false;
             return Ok(());
@@ -616,13 +624,13 @@ impl App {
 
     /// Recorded every frame by `ui::draw` so a mouse drag position can be
     /// translated into a split percentage.
-    pub fn set_body_area(&mut self, x: u16, width: u16) {
+    pub(super) fn set_body_area(&mut self, x: u16, width: u16) {
         self.body_x = x;
         self.body_width = width;
     }
 
     /// Called on `MouseEventKind::Drag` while `resizing_treemap` is set.
-    pub fn handle_drag(&mut self, x: u16) {
+    pub(super) fn handle_drag(&mut self, x: u16) {
         if !self.resizing_treemap || self.body_width == 0 {
             return;
         }
@@ -632,7 +640,7 @@ impl App {
         self.treemap_split = treemap_pct.clamp(TREEMAP_SPLIT_MIN, TREEMAP_SPLIT_MAX);
     }
 
-    pub fn end_drag(&mut self) {
+    pub(super) fn end_drag(&mut self) {
         self.resizing_treemap = false;
     }
 
@@ -648,8 +656,16 @@ impl App {
         }
     }
 
-    pub fn dispatch(&mut self, action: Action) -> Result<()> {
+    pub(super) fn dispatch(&mut self, action: Action) -> Result<()> {
         if self.pending_delete.is_some() {
+            // The wildcard is the point here, and its default is the safe
+            // one: while a delete is awaiting confirmation, only an
+            // explicit confirmation goes through and literally anything
+            // else cancels. Listing the other forty-odd actions would
+            // invert that -- a newly added action would fall through to
+            // no arm at all and have to be handled by hand, when what it
+            // should do is cancel.
+            #[expect(clippy::wildcard_enum_match_arm, reason = "see the comment above")]
             match action {
                 Action::ConfirmDelete => self.confirm_delete()?,
                 Action::ConfirmEmpty => self.confirm_empty()?,

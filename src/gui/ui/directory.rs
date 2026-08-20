@@ -99,7 +99,15 @@ pub(super) fn directory_sort_after_click(
         } else {
             SortMode::ModifiedDesc
         }),
-        _ => None,
+        // Listed rather than caught by a wildcard: these are the columns
+        // with nothing to sort by. A new column added to the enum should
+        // fail to compile here and make someone decide, instead of
+        // silently becoming unsortable.
+        DirectoryColumn::SubtreePercentage
+        | DirectoryColumn::PercentTotal
+        | DirectoryColumn::Files
+        | DirectoryColumn::Subdirs
+        | DirectoryColumn::Attributes => None,
     }
 }
 

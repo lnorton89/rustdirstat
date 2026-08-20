@@ -8,7 +8,7 @@ use crate::model::Node;
 use regex::RegexBuilder;
 use std::time::SystemTime;
 
-pub struct SearchHit {
+pub(crate) struct SearchHit {
     /// Indices from the directory being browsed down to this entry.
     pub index_path: Vec<usize>,
     pub is_dir: bool,
@@ -24,13 +24,13 @@ pub struct SearchHit {
 /// list. `SearchOutcome::truncated` tells the UI to say so.
 const MAX_RESULTS: usize = 2000;
 
-pub struct SearchOutcome {
+pub(crate) struct SearchOutcome {
     pub hits: Vec<SearchHit>,
     pub truncated: bool,
     pub error: Option<String>,
 }
 
-pub fn search(node: &Node, query: &str) -> SearchOutcome {
+pub(crate) fn search(node: &Node, query: &str) -> SearchOutcome {
     let (pattern, is_regex) = match query.strip_prefix("re:") {
         Some(rest) => (rest, true),
         None => (query, false),

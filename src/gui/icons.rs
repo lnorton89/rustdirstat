@@ -8,7 +8,7 @@ use eframe::egui::{self, Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 /// Rasterized companion to [`Icon::App`] for the native window and taskbar.
 /// Keeping it generated here means the shell icon and in-app mark cannot drift.
-pub fn app_icon() -> egui::IconData {
+pub(super) fn app_icon() -> egui::IconData {
     const SIZE: usize = 64;
     let mut rgba = vec![0_u8; SIZE * SIZE * 4];
     for y in 0..SIZE {
@@ -43,7 +43,7 @@ pub fn app_icon() -> egui::IconData {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Icon {
+pub(super) enum Icon {
     App,
     Folder,
     FolderOpen,
@@ -78,7 +78,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Self; 28] = [
+    pub(super) const ALL: [Self; 28] = [
         Self::App,
         Self::Folder,
         Self::FolderOpen,
@@ -109,7 +109,7 @@ impl Icon {
         Self::Dot,
     ];
 
-    pub fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
+    pub(super) fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
         let s = Stroke::new((rect.width() / 16.0 * 1.45).max(1.0), color);
         let p = |x: f32, y: f32| -> Pos2 {
             egui::pos2(

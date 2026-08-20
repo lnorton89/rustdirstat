@@ -29,7 +29,7 @@ use crate::color::Category;
 use crate::model::Node;
 use crate::treemap;
 
-pub struct Tile {
+pub(super) struct Tile {
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -53,7 +53,7 @@ pub struct Tile {
 
 impl Tile {
     /// Whether this tile stands for a real node the user can click.
-    pub fn is_node(&self) -> bool {
+    pub(super) fn is_node(&self) -> bool {
         !self.is_free_space && !self.is_aggregate
     }
 }
@@ -104,7 +104,7 @@ impl Pending<'_> {
     }
 }
 
-pub fn build(
+pub(super) fn build(
     node: &Node,
     x: f32,
     y: f32,
