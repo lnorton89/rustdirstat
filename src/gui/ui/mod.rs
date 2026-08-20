@@ -17,6 +17,7 @@ use crate::gui::app::{FileView, GuiApp, PaneOrientation};
 use eframe::egui::{self, Color32, Frame, Margin, RichText, Stroke};
 
 mod actions;
+mod categories;
 mod chrome;
 mod dialogs;
 mod directory;

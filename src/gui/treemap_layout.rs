@@ -113,16 +113,35 @@ impl Pending<'_> {
     }
 }
 
-pub(super) fn build(
-    node: &Node,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    use_physical: bool,
-    free_space: Option<u64>,
-    label_strip: f32,
-) -> Vec<Tile> {
+/// Everything the layout needs besides the tree itself.
+///
+/// A struct rather than a positional argument list: the two `f32`s and
+/// the `Option<u64>` are trivially transposable, and doing exactly that
+/// is how `free_space` and `label_strip` got swapped once already.
+pub(super) struct LayoutRequest {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub use_physical: bool,
+    /// Volume free space to show alongside the root, if this is a
+    /// whole-drive scan.
+    pub free_space: Option<u64>,
+    /// Height a tile reserves for its own name, measured by the caller
+    /// from the font it will draw with.
+    pub label_strip: f32,
+}
+
+pub(super) fn build(node: &Node, request: &LayoutRequest) -> Vec<Tile> {
+    let LayoutRequest {
+        x,
+        y,
+        width,
+        height,
+        use_physical,
+        free_space,
+        label_strip,
+    } = *request;
     // Whole pixels, so nested tiles stay on integer origins. The caller
     // measures this from the font it will actually draw with rather than
     // passing a guess: a strip shorter than the text means the children
@@ -453,13 +472,15 @@ mod tests {
         let (w, h) = (1900.0_f32, 420.0_f32);
         let tiles = build(
             &root,
-            0.0,
-            0.0,
-            w,
-            h,
-            false,
-            Some(root.size / 2),
-            TEST_LABEL_STRIP,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: w,
+                height: h,
+                use_physical: false,
+                free_space: Some(root.size / 2),
+                label_strip: TEST_LABEL_STRIP,
+            },
         );
 
         assert!(
@@ -482,13 +503,15 @@ mod tests {
         let root = drive_shaped(5, 6, 1024);
         let tiles = build(
             &root,
-            0.0,
-            0.0,
-            1900.0,
-            420.0,
-            false,
-            None,
-            TEST_LABEL_STRIP,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 1900.0,
+                height: 420.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
         );
         // A parent that was expanded must be covered by its children, so
         // for every depth present, the deepest present depth is the only
@@ -514,7 +537,18 @@ mod tests {
         // collapse the rest into one grey slab covering 60% of the panel.
         let children = (0..200).map(|i| leaf(&format!("f{i}.bin"), 1000)).collect();
         let root = dir("root", children);
-        let tiles = build(&root, 0.0, 0.0, 800.0, 600.0, false, None, TEST_LABEL_STRIP);
+        let tiles = build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        );
 
         assert_eq!(tiles.iter().filter(|t| !t.is_aggregate).count(), 200);
         assert!(
@@ -536,7 +570,18 @@ mod tests {
         children.extend((0..2000).map(|i| leaf(&format!("tiny{i}.bin"), 100)));
         let root = dir("root", children);
         let (w, h) = (200.0_f32, 100.0_f32);
-        let tiles = build(&root, 0.0, 0.0, w, h, false, None, TEST_LABEL_STRIP);
+        let tiles = build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: w,
+                height: h,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        );
 
         let aggregate: Vec<_> = tiles.iter().filter(|t| t.is_aggregate).collect();
         assert_eq!(aggregate.len(), 1, "expected exactly one aggregate tile");
@@ -562,7 +607,18 @@ mod tests {
             "root",
             vec![dir("dense", children), leaf("big.bin", 5_000_000)],
         );
-        let tiles = build(&root, 0.0, 0.0, 300.0, 200.0, false, None, TEST_LABEL_STRIP);
+        let tiles = build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 300.0,
+                height: 200.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        );
 
         assert!(
             tiles.iter().any(|t| t.name == "dense"),
@@ -582,13 +638,15 @@ mod tests {
         );
         let tiles = build(
             &root,
-            0.0,
-            0.0,
-            400.0,
-            300.0,
-            false,
-            Some(8000),
-            TEST_LABEL_STRIP,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 300.0,
+                use_physical: false,
+                free_space: Some(8000),
+                label_strip: TEST_LABEL_STRIP,
+            },
         );
         let free: Vec<_> = tiles.iter().filter(|t| t.is_free_space).collect();
         assert_eq!(free.len(), 1);
@@ -599,7 +657,18 @@ mod tests {
     #[test]
     fn deeper_tiles_are_emitted_after_the_parents_they_paint_over() {
         let root = drive_shaped(4, 5, 4096);
-        let tiles = build(&root, 0.0, 0.0, 900.0, 700.0, false, None, TEST_LABEL_STRIP);
+        let tiles = build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 900.0,
+                height: 700.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        );
         for (i, tile) in tiles.iter().enumerate() {
             if tile.index_path.len() < 2 {
                 continue;
@@ -629,13 +698,15 @@ mod tests {
         ] {
             let tiles = build(
                 &root,
-                12.0,
-                34.0,
-                w,
-                h,
-                false,
-                Some(root.size / 3),
-                TEST_LABEL_STRIP,
+                &LayoutRequest {
+                    x: 12.0,
+                    y: 34.0,
+                    width: w,
+                    height: h,
+                    use_physical: false,
+                    free_space: Some(root.size / 3),
+                    label_strip: TEST_LABEL_STRIP,
+                },
             );
             let panel = (12.0, 34.0, 12.0 + w, 34.0 + h);
             for tile in &tiles {
@@ -684,7 +755,18 @@ mod tests {
     #[test]
     fn tiles_at_one_level_do_not_overlap_each_other() {
         let root = drive_shaped(4, 5, 4096);
-        let tiles = build(&root, 0.0, 0.0, 900.0, 600.0, false, None, TEST_LABEL_STRIP);
+        let tiles = build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 900.0,
+                height: 600.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        );
 
         let top: Vec<_> = tiles.iter().filter(|t| t.depth == 0).collect();
         for (i, a) in top.iter().enumerate() {
@@ -704,7 +786,31 @@ mod tests {
     #[test]
     fn an_empty_panel_produces_no_tiles() {
         let root = dir("root", vec![leaf("a.bin", 10)]);
-        assert!(build(&root, 0.0, 0.0, 0.0, 100.0, false, None, TEST_LABEL_STRIP).is_empty());
-        assert!(build(&root, 0.0, 0.0, 100.0, 0.0, false, None, TEST_LABEL_STRIP).is_empty());
+        assert!(build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 100.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        )
+        .is_empty());
+        assert!(build(
+            &root,
+            &LayoutRequest {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 0.0,
+                use_physical: false,
+                free_space: None,
+                label_strip: TEST_LABEL_STRIP,
+            },
+        )
+        .is_empty());
     }
 }

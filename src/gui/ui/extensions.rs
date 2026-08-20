@@ -35,19 +35,25 @@ pub(super) fn extension_table_min_width(columns: &[ExtensionColumn], item_spacin
     widths + item_spacing * columns.len().saturating_sub(1) as f32
 }
 
+/// See the directory table's equivalent for the reasoning: `Extension`
+/// flexes to fill the pane, the rest are auto-sized with a floor and no
+/// ceiling, so a resize drag has somewhere to go.
 pub(super) fn extension_column_spec(column: ExtensionColumn) -> Column {
     let minimum = extension_column_min_width(column);
-    match column {
-        ExtensionColumn::Extension => Column::remainder()
+    if column == ExtensionColumn::Extension {
+        // `resizable(false)` is load-bearing: the table sets
+        // `resizable(true)` as the default, and a resizable remainder
+        // column gets a stored width instead of absorbing the slack, so
+        // the table stops growing with the pane entirely.
+        return Column::remainder()
             .at_least(minimum)
             .clip(true)
-            .resizable(false),
-        ExtensionColumn::Color => Column::exact(minimum).clip(true),
-        ExtensionColumn::Description => Column::auto().range(minimum..=115.0).clip(true),
-        ExtensionColumn::Bytes => Column::auto().range(minimum..=120.0).clip(true),
-        ExtensionColumn::PercentBytes => Column::auto().range(minimum..=78.0).clip(true),
-        ExtensionColumn::Files => Column::auto().range(minimum..=70.0).clip(true),
+            .resizable(false);
     }
+    Column::auto()
+        .range(minimum..=f32::INFINITY)
+        .clip(true)
+        .resizable(true)
 }
 
 pub(super) fn extension_column_label(column: ExtensionColumn) -> &'static str {
@@ -140,6 +146,16 @@ pub(super) fn draw_extension_cell(
 ) {
     match column {
         ExtensionColumn::Extension => {
+            // The category mark, not an extension-specific one: the shape
+            // is what lets a row be recognised before its label is read,
+            // and there is no sensible glyph for ".rlib" specifically.
+            paint_inline_icon(
+                ui,
+                Icon::for_category(ext.category),
+                14.0,
+                ui.visuals().text_color(),
+            );
+            ui.add_space(2.0);
             let _response = ui.label(&ext.extension);
             #[cfg(test)]
             probe(&TEST_EXTENSION_TEXT_RECTS).push((ext.extension.clone(), _response.rect));
@@ -222,6 +238,16 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             }
         });
     });
+    ui.add_space(6.0);
+    // The category breakdown sits above the per-extension table because
+    // it answers the coarser question first — what kind of thing is
+    // filling the disk — and the table then says which extensions make
+    // that up. Collapsible, since on a narrow pane the table is what
+    // people are usually here for.
+    egui::CollapsingHeader::new(RichText::new("File categories").strong())
+        .id_salt("file_categories")
+        .default_open(true)
+        .show(ui, |ui| super::categories::draw_categories(app, ui));
     ui.add_space(3.0);
     ui.separator();
     ui.add_space(5.0);
@@ -248,6 +274,12 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                 .striped(true)
                 .vscroll(true)
                 .resizable(true)
+                // Without this the cell layout is top-down, so a cell
+                // holding more than one widget stacks them instead of
+                // putting them side by side — which is what happened the
+                // moment the extension column gained an icon next to its
+                // label. The directory table has always set it.
+                .cell_layout(Layout::left_to_right(Align::Center))
                 .sense(Sense::click());
             for column in &columns {
                 table = table.column(extension_column_spec(*column));

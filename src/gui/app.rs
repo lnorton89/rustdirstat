@@ -885,13 +885,15 @@ impl GuiApp {
 
         let mut tiles = treemap_layout::build(
             self.zoom_node(),
-            x,
-            y,
-            w,
-            h,
-            self.use_physical,
-            free_space,
-            label_strip,
+            &treemap_layout::LayoutRequest {
+                x,
+                y,
+                width: w,
+                height: h,
+                use_physical: self.use_physical,
+                free_space,
+                label_strip,
+            },
         );
         for tile in &mut tiles {
             if tile.is_node() {

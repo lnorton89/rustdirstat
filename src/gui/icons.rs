@@ -74,11 +74,40 @@ pub(super) enum Icon {
     Check,
     /// Filled dot for menu items that pick one of a set of choices.
     Dot,
+    // One per file category, so a row can be recognised by shape before
+    // its label is read — the same reason a phone's storage breakdown
+    // uses them.
+    Archive,
+    Image,
+    Video,
+    Audio,
+    Program,
+    Source,
+}
+
+impl Icon {
+    /// The glyph standing for a whole file category.
+    ///
+    /// Documents, extension-less files and the catch-all share the plain
+    /// document mark: inventing distinct shapes for "everything else"
+    /// would imply a distinction the categories do not actually make.
+    pub(super) fn for_category(category: crate::color::Category) -> Self {
+        use crate::color::Category;
+        match category {
+            Category::Archives => Self::Archive,
+            Category::Images => Self::Image,
+            Category::Video => Self::Video,
+            Category::Audio => Self::Audio,
+            Category::Programs => Self::Program,
+            Category::Source => Self::Source,
+            Category::Documents | Category::NoExtension | Category::Other => Self::File,
+        }
+    }
 }
 
 impl Icon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 28] = [
+    pub(super) const ALL: [Self; 34] = [
         Self::App,
         Self::Folder,
         Self::FolderOpen,
@@ -107,6 +136,12 @@ impl Icon {
         Self::Help,
         Self::Check,
         Self::Dot,
+        Self::Archive,
+        Self::Image,
+        Self::Video,
+        Self::Audio,
+        Self::Program,
+        Self::Source,
     ];
 
     pub(super) fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
@@ -282,6 +317,41 @@ impl Icon {
             }
             Self::Dot => {
                 painter.circle_filled(p(8.0, 8.0), rect.width() * 0.19, color);
+            }
+            Self::Archive => {
+                box_outline(2.0, 2.5, 14.0, 6.0, 1.0);
+                box_outline(3.0, 6.0, 13.0, 13.5, 1.0);
+                line(&[(6.8, 9.2), (9.2, 9.2)]);
+            }
+            Self::Image => {
+                box_outline(2.0, 3.0, 14.0, 13.0, 1.5);
+                painter.circle_filled(p(5.8, 6.6), rect.width() * 0.08, color);
+                line(&[
+                    (2.6, 12.2),
+                    (6.6, 8.4),
+                    (9.4, 11.0),
+                    (11.4, 9.2),
+                    (13.4, 11.4),
+                ]);
+            }
+            Self::Video => {
+                box_outline(1.8, 3.6, 11.0, 12.4, 1.5);
+                line(&[(11.0, 7.2), (14.4, 4.8), (14.4, 11.2), (11.0, 8.8)]);
+            }
+            Self::Audio => {
+                line(&[(6.2, 12.0), (6.2, 3.2), (13.0, 2.0), (13.0, 10.6)]);
+                painter.circle_stroke(p(4.5, 12.2), rect.width() * 0.11, s);
+                painter.circle_stroke(p(11.3, 10.8), rect.width() * 0.11, s);
+            }
+            Self::Program => {
+                box_outline(1.8, 2.8, 14.2, 13.2, 1.5);
+                line(&[(1.8, 6.2), (14.2, 6.2)]);
+                painter.circle_filled(p(4.0, 4.5), rect.width() * 0.055, color);
+                painter.circle_filled(p(6.1, 4.5), rect.width() * 0.055, color);
+            }
+            Self::Source => {
+                line(&[(5.6, 4.4), (2.0, 8.0), (5.6, 11.6)]);
+                line(&[(10.4, 4.4), (14.0, 8.0), (10.4, 11.6)]);
             }
         }
     }
