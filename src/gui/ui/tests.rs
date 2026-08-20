@@ -2574,3 +2574,74 @@ fn apply_style_and_bar_width(ctx: &egui::Context, palette: themes::Palette) -> f
     apply_style(ctx, palette);
     ctx.style().spacing.scroll.allocated_width()
 }
+
+/// Truncation fits the width it is given, and keeps as much as fits.
+///
+/// The "keeps as much as fits" half is the one that matters: it is what
+/// an off-by-one at the cut point breaks, and the reason this is not
+/// just an "is it short enough" check. The implementation reads glyph
+/// positions out of a single galley rather than laying the string out
+/// again for every character it removes, which it used to do once per
+/// visible treemap tile per frame.
+#[test]
+fn a_truncated_label_fits_its_width_and_keeps_everything_that_does() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    apply_style(&ctx, themes::Palette::default());
+    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let painter = ui.painter().clone();
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            let width_of = |text: &str| {
+                painter
+                    .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                    .rect
+                    .width()
+            };
+
+            let name = "a-rather-long-file-name-that-will-not-fit.tar.gz";
+            let full = width_of(name);
+
+            // Wide enough for the whole thing: returned untouched, with
+            // no ellipsis bolted on.
+            assert_eq!(
+                truncate_for_width(name, full + 10.0, &painter, ui),
+                name,
+                "a name that fits should come back unchanged"
+            );
+
+            for max_w in [full * 0.75, full * 0.5, full * 0.25, 12.0, 1.0] {
+                let cut = truncate_for_width(name, max_w, &painter, ui);
+                if cut.is_empty() {
+                    continue;
+                }
+                assert!(
+                    cut.ends_with('…'),
+                    "{cut:?} was shortened but does not say so"
+                );
+                assert!(
+                    width_of(&cut) <= max_w,
+                    "{cut:?} lays out at {}px, past the {max_w}px it was given",
+                    width_of(&cut)
+                );
+
+                let kept: String = cut.chars().take(cut.chars().count() - 1).collect();
+                assert!(
+                    name.starts_with(&kept),
+                    "{cut:?} is not a prefix of the original name"
+                );
+
+                // One more character would not have fit. Without this,
+                // returning just "…" passes every assertion above.
+                let next = name.chars().nth(kept.chars().count());
+                if let Some(next) = next {
+                    let longer = format!("{kept}{next}…");
+                    assert!(
+                        width_of(&longer) > max_w,
+                        "{cut:?} stopped early — {longer:?} also fits in {max_w}px"
+                    );
+                }
+            }
+        });
+    });
+}

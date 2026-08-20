@@ -33,6 +33,17 @@ pub struct DupGroup {
     pub files: Vec<DupFile>,
 }
 
+/// The result of a duplicate scan, and what it had to leave out.
+pub struct DupScan {
+    pub groups: Vec<DupGroup>,
+    /// Files never hashed because [`MAX_CANDIDATES`] was reached.
+    ///
+    /// Reported rather than dropped in silence: "no more duplicates"
+    /// and "we stopped looking" are very different answers to give
+    /// someone deciding what to delete.
+    pub skipped: usize,
+}
+
 /// Caps how many same-size candidates get hashed — a pathological tree
 /// (e.g. millions of empty-ish config files) could otherwise turn "find
 /// duplicates" into "read the entire drive". Candidates beyond this are
@@ -43,7 +54,13 @@ const MAX_CANDIDATES: usize = 200_000;
 /// (index path from the tree root, absolute filesystem path) for one file.
 type SizeCandidate = (Vec<usize>, PathBuf);
 
-pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> Vec<DupGroup> {
+pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> DupScan {
+    find_duplicates_capped(tree, progress, MAX_CANDIDATES)
+}
+
+/// [`find_duplicates`] with the cap spelled out, so a test can reach the
+/// truncation path without building a tree of 200,000 files.
+fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usize) -> DupScan {
     let mut by_size: HashMap<u64, Vec<SizeCandidate>> = HashMap::new();
     let mut path = tree.root_path.clone();
     let mut index_path = Vec::new();
@@ -65,12 +82,20 @@ pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> Vec<DupGr
     // two runs of an identical scan.
     size_groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| b.0.cmp(&a.0)));
 
+    // Whole size-groups only. Taking a group's first few files and
+    // stopping mid-way through it used to be possible, and a partly
+    // hashed group is worse than an absent one: hash three of five
+    // identical files and the view reports a group of three, so someone
+    // clearing duplicates is told there are two spare copies when there
+    // are four. An absent group at least says nothing.
     let mut candidates: Vec<(Vec<usize>, PathBuf, u64)> = Vec::new();
-    'outer: for (size, files) in size_groups {
+    let mut skipped = 0_usize;
+    for (size, files) in size_groups {
+        if candidates.len().saturating_add(files.len()) > cap {
+            skipped = skipped.saturating_add(files.len());
+            continue;
+        }
         for (idx, p) in files {
-            if candidates.len() >= MAX_CANDIDATES {
-                break 'outer;
-            }
             candidates.push((idx, p, size));
         }
     }
@@ -128,7 +153,7 @@ pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> Vec<DupGr
                     .cmp(&b.files.first().map(|f| &f.index_path))
             })
     });
-    groups
+    DupScan { groups, skipped }
 }
 
 fn collect_by_size(
@@ -157,4 +182,71 @@ fn hash_file(path: &std::path::Path) -> std::io::Result<blake3::Hash> {
     let mut file = std::fs::File::open(path)?;
     std::io::copy(&mut file, &mut hasher)?;
     Ok(hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// A size-group is taken whole or not at all, and what was left out
+    /// is reported.
+    ///
+    /// The cap used to stop mid-group, so a group of five identical
+    /// files could be hashed three at a time and shown as a group of
+    /// three. Someone clearing duplicates would be told there were two
+    /// spare copies when there were four — and nothing anywhere said the
+    /// search had been cut short.
+    #[test]
+    fn the_candidate_cap_drops_whole_groups_and_says_how_many() -> anyhow::Result<()> {
+        // Named with the pid and a counter: two tests sharing a temp
+        // directory delete it out from under each other, which showed up
+        // as an intermittent PermissionDenied on Windows CI.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("rustdirstat_dupes_{}_{unique}", std::process::id()));
+        let root = root.as_path();
+        let _ = fs::remove_dir_all(root);
+        fs::create_dir_all(root)?;
+
+        // Two groups of identical files, of two distinct sizes, so the
+        // size prefilter puts them in separate buckets.
+        for (folder, size, count) in [("big", 64_usize, 5_usize), ("small", 32, 3)] {
+            let sub = root.join(folder);
+            fs::create_dir_all(&sub)?;
+            for i in 0..count {
+                fs::write(sub.join(format!("f{i}.bin")), vec![b'x'; size])?;
+            }
+        }
+
+        let tree = crate::scanner::scan(root, None)?;
+
+        // Room for everything: both groups come back, nothing skipped.
+        let all = find_duplicates_capped(&tree, None, 100);
+        assert_eq!(all.skipped, 0, "nothing should be dropped under a wide cap");
+        assert_eq!(
+            all.groups.len(),
+            2,
+            "both sets of identical files form a group"
+        );
+
+        // Room for the five-file group only. The three-file group is
+        // dropped whole and counted, rather than half-hashed.
+        let capped = find_duplicates_capped(&tree, None, 5);
+        assert_eq!(
+            capped.skipped, 3,
+            "the group that did not fit should be reported, not silently dropped"
+        );
+        for group in &capped.groups {
+            assert_eq!(
+                group.files.len(),
+                5,
+                "a group was reported with {} of its files, which understates                  how many copies exist",
+                group.files.len()
+            );
+        }
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }

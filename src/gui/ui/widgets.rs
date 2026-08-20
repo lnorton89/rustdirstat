@@ -654,26 +654,43 @@ pub(super) fn truncate_for_width(
     ui: &egui::Ui,
 ) -> String {
     let font = TextStyle::Small.resolve(ui.style());
-    if painter
-        .layout_no_wrap(name.to_string(), font.clone(), Color32::WHITE)
-        .rect
-        .width()
-        <= max_w
-    {
+    let full = painter.layout_no_wrap(name.to_string(), font.clone(), Color32::WHITE);
+    if full.rect.width() <= max_w {
         return name.to_string();
     }
-    let mut s = name.to_string();
-    while !s.is_empty() {
-        s.pop();
-        let candidate = format!("{s}…");
-        if painter
-            .layout_no_wrap(candidate.clone(), font.clone(), Color32::WHITE)
-            .rect
-            .width()
-            <= max_w
-        {
-            return candidate;
-        }
+
+    // Two layouts, whatever the length of the name. This used to lay the
+    // whole string out again for every character it removed — one
+    // `Galley`, one `String` and one shaping pass per character — on a
+    // path that runs for every visible treemap tile, every frame.
+    //
+    // A galley already knows where each character sits: `Row::glyphs` is
+    // one entry per `char`, positioned from the galley's own origin. So
+    // the cut point is a scan over that, not a search over re-layouts.
+    let ellipsis_width = painter
+        .layout_no_wrap(ELLIPSIS.to_string(), font, Color32::WHITE)
+        .rect
+        .width();
+    let budget = max_w - ellipsis_width;
+    if budget <= 0.0 {
+        return String::new();
     }
-    String::new()
+    let Some(row) = full.rows.first() else {
+        return String::new();
+    };
+    let mut kept = String::new();
+    for glyph in &row.glyphs {
+        if glyph.pos.x + glyph.advance_width > budget {
+            break;
+        }
+        kept.push(glyph.chr);
+    }
+    if kept.is_empty() {
+        return String::new();
+    }
+    kept.push(ELLIPSIS);
+    kept
 }
+
+/// The character [`truncate_for_width`] cuts with.
+const ELLIPSIS: char = '…';

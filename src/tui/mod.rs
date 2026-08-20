@@ -253,8 +253,8 @@ fn browse<B: ratatui::backend::Backend>(
 
         if app.duplicate_scan_requested {
             app.duplicate_scan_requested = false;
-            if let Some(groups) = run_duplicate_scan(terminal, &app.tree)? {
-                app.set_duplicate_results(groups);
+            if let Some(scan) = run_duplicate_scan(terminal, &app.tree)? {
+                app.set_duplicate_results(scan);
             }
             changed = true;
         }
@@ -283,38 +283,36 @@ fn browse<B: ratatui::backend::Backend>(
 fn run_duplicate_scan<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tree: &crate::model::Tree,
-) -> Result<Option<Vec<crate::duplicates::DupGroup>>> {
+) -> Result<Option<crate::duplicates::DupScan>> {
     let progress = crate::duplicates::DupProgress::default();
     let started = Instant::now();
 
-    std::thread::scope(
-        |scope| -> Result<Option<Vec<crate::duplicates::DupGroup>>> {
-            let handle = scope.spawn(|| crate::duplicates::find_duplicates(tree, Some(&progress)));
+    std::thread::scope(|scope| -> Result<Option<crate::duplicates::DupScan>> {
+        let handle = scope.spawn(|| crate::duplicates::find_duplicates(tree, Some(&progress)));
 
-            let mut cancelled = false;
-            loop {
-                terminal.draw(|f| ui::draw_duplicate_progress(f, &progress, started))?;
-                if handle.is_finished() {
-                    break;
-                }
-                if event::poll(Duration::from_millis(150))? {
-                    if let Event::Key(k) = event::read()? {
-                        let cancel = k.kind == KeyEventKind::Press
-                            && (k.code == KeyCode::Char('q')
-                                || k.code == KeyCode::Esc
-                                || is_ctrl_c(&k));
-                        if cancel && !cancelled {
-                            cancelled = true;
-                            progress.cancelled.store(true, Ordering::Relaxed);
-                        }
+        let mut cancelled = false;
+        loop {
+            terminal.draw(|f| ui::draw_duplicate_progress(f, &progress, started))?;
+            if handle.is_finished() {
+                break;
+            }
+            if event::poll(Duration::from_millis(150))? {
+                if let Event::Key(k) = event::read()? {
+                    let cancel = k.kind == KeyEventKind::Press
+                        && (k.code == KeyCode::Char('q')
+                            || k.code == KeyCode::Esc
+                            || is_ctrl_c(&k));
+                    if cancel && !cancelled {
+                        cancelled = true;
+                        progress.cancelled.store(true, Ordering::Relaxed);
                     }
                 }
             }
+        }
 
-            let groups = handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("duplicate scan thread panicked"))?;
-            Ok(if cancelled { None } else { Some(groups) })
-        },
-    )
+        let scan = handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("duplicate scan thread panicked"))?;
+        Ok(if cancelled { None } else { Some(scan) })
+    })
 }

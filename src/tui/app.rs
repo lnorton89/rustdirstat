@@ -2,7 +2,6 @@ use super::search::{self, SearchHit};
 use super::top_files::{self, TopFile};
 use crate::color::Category;
 use crate::config::Config;
-use crate::duplicates::DupGroup;
 use crate::model::{Node, Tree};
 use crate::stats::{self, ExtStat};
 use anyhow::Result;
@@ -180,6 +179,10 @@ pub(super) struct App {
     pub duplicate_group_count: usize,
     pub duplicate_total_wasted: u64,
     pub duplicate_truncated: bool,
+    /// Files the duplicate scan never hashed, because it hit its
+    /// candidate limit. Shown, so "no more duplicates" is not confused
+    /// with "we stopped looking".
+    pub duplicate_skipped: usize,
     /// Text-entry state for "Move to" (`M`) — the destination folder,
     /// entered the same way the search/filter prompts work.
     pub move_mode: bool,
@@ -240,6 +243,7 @@ impl App {
             duplicate_group_count: 0,
             duplicate_total_wasted: 0,
             duplicate_truncated: false,
+            duplicate_skipped: 0,
             move_mode: false,
             move_destination: String::new(),
             show_properties: false,
@@ -420,7 +424,9 @@ impl App {
     /// long tail of smaller groups.
     const MAX_DUPLICATE_DISPLAY_GROUPS: usize = 500;
 
-    pub(super) fn set_duplicate_results(&mut self, groups: Vec<DupGroup>) {
+    pub(super) fn set_duplicate_results(&mut self, scan: crate::duplicates::DupScan) {
+        let groups = scan.groups;
+        self.duplicate_skipped = scan.skipped;
         self.duplicate_group_count = groups.len();
         self.duplicate_truncated = groups.len() > Self::MAX_DUPLICATE_DISPLAY_GROUPS;
         self.duplicate_total_wasted = groups

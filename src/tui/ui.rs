@@ -678,6 +678,12 @@ fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
     if app.duplicate_truncated {
         title.push_str(" (showing largest groups)");
     }
+    if app.duplicate_skipped > 0 {
+        title.push_str(&format!(
+            " ({} files not checked — limit reached)",
+            thousands(app.duplicate_skipped as u64)
+        ));
+    }
     title.push_str(" — u to close ");
     let list = List::new(items)
         .block(

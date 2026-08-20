@@ -325,7 +325,7 @@ pub(super) struct GuiApp {
     treemap_key: Option<TreemapKey>,
     scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
     scan_resets_workspace: bool,
-    duplicate_rx: Option<mpsc::Receiver<Vec<DupGroup>>>,
+    duplicate_rx: Option<mpsc::Receiver<crate::duplicates::DupScan>>,
     pub pending_windows_tool: Option<usize>,
     tool_rx: Option<mpsc::Receiver<Result<crate::wintools::ToolOutput, String>>>,
     active_tool_name: Option<String>,
@@ -544,8 +544,7 @@ impl GuiApp {
         let tree = Arc::clone(&self.tree);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let groups = crate::duplicates::find_duplicates(tree.as_ref(), None);
-            let _ = tx.send(groups);
+            let _ = tx.send(crate::duplicates::find_duplicates(tree.as_ref(), None));
         });
         self.duplicate_rx = Some(rx);
     }
@@ -811,12 +810,19 @@ impl GuiApp {
         if let Some(result) = duplicate_result {
             self.duplicate_rx = None;
             match result {
-                Ok(groups) => {
-                    self.duplicate_groups = groups;
-                    self.status = Some(format!(
-                        "{} duplicate group(s)",
-                        self.duplicate_groups.len()
-                    ));
+                Ok(scan) => {
+                    self.duplicate_groups = scan.groups;
+                    let groups = self.duplicate_groups.len();
+                    // Says so when the search was cut short. "12
+                    // duplicate group(s)" reads as the whole answer.
+                    self.status = Some(if scan.skipped > 0 {
+                        format!(
+                            "{groups} duplicate group(s) — {} file(s) not checked,                              the candidate limit was reached",
+                            scan.skipped
+                        )
+                    } else {
+                        format!("{groups} duplicate group(s)")
+                    });
                 }
                 Err(error) => self.status = Some(error),
             }
