@@ -59,6 +59,18 @@ check `git status` before staging anything: files you never opened will
 be modified, and files you *did* open will carry their edits alongside
 yours.
 
+Note that `git commit` commits the whole index, not just the paths you
+passed to `git add`. Use `git commit -- path/to/file` so a staged change
+you did not make cannot ride along — that is how a half-finished module
+move once reached `main` without the `mod` declarations that went with
+it, leaving `HEAD` unbuildable.
+
+**Line endings are `.gitattributes`' problem, not yours.** Every text
+file is stored and checked out as LF. Do not convert endings by hand, do
+not "restore CRLF" after editing, and do not treat a whole-file rewrite
+as needing special care — git normalizes on the way in, so nothing you
+do to a file's endings can reach a commit.
+
 So never `git add -A`, never `git add .`, and never `git commit -a`.
 Stage the files you actually changed, by name. Where a file you touched
 also carries someone else's in-flight edits, stage only your own hunks —
