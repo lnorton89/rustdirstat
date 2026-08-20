@@ -12,17 +12,41 @@ use super::probes::*;
 use super::theme::*;
 use super::widgets::*;
 
+/// The narrowest each column may be squeezed. See the directory table's
+/// equivalent for why this is shared with the column spec rather than
+/// written twice.
+pub(super) fn extension_column_min_width(column: ExtensionColumn) -> f32 {
+    match column {
+        ExtensionColumn::Extension => 90.0,
+        ExtensionColumn::Color => 48.0,
+        ExtensionColumn::Description => 72.0,
+        ExtensionColumn::Bytes => 70.0,
+        ExtensionColumn::PercentBytes => 56.0,
+        ExtensionColumn::Files => 44.0,
+    }
+}
+
+/// Total width the extension columns need before anything has to scroll.
+pub(super) fn extension_table_min_width(columns: &[ExtensionColumn], item_spacing: f32) -> f32 {
+    let widths: f32 = columns
+        .iter()
+        .map(|column| extension_column_min_width(*column))
+        .sum();
+    widths + item_spacing * columns.len().saturating_sub(1) as f32
+}
+
 pub(super) fn extension_column_spec(column: ExtensionColumn) -> Column {
+    let minimum = extension_column_min_width(column);
     match column {
         ExtensionColumn::Extension => Column::remainder()
-            .at_least(64.0)
+            .at_least(minimum)
             .clip(true)
             .resizable(false),
-        ExtensionColumn::Color => Column::exact(48.0).clip(true),
-        ExtensionColumn::Description => Column::auto().range(72.0..=115.0).clip(true),
-        ExtensionColumn::Bytes => Column::auto().range(70.0..=120.0).clip(true),
-        ExtensionColumn::PercentBytes => Column::auto().range(56.0..=78.0).clip(true),
-        ExtensionColumn::Files => Column::auto().range(44.0..=70.0).clip(true),
+        ExtensionColumn::Color => Column::exact(minimum).clip(true),
+        ExtensionColumn::Description => Column::auto().range(minimum..=115.0).clip(true),
+        ExtensionColumn::Bytes => Column::auto().range(minimum..=120.0).clip(true),
+        ExtensionColumn::PercentBytes => Column::auto().range(minimum..=78.0).clip(true),
+        ExtensionColumn::Files => Column::auto().range(minimum..=70.0).clip(true),
     }
 }
 
@@ -207,41 +231,55 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     let mut selected = None;
     let mut sort = None;
     let mut reorder = None;
-    let mut table = TableBuilder::new(ui)
-        .striped(true)
-        .vscroll(true)
-        .resizable(true)
-        .sense(Sense::click());
-    for column in &columns {
-        table = table.column(extension_column_spec(*column));
-    }
-    table
-        .header(TABLE_HEADER_HEIGHT, |mut h| {
+    let minimum_width = extension_table_min_width(&columns, ui.spacing().item_spacing.x);
+    // Same story as the directory table: this panel is resizable, and
+    // below a certain width every column but the first was simply clipped
+    // away with no scrollbar and no way to reach them.
+    egui::ScrollArea::horizontal()
+        .id_salt("extension_hscroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_min_width(minimum_width);
+            let mut table = TableBuilder::new(ui)
+                .striped(true)
+                .vscroll(true)
+                .resizable(true)
+                .sense(Sense::click());
             for column in &columns {
-                h.col(|ui| {
-                    let (new_sort, new_reorder) = draw_extension_header(ui, app, *column);
-                    sort = new_sort.or(sort);
-                    reorder = new_reorder.or(reorder);
-                });
+                table = table.column(extension_column_spec(*column));
             }
-        })
-        .body(|body| {
-            body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
-                let ext = &rows[row.index()];
-                row.set_selected(app.highlighted_extension.as_ref() == Some(&ext.extension));
-                for column in &columns {
-                    let column = *column;
-                    #[cfg(test)]
-                    probe(&TEST_EXTENSION_CELL_COLUMNS).push((ext.extension.clone(), column));
-                    row.col(|ui| draw_extension_cell(ui, ext, column, total));
-                }
-                let response = row.response();
-                #[cfg(test)]
-                probe(&TEST_EXTENSION_ROW_RECTS).push((ext.extension.clone(), response.rect));
-                if response.clicked() {
-                    selected = Some((ext.extension.clone(), ext.category));
-                }
-            })
+            table
+                .header(TABLE_HEADER_HEIGHT, |mut h| {
+                    for column in &columns {
+                        h.col(|ui| {
+                            let (new_sort, new_reorder) = draw_extension_header(ui, app, *column);
+                            sort = new_sort.or(sort);
+                            reorder = new_reorder.or(reorder);
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
+                        let ext = &rows[row.index()];
+                        row.set_selected(
+                            app.highlighted_extension.as_ref() == Some(&ext.extension),
+                        );
+                        for column in &columns {
+                            let column = *column;
+                            #[cfg(test)]
+                            probe(&TEST_EXTENSION_CELL_COLUMNS)
+                                .push((ext.extension.clone(), column));
+                            row.col(|ui| draw_extension_cell(ui, ext, column, total));
+                        }
+                        let response = row.response();
+                        #[cfg(test)]
+                        probe(&TEST_EXTENSION_ROW_RECTS)
+                            .push((ext.extension.clone(), response.rect));
+                        if response.clicked() {
+                            selected = Some((ext.extension.clone(), ext.category));
+                        }
+                    })
+                });
         });
     if let Some((source, target)) = reorder {
         app.reorder_extension_column(source, target);

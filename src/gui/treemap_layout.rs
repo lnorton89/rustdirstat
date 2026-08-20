@@ -60,19 +60,8 @@ impl Tile {
 }
 
 const MAX_DEPTH: u32 = 32;
-/// A tile has to be at least this many pixels on a side to reserve a
-/// label row for its own name before recursing into children — well
-/// above the ~14px a single line of UI text needs, so a reserved row is
-/// never narrower than what will actually render into it.
-const MIN_LABEL_PX: f32 = 18.0;
-/// Height of the strip a tile reserves at its top for its own name.
-///
-/// A whole number of pixels on purpose. This used to be `MIN_LABEL_PX *
-/// 0.8`, i.e. 14.4, which put every nested tile on a fractional origin;
-/// combined with rounding the pixel dimensions *up*, children could end
-/// up extending past the bottom of the parent they were subdivided out
-/// of, and the error accumulated with depth.
-const LABEL_STRIP_PX: f32 = 14.0;
+/// Narrowest a tile can be and still show a name worth reading.
+const MIN_LABEL_WIDTH_PX: f32 = 18.0;
 /// Expansion stops once a tile's pixel area drops below this — a tile
 /// smaller than a handful of pixels on a side can't show anything a user
 /// could distinguish anyway, and without a floor a deeply-fanned-out
@@ -132,7 +121,14 @@ pub(super) fn build(
     height: f32,
     use_physical: bool,
     free_space: Option<u64>,
+    label_strip: f32,
 ) -> Vec<Tile> {
+    // Whole pixels, so nested tiles stay on integer origins. The caller
+    // measures this from the font it will actually draw with rather than
+    // passing a guess: a strip shorter than the text means the children
+    // painted into the rest of the tile cover the bottom of their own
+    // parent's name, which showed up as descenders being sliced off.
+    let label_strip = label_strip.max(0.0).ceil();
     let mut out = Vec::new();
     let mut level = vec![Pending {
         node,
@@ -147,7 +143,14 @@ pub(super) fn build(
     while !level.is_empty() && out.len() < MAX_TILES {
         let mut next = Vec::new();
         for pending in &level {
-            expand(pending, use_physical, free_space, &mut out, &mut next);
+            expand(
+                pending,
+                use_physical,
+                free_space,
+                label_strip,
+                &mut out,
+                &mut next,
+            );
         }
         prioritize(&mut next, out.len());
         level = next;
@@ -163,6 +166,7 @@ fn expand<'a>(
     pending: &Pending<'a>,
     use_physical: bool,
     free_space: Option<u64>,
+    label_strip: f32,
     out: &mut Vec<Tile>,
     next: &mut Vec<Pending<'a>>,
 ) {
@@ -301,7 +305,7 @@ fn expand<'a>(
             && !child.children.is_empty()
             && depth + 1 < MAX_DEPTH
             && area >= MIN_RECURSE_AREA_PX;
-        let reserve_label = rw >= MIN_LABEL_PX && rh >= MIN_LABEL_PX;
+        let reserve_label = rw >= MIN_LABEL_WIDTH_PX && rh >= label_strip + 4.0;
 
         let mut child_path = pending.index_path.clone();
         child_path.push(orig_idx);
@@ -323,7 +327,7 @@ fn expand<'a>(
 
         if expands {
             let (iy, ih) = if reserve_label {
-                (ry + LABEL_STRIP_PX, rh - LABEL_STRIP_PX)
+                (ry + label_strip, rh - label_strip)
             } else {
                 (ry, rh)
             };
@@ -365,6 +369,9 @@ fn prioritize(next: &mut Vec<Pending<'_>>, emitted: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stands in for what the renderer measures from its font.
+    const TEST_LABEL_STRIP: f32 = 16.0;
 
     fn leaf(name: &str, size: u64) -> Node {
         Node {
@@ -444,7 +451,16 @@ mod tests {
         // as bare panel background.
         let root = drive_shaped(5, 6, 1024);
         let (w, h) = (1900.0_f32, 420.0_f32);
-        let tiles = build(&root, 0.0, 0.0, w, h, false, Some(root.size / 2));
+        let tiles = build(
+            &root,
+            0.0,
+            0.0,
+            w,
+            h,
+            false,
+            Some(root.size / 2),
+            TEST_LABEL_STRIP,
+        );
 
         assert!(
             top_level_coverage(&tiles, w, h) > 0.99,
@@ -464,7 +480,16 @@ mod tests {
     #[test]
     fn every_level_is_emitted_whole_or_not_at_all() {
         let root = drive_shaped(5, 6, 1024);
-        let tiles = build(&root, 0.0, 0.0, 1900.0, 420.0, false, None);
+        let tiles = build(
+            &root,
+            0.0,
+            0.0,
+            1900.0,
+            420.0,
+            false,
+            None,
+            TEST_LABEL_STRIP,
+        );
         // A parent that was expanded must be covered by its children, so
         // for every depth present, the deepest present depth is the only
         // one allowed to be partial. Checking monotonic depth ordering is
@@ -489,7 +514,7 @@ mod tests {
         // collapse the rest into one grey slab covering 60% of the panel.
         let children = (0..200).map(|i| leaf(&format!("f{i}.bin"), 1000)).collect();
         let root = dir("root", children);
-        let tiles = build(&root, 0.0, 0.0, 800.0, 600.0, false, None);
+        let tiles = build(&root, 0.0, 0.0, 800.0, 600.0, false, None, TEST_LABEL_STRIP);
 
         assert_eq!(tiles.iter().filter(|t| !t.is_aggregate).count(), 200);
         assert!(
@@ -511,7 +536,7 @@ mod tests {
         children.extend((0..2000).map(|i| leaf(&format!("tiny{i}.bin"), 100)));
         let root = dir("root", children);
         let (w, h) = (200.0_f32, 100.0_f32);
-        let tiles = build(&root, 0.0, 0.0, w, h, false, None);
+        let tiles = build(&root, 0.0, 0.0, w, h, false, None, TEST_LABEL_STRIP);
 
         let aggregate: Vec<_> = tiles.iter().filter(|t| t.is_aggregate).collect();
         assert_eq!(aggregate.len(), 1, "expected exactly one aggregate tile");
@@ -537,7 +562,7 @@ mod tests {
             "root",
             vec![dir("dense", children), leaf("big.bin", 5_000_000)],
         );
-        let tiles = build(&root, 0.0, 0.0, 300.0, 200.0, false, None);
+        let tiles = build(&root, 0.0, 0.0, 300.0, 200.0, false, None, TEST_LABEL_STRIP);
 
         assert!(
             tiles.iter().any(|t| t.name == "dense"),
@@ -555,7 +580,16 @@ mod tests {
             "root",
             vec![dir("sub", vec![leaf("a.bin", 4000), leaf("b.bin", 4000)])],
         );
-        let tiles = build(&root, 0.0, 0.0, 400.0, 300.0, false, Some(8000));
+        let tiles = build(
+            &root,
+            0.0,
+            0.0,
+            400.0,
+            300.0,
+            false,
+            Some(8000),
+            TEST_LABEL_STRIP,
+        );
         let free: Vec<_> = tiles.iter().filter(|t| t.is_free_space).collect();
         assert_eq!(free.len(), 1);
         assert_eq!(free[0].depth, 0);
@@ -565,7 +599,7 @@ mod tests {
     #[test]
     fn deeper_tiles_are_emitted_after_the_parents_they_paint_over() {
         let root = drive_shaped(4, 5, 4096);
-        let tiles = build(&root, 0.0, 0.0, 900.0, 700.0, false, None);
+        let tiles = build(&root, 0.0, 0.0, 900.0, 700.0, false, None, TEST_LABEL_STRIP);
         for (i, tile) in tiles.iter().enumerate() {
             if tile.index_path.len() < 2 {
                 continue;
@@ -593,7 +627,16 @@ mod tests {
             (77.0, 51.0),
             (1024.0, 1024.0),
         ] {
-            let tiles = build(&root, 12.0, 34.0, w, h, false, Some(root.size / 3));
+            let tiles = build(
+                &root,
+                12.0,
+                34.0,
+                w,
+                h,
+                false,
+                Some(root.size / 3),
+                TEST_LABEL_STRIP,
+            );
             let panel = (12.0, 34.0, 12.0 + w, 34.0 + h);
             for tile in &tiles {
                 assert!(
@@ -641,7 +684,7 @@ mod tests {
     #[test]
     fn tiles_at_one_level_do_not_overlap_each_other() {
         let root = drive_shaped(4, 5, 4096);
-        let tiles = build(&root, 0.0, 0.0, 900.0, 600.0, false, None);
+        let tiles = build(&root, 0.0, 0.0, 900.0, 600.0, false, None, TEST_LABEL_STRIP);
 
         let top: Vec<_> = tiles.iter().filter(|t| t.depth == 0).collect();
         for (i, a) in top.iter().enumerate() {
@@ -661,7 +704,7 @@ mod tests {
     #[test]
     fn an_empty_panel_produces_no_tiles() {
         let root = dir("root", vec![leaf("a.bin", 10)]);
-        assert!(build(&root, 0.0, 0.0, 0.0, 100.0, false, None).is_empty());
-        assert!(build(&root, 0.0, 0.0, 100.0, 0.0, false, None).is_empty());
+        assert!(build(&root, 0.0, 0.0, 0.0, 100.0, false, None, TEST_LABEL_STRIP).is_empty());
+        assert!(build(&root, 0.0, 0.0, 100.0, 0.0, false, None, TEST_LABEL_STRIP).is_empty());
     }
 }

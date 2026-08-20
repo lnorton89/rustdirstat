@@ -137,6 +137,22 @@ impl Tree {
         node
     }
 
+    /// [`Self::node_for`] for index paths that may no longer be valid.
+    ///
+    /// An index path only means anything against the tree it was taken
+    /// from. Anything that held one across a rescan — a queued deletion,
+    /// a restored selection — is asking about a tree that no longer
+    /// exists, and indexing straight into `children` would either panic
+    /// or, worse, silently answer about whatever now occupies those
+    /// indices.
+    pub fn try_node_for(&self, index_path: &[usize]) -> Option<&Node> {
+        let mut node = &self.root;
+        for &idx in index_path {
+            node = node.children.get(idx)?;
+        }
+        Some(node)
+    }
+
     /// True only when the scan root is an actual filesystem/volume root
     /// (`/` on Unix, `C:\` or `\\?\C:\` on Windows) rather than some
     /// subfolder. `volume_free`/`volume_total` are always the *whole

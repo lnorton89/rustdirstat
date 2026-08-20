@@ -191,6 +191,9 @@ struct TreemapKey {
     rect: [i32; 4],
     physical: bool,
     free_space: bool,
+    /// Included because the strip comes from the font the renderer will
+    /// draw with, and a font size change has to re-lay-out the tiles.
+    label_strip: i32,
 }
 
 /// Order-independent fingerprint of the expanded-directory set.
@@ -620,7 +623,35 @@ impl GuiApp {
     /// See [`drop_in_background`] for why the old tree is not just dropped
     /// where it stands.
     fn replace_tree(&mut self, tree: Tree) {
+        // A queued deletion holds an *index path*, which only means
+        // anything against the tree it was taken from. Carrying one
+        // across a rescan would resolve it against the new tree and
+        // delete whatever now happens to sit at those indices — with
+        // `remove_dir_all` on the other end of it. Dropping it here, at
+        // the one place trees are ever swapped, is what makes that
+        // impossible rather than merely unlikely.
+        self.pending_delete = None;
         drop_in_background(std::mem::replace(&mut self.tree, Arc::new(tree)));
+    }
+
+    /// Clears everything that describes *where the user was* in a tree,
+    /// as opposed to the preferences that should outlive it.
+    ///
+    /// Scanning a different folder used to leave the extension highlight,
+    /// the search box, and the active view pointing at the tree that had
+    /// just been thrown away, so a fresh scan opened showing a
+    /// highlighted extension that was not in it and a search query with
+    /// no results.
+    fn reset_workspace(&mut self) {
+        self.zoom_path.clear();
+        self.selected_path = None;
+        self.expanded.clear();
+        self.expanded.insert(Vec::new());
+        self.file_view = FileView::AllFiles;
+        self.highlighted_extension = None;
+        self.highlighted_category = None;
+        self.search_query.clear();
+        self.search_error = None;
     }
 
     /// Gives up the scanned tree without paying to tear it down, for use
@@ -658,11 +689,7 @@ impl GuiApp {
                     let reset = self.scan_resets_workspace;
                     self.replace_tree(tree);
                     if reset {
-                        self.zoom_path.clear();
-                        self.selected_path = None;
-                        self.expanded.clear();
-                        self.expanded.insert(Vec::new());
-                        self.file_view = FileView::AllFiles;
+                        self.reset_workspace();
                     } else {
                         self.zoom_path = valid_prefix(self.tree.as_ref(), &self.zoom_path);
                         self.selected_path = self
@@ -767,6 +794,25 @@ impl GuiApp {
         let Some(pending) = self.pending_delete.take() else {
             return Ok(());
         };
+        // Belt and braces with the clearing in `replace_tree`: confirm
+        // the indices still lead to the item the user actually chose
+        // before handing a path to `remove_dir_all`. Deleting the wrong
+        // thing is not an error worth being clever about recovering
+        // from.
+        let Some(node) = self.tree.try_node_for(&pending.index_path) else {
+            self.status = Some(format!(
+                "{} is no longer where it was; nothing was deleted",
+                pending.name
+            ));
+            return Ok(());
+        };
+        if node.name != pending.name || node.is_dir != pending.is_dir {
+            self.status = Some(format!(
+                "{} moved since it was selected; nothing was deleted",
+                pending.name
+            ));
+            return Ok(());
+        }
         let path = self.tree.path_for(&pending.index_path);
         if pending.permanent {
             if pending.is_dir {
@@ -809,7 +855,7 @@ impl GuiApp {
     /// Rebuilds [`Self::treemap_tiles`] if the panel rect or anything the
     /// layout depends on has changed since the last frame, and otherwise
     /// leaves the existing tiles in place.
-    pub(super) fn refresh_treemap(&mut self, x: f32, y: f32, w: f32, h: f32) {
+    pub(super) fn refresh_treemap(&mut self, x: f32, y: f32, w: f32, h: f32, label_strip: f32) {
         let show_free_space =
             self.show_free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
         let free_space = if show_free_space {
@@ -831,13 +877,22 @@ impl GuiApp {
             ],
             physical: self.use_physical,
             free_space: free_space.is_some(),
+            label_strip: label_strip.ceil() as i32,
         };
         if self.treemap_key.as_ref() == Some(&key) {
             return;
         }
 
-        let mut tiles =
-            treemap_layout::build(self.zoom_node(), x, y, w, h, self.use_physical, free_space);
+        let mut tiles = treemap_layout::build(
+            self.zoom_node(),
+            x,
+            y,
+            w,
+            h,
+            self.use_physical,
+            free_space,
+            label_strip,
+        );
         for tile in &mut tiles {
             if tile.is_node() {
                 let mut absolute = self.zoom_path.clone();
@@ -1034,7 +1089,7 @@ impl eframe::App for GuiApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{extension_label, GuiApp};
+    use super::{extension_label, Category, FileView, GuiApp, PendingDelete};
     use crate::tui::SortMode;
     use std::time::{Duration, Instant};
 
@@ -1221,10 +1276,10 @@ mod tests {
         let dir = nested_test_tree()?;
         let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
 
-        app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0);
         assert!(!app.treemap_tiles.is_empty());
         let stable = app.treemap_tiles.as_ptr();
-        app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0);
         assert_eq!(
             stable,
             app.treemap_tiles.as_ptr(),
@@ -1232,7 +1287,7 @@ mod tests {
         );
 
         // A different panel size has to produce a different layout.
-        app.refresh_treemap(0.0, 0.0, 900.0, 200.0);
+        app.refresh_treemap(0.0, 0.0, 900.0, 200.0, 16.0);
         let widest = app
             .treemap_tiles
             .iter()
@@ -1246,7 +1301,7 @@ mod tests {
         app.refresh_visible_rows();
         app.select_path(row_path(&app, "alpha")?);
         app.zoom_in();
-        app.refresh_treemap(0.0, 0.0, 900.0, 200.0);
+        app.refresh_treemap(0.0, 0.0, 900.0, 200.0, 16.0);
         assert!(
             app.treemap_tiles
                 .iter()
@@ -1265,7 +1320,7 @@ mod tests {
         let dir = nested_test_tree()?;
         let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.refresh_visible_rows();
-        app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0);
         assert!(!app.visible_rows.is_empty());
         assert!(!app.treemap_tiles.is_empty());
         assert!(!app.largest_files.is_empty());
@@ -1280,6 +1335,81 @@ mod tests {
         // The placeholder still has to answer the queries the UI makes
         // while the window tears down around it.
         assert_eq!(app.zoom_node().size, 0);
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn scanning_a_new_folder_clears_the_previous_one_from_the_view() -> anyhow::Result<()> {
+        let first = nested_test_tree()?;
+        let second = test_dir("second_scan");
+        std::fs::create_dir_all(&second)?;
+        std::fs::write(second.join("other.bin"), vec![9_u8; 32])?;
+
+        let mut app = GuiApp::new(crate::scanner::scan(&first, None)?);
+        // Put the workspace into a thoroughly used state.
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.toggle_expanded(&alpha);
+        app.select_path(alpha);
+        app.highlighted_extension = Some(".bin".to_string());
+        app.highlighted_category = Some(Category::Programs);
+        app.search_query = "large".to_string();
+        app.search_error = Some("stale".to_string());
+        app.file_view = FileView::SearchResults;
+
+        app.open_folder(&second)?;
+        wait_for_background(&mut app);
+
+        assert_eq!(app.tree.root_path, second);
+        assert!(app.selected_path.is_none(), "selection outlived the scan");
+        assert!(app.zoom_path.is_empty(), "zoom outlived the scan");
+        assert_eq!(app.expanded.len(), 1, "expansion outlived the scan");
+        assert_eq!(app.file_view, FileView::AllFiles);
+        // These are what the previous fix missed: a highlight and a
+        // search naming things that are not in the new tree at all.
+        assert!(app.highlighted_extension.is_none(), "highlight outlived it");
+        assert!(app.highlighted_category.is_none(), "highlight outlived it");
+        assert!(app.search_query.is_empty(), "search query outlived it");
+        assert!(app.search_error.is_none(), "search error outlived it");
+
+        std::fs::remove_dir_all(first)?;
+        std::fs::remove_dir_all(second)?;
+        Ok(())
+    }
+
+    /// A queued deletion holds indices into the tree it was taken from.
+    /// Letting one survive a rescan means confirming it deletes whatever
+    /// now sits at those indices — a different file entirely.
+    #[test]
+    fn a_queued_deletion_does_not_survive_a_rescan() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        app.select_path(row_path(&app, "alpha")?);
+        app.request_delete_selected(true);
+        assert!(app.pending_delete.is_some(), "the delete should be queued");
+
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+        assert!(
+            app.pending_delete.is_none(),
+            "a rescan left a deletion queued against indices into the old tree"
+        );
+
+        // And confirming a deletion whose target no longer matches is
+        // refused outright rather than resolved against whatever is
+        // there now.
+        app.pending_delete = Some(PendingDelete {
+            index_path: vec![0],
+            name: "not-the-file-that-is-there".to_string(),
+            is_dir: false,
+            permanent: true,
+        });
+        app.confirm_delete()?;
+        assert!(dir.join("alpha").exists(), "the wrong item was deleted");
+        assert!(dir.join("beta").exists(), "the wrong item was deleted");
 
         std::fs::remove_dir_all(dir)?;
         Ok(())

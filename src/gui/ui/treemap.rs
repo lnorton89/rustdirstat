@@ -49,10 +49,22 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
         return;
     }
     let (response, painter) = ui.allocate_painter(avail, Sense::click());
+    // Measure the strip a tile has to reserve for its own name from the
+    // font that name will actually be drawn in. Hard-coding it meant the
+    // reserved 14px was shorter than a 12pt line, so the children painted
+    // into the rest of the tile covered the bottom of the parent's label
+    // and sliced the descenders off every `g` and `p`.
+    let label_strip = ui.text_style_height(&TextStyle::Small) + LABEL_TEXT_PADDING * 2.0;
     // Tiles are only re-laid-out when the panel rect or the tree behind
     // it changes; on a large volume the layout walk is far too expensive
     // to redo for every frame of a hover.
-    app.refresh_treemap(response.rect.min.x, response.rect.min.y, avail.x, avail.y);
+    app.refresh_treemap(
+        response.rect.min.x,
+        response.rect.min.y,
+        avail.x,
+        avail.y,
+        label_strip,
+    );
     let mut clicked = None;
     // Painting borrows the cached tiles out of `app`, so the click it
     // records is applied once that borrow has ended.
@@ -104,9 +116,9 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             if app.selected_path.as_ref() == Some(&tile.index_path) {
                 selected_rect = treemap_selection_rect(rect);
             }
-            if app.show_labels && tile.can_label && tile.w >= 48.0 && tile.h >= 16.0 {
+            if app.show_labels && tile.can_label && tile.w >= 48.0 && tile.h >= label_strip {
                 painter.text(
-                    rect.min + egui::vec2(4.0, 3.0),
+                    rect.min + egui::vec2(4.0, LABEL_TEXT_PADDING),
                     egui::Align2::LEFT_TOP,
                     truncate_for_width(&tile.name, tile.w - 8.0, &painter, ui),
                     TextStyle::Small.resolve(ui.style()),
@@ -201,6 +213,11 @@ pub(super) const MIN_CUSHION_PX: f32 = 12.0;
 /// Tiles smaller than this on a side get no grid outline; see the call
 /// site in `draw_treemap` for why.
 const MIN_GRID_PX: f32 = 5.0;
+
+/// Breathing room above and below a tile's name inside its reserved
+/// strip. Counted twice into the strip height so the text is not flush
+/// against either the tile's top edge or its children.
+pub(super) const LABEL_TEXT_PADDING: f32 = 2.0;
 
 pub(super) fn paint_cushion_rect(painter: &egui::Painter, rect: egui::Rect, base: Color32) {
     if rect.width() < MIN_CUSHION_PX || rect.height() < MIN_CUSHION_PX {
