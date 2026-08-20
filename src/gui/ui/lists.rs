@@ -46,7 +46,7 @@ pub(super) fn draw_largest_files(app: &mut GuiApp, ui: &mut egui::Ui) {
                 let path = file.index_path.clone();
                 row.set_selected(app.selected_path.as_ref() == Some(&path));
                 row.col(|ui| {
-                    ui.label(app.tree.path_for(&path).display().to_string());
+                    ui.label(crate::util::display_path(&app.tree.path_for(&path)));
                 });
                 row.col(|ui| {
                     ui.label(human_bytes(if app.use_physical {
@@ -147,7 +147,7 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
                 let path = hit.index_path.clone();
                 row.set_selected(app.selected_path.as_ref() == Some(&path));
                 row.col(|ui| {
-                    ui.label(app.tree.path_for(&path).display().to_string());
+                    ui.label(crate::util::display_path(&app.tree.path_for(&path)));
                 });
                 row.col(|ui| {
                     ui.label(human_bytes(if app.use_physical {
@@ -211,7 +211,7 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
                 for file in &group.files {
                     let response = ui.selectable_label(
                         app.selected_path.as_ref() == Some(&file.index_path),
-                        app.tree.path_for(&file.index_path).display().to_string(),
+                        crate::util::display_path(&app.tree.path_for(&file.index_path)),
                     );
                     #[cfg(test)]
                     probe(&TEST_DUPLICATE_ROW_RECTS).push((file.index_path.clone(), response.rect));

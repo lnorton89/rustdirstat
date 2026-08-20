@@ -546,7 +546,7 @@ impl GuiApp {
         }
         let progress = Arc::new(crate::scanner::Progress::default());
         let worker_progress = Arc::clone(&progress);
-        let display = root.display().to_string();
+        let display = crate::util::display_path(&root);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = crate::scanner::scan(&root, Some(worker_progress.as_ref()))
@@ -705,7 +705,7 @@ impl GuiApp {
                     self.refresh_largest_files();
                     self.search_results.clear();
                     self.duplicate_groups.clear();
-                    self.status = Some(format!("Scan complete: {}", self.tree.root_path.display()));
+                    self.status = Some("Scan complete".to_string());
                 }
                 Err(error) => self.status = Some(format!("Scan failed: {error}")),
             }
@@ -929,7 +929,7 @@ impl GuiApp {
         }
 
         let mut rows = Vec::new();
-        let root_name = self.tree.root_path.display().to_string();
+        let root_name = crate::util::display_path(&self.tree.root_path);
         push_tree_rows(
             &self.tree.root,
             Vec::new(),

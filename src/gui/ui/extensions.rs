@@ -290,7 +290,11 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     // the slack, so wrapping unconditionally stops the columns reflowing
     // when the pane is dragged and stops the resize handles working at
     // all.
-    let scrolled = ui.available_width() < minimum_width;
+    // Always wrapped, and the width stated explicitly. See the
+    // directory table for the reasoning: rendering straight into the
+    // pane lets the table's minimum width propagate outwards and stops
+    // the panel being dragged narrower than its own columns.
+    let table_width = ui.available_width().max(minimum_width);
     let mut render_table = |ui: &mut egui::Ui| {
         let mut table = TableBuilder::new(ui)
             .striped(true)
@@ -345,17 +349,13 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             });
     };
 
-    if scrolled {
-        egui::ScrollArea::horizontal()
-            .id_salt("extension_hscroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width(minimum_width);
-                render_table(ui);
-            });
-    } else {
-        render_table(ui);
-    }
+    egui::ScrollArea::horizontal()
+        .id_salt("extension_hscroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(table_width);
+            render_table(ui);
+        });
 
     if let Some((source, target)) = reorder {
         app.reorder_extension_column(source, target);

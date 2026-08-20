@@ -932,6 +932,141 @@ fn clicking_a_rendered_directory_row_changes_selection() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Horizontal gap between columns, which is where the resize handle
+/// lives. Matches `apply_style`'s `item_spacing.x`.
+const COLUMN_GAP: f32 = 8.0;
+
+/// Width of a named header on the most recent frame.
+fn header_width(
+    headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
+    label: &str,
+) -> f32 {
+    probe(headers)
+        .iter()
+        .rev()
+        .find(|(seen, _)| *seen == label)
+        .map_or(0.0, |(_, rect)| rect.width())
+}
+
+/// Drags the border on the right-hand edge of a header, the way a user
+/// resizing a column does.
+fn drag_column_border(ctx: &egui::Context, app: &mut GuiApp, label: &str, by: f32) {
+    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
+    for _ in 0..4 {
+        render_directory(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
+    }
+    let edge = probe(&TEST_DIRECTORY_HEADER_RECTS)
+        .iter()
+        .rev()
+        .find(|(seen, _)| *seen == label)
+        // The grab strip is in the gap *between* columns, one full
+        // `item_spacing.x` right of the cell's own edge — not on the
+        // visible boundary, which is where an earlier version of this
+        // test aimed and consequently reported resizing as broken when
+        // it was working.
+        .map(|(_, rect)| egui::pos2(rect.right() + COLUMN_GAP, rect.center().y));
+    assert!(
+        edge.is_some(),
+        "{label} did not render, so it has no border"
+    );
+    let edge = edge.unwrap_or_default();
+
+    render_directory(
+        ctx,
+        app,
+        raw_input_at_width(pointer_button(edge, true), 1400.0),
+    );
+    for step in 1..=4 {
+        let to = edge + egui::vec2(by * step as f32 / 4.0, 0.0);
+        render_directory(ctx, app, raw_input_at_width(pointer_move(to), 1400.0));
+    }
+    let end = edge + egui::vec2(by, 0.0);
+    render_directory(
+        ctx,
+        app,
+        raw_input_at_width(pointer_button(end, false), 1400.0),
+    );
+    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
+    for _ in 0..3 {
+        render_directory(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
+    }
+}
+
+/// The four table-sizing behaviours, asserted together.
+///
+/// They are in one test on purpose. Each of them has been broken at some
+/// point by a change made to fix one of the others — a fixed column width
+/// makes resizing work and stops the table filling the pane; a scroll
+/// area gives a narrow pane somewhere to scroll and stops `remainder`
+/// expanding; a `remainder` that inherits `resizable` stops absorbing
+/// slack. Asserting them separately let each fix look green while it
+/// regressed a sibling.
+#[test]
+fn the_directory_table_fills_resizes_and_scrolls() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+
+    // 1. A wide pane is filled, not left with dead space beside it.
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
+    probe(&TEST_DIRECTORY_SCROLL).clear();
+    for _ in 0..4 {
+        render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 900.0));
+    }
+    let narrow_row = probe(&TEST_DIRECTORY_ROW_RECTS)
+        .last()
+        .map_or(0.0, |(_, rect)| rect.width());
+    for _ in 0..4 {
+        render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 1400.0));
+    }
+    let wide_row = probe(&TEST_DIRECTORY_ROW_RECTS)
+        .last()
+        .map_or(0.0, |(_, rect)| rect.width());
+    assert!(
+        wide_row > narrow_row + 400.0,
+        "table did not grow with the pane: {narrow_row} at 900px, {wide_row} at 1400px"
+    );
+
+    // 2. A wide pane does not scroll, because it does not need to.
+    let roomy = probe(&TEST_DIRECTORY_SCROLL).last().copied();
+    assert!(
+        roomy.is_some(),
+        "the table should report its scroll extents"
+    );
+    let (content, visible) = roomy.unwrap_or_default();
+    assert!(
+        content <= visible + 1.0,
+        "a 1400px pane scrolls with {content:.0}px of content in {visible:.0}px of viewport"
+    );
+
+    // 3. Dragging a column border actually resizes that column.
+    let before = header_width(&TEST_DIRECTORY_HEADER_RECTS, "Size");
+    drag_column_border(&ctx, &mut app, "Size", 60.0);
+    let after = header_width(&TEST_DIRECTORY_HEADER_RECTS, "Size");
+    assert!(
+        after > before + 20.0,
+        "dragging the Size border 60px right moved it from {before:.0}px to {after:.0}px — \
+         the column is pinned, not resizable"
+    );
+
+    // 4. A pane too narrow for the columns scrolls rather than clipping.
+    probe(&TEST_DIRECTORY_SCROLL).clear();
+    for _ in 0..4 {
+        render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 260.0));
+    }
+    let squeezed = probe(&TEST_DIRECTORY_SCROLL).last().copied();
+    assert!(
+        squeezed.is_some(),
+        "the table should report its scroll extents"
+    );
+    let (content, visible) = squeezed.unwrap_or_default();
+    assert!(
+        content > visible + 1.0,
+        "a 260px pane reported {content:.0}px of content in {visible:.0}px of viewport, \
+         so the columns past the edge cannot be reached"
+    );
+}
+
 #[test]
 fn a_squeezed_directory_pane_scrolls_instead_of_clipping() {
     // Dragging the treemap splitter left far enough squeezes this pane

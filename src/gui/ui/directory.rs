@@ -65,6 +65,19 @@ pub(super) fn directory_table_min_width(columns: &[DirectoryColumn], item_spacin
     widths + item_spacing * columns.len().saturating_sub(1) as f32
 }
 
+/// Width a column starts at before the user drags it.
+fn directory_column_initial_width(column: DirectoryColumn) -> f32 {
+    match column {
+        DirectoryColumn::Name => 320.0,
+        DirectoryColumn::Size => 95.0,
+        DirectoryColumn::SubtreePercentage => 150.0,
+        DirectoryColumn::PercentTotal => 80.0,
+        DirectoryColumn::Files | DirectoryColumn::Subdirs => 70.0,
+        DirectoryColumn::LastChange => 140.0,
+        DirectoryColumn::Attributes => 80.0,
+    }
+}
+
 /// `Name` flexes to fill the pane; every other column is auto-sized with
 /// a floor but **no ceiling**.
 ///
@@ -89,8 +102,8 @@ pub(super) fn directory_column_spec(column: DirectoryColumn) -> Column {
             .clip(true)
             .resizable(false);
     }
-    Column::auto()
-        .range(minimum..=f32::INFINITY)
+    Column::initial(directory_column_initial_width(column))
+        .at_least(minimum)
         .clip(true)
         .resizable(true)
 }
@@ -271,7 +284,14 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
         // to distribute anyway, which is exactly when the scroll area
         // earns its place.
         let available = ui.available_width();
-        let scrolled = available < minimum_width;
+        // Always scrolled. Rendering the table straight into the pane
+        // lets its minimum width propagate outwards, which stops the
+        // *panel* being dragged any narrower than its own columns — and
+        // then, because the pane can never get narrow, the scroll area
+        // never appears either. Wrapping unconditionally and stating the
+        // width explicitly breaks that circle.
+        let scrolled = true;
+
         let mut render_table = |ui: &mut egui::Ui| {
             let mut table = TableBuilder::new(ui)
                 .striped(true)
@@ -375,7 +395,12 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
             let scroll = egui::ScrollArea::horizontal()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.set_min_width(minimum_width);
+                    // `set_width`, not `set_min_width`: inside a scroll
+                    // area the available width is unbounded, and a
+                    // `remainder()` column reads that as "take
+                    // everything". Stating both ends keeps it honest and
+                    // still lets the table grow with the pane.
+                    ui.set_width(available.max(minimum_width));
                     render_table(ui);
                 });
             (scroll.content_size.x, scroll.inner_rect.width())

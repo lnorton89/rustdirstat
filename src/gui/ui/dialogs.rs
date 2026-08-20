@@ -94,7 +94,7 @@ pub(super) fn draw_properties_dialog(app: &mut GuiApp, ctx: &egui::Context) {
                     .spacing(Vec2::new(18.0, 8.0))
                     .show(ui, |ui| {
                         property(ui, "Name", &node.name);
-                        property(ui, "Path", &path.display().to_string());
+                        property(ui, "Path", &crate::util::display_path(&path));
                         property(ui, "Type", if node.is_dir { "Folder" } else { "File" });
                         property(ui, "Logical size", &human_bytes(node.size));
                         property(ui, "Physical size", &human_bytes(node.physical_size));

@@ -23,7 +23,8 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
         // its own title in half rather than a path that does not fit.
         ui.add(
             egui::Label::new(
-                RichText::new(app.zoom_fs_path().display().to_string()).color(SECONDARY_TEXT_COLOR),
+                RichText::new(crate::util::display_path(&app.zoom_fs_path()))
+                    .color(SECONDARY_TEXT_COLOR),
             )
             .truncate(),
         );

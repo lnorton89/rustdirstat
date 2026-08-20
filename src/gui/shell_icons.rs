@@ -17,6 +17,11 @@ use std::collections::HashMap;
 
 /// Pixel size icons are requested and cached at. Small shell icons are
 /// 16x16, and asking for that avoids a downscale of a 32x32 one.
+///
+/// Only the Windows implementation has any use for it, so it is gated
+/// the same way — an unconditional constant is dead code everywhere
+/// else, and this crate denies that.
+#[cfg(windows)]
 pub(super) const ICON_SIZE: usize = 16;
 
 /// Decoded icon pixels, before they become a texture.

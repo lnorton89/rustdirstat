@@ -1,5 +1,26 @@
 /// Format a byte count the way WinDirStat does: base-1024 units with one
 /// decimal place beyond bytes.
+/// A path as a person would write it, for showing on screen.
+///
+/// `Path::canonicalize` on Windows returns an extended-length path —
+/// `\\?\C:\Users\...` — which is the correct thing to hand to the
+/// filesystem and the wrong thing to put in a title bar. The prefix is
+/// an instruction to the Win32 path parser, not part of the name, and it
+/// appeared at the front of every heading, status line and tooltip in
+/// the app.
+///
+/// Only ever used for display. The canonical path is still what gets
+/// passed to the OS.
+pub fn display_path(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    // The UNC form `\\?\UNC\server\share` has to become `\\server\share`
+    // rather than losing its leading slashes entirely.
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+}
+
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if bytes < 1024 {

@@ -344,7 +344,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                         .inner_margin(Margin::symmetric(9.0, 5.0))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new(app.tree.root_path.display().to_string())
+                                RichText::new(crate::util::display_path(&app.tree.root_path))
                                     .color(SECONDARY_TEXT_COLOR),
                             );
                         });
