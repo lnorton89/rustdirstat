@@ -29,15 +29,100 @@ pub(in crate::tui) enum RemovedExt {
     Dir(Vec<(u64, u64, u64)>),
 }
 
-pub(in crate::tui) fn subtract_totals(
-    n: &mut Node,
+/// Everything a removal takes out of the aggregates above it.
+///
+/// Gathered from the target node *before* anything touches the disk,
+/// because after the removal there is nothing left to read it from.
+pub(in crate::tui) struct Removed {
     size: u64,
     physical_size: u64,
     file_count: u64,
+    /// Directories removed. Deleting a directory removes the directory
+    /// itself too, which emptying one does not — so this is the node
+    /// `dir_count` plus one for a delete, and exactly `dir_count` for an
+    /// empty.
     dir_count: u64,
     unreadable_count: u64,
-    ext: &RemovedExt,
-) {
+    ext: RemovedExt,
+}
+
+impl Removed {
+    /// The deltas for removing `target` and everything under it.
+    fn deleting(target: &Node) -> Self {
+        if target.is_dir {
+            Self {
+                size: target.size,
+                physical_size: target.physical_size,
+                file_count: target.file_count,
+                dir_count: target.dir_count + 1,
+                unreadable_count: target.unreadable_count,
+                ext: RemovedExt::Dir(target.ext_totals.clone()),
+            }
+        } else {
+            Self {
+                size: target.size,
+                physical_size: target.physical_size,
+                file_count: 1,
+                dir_count: 0,
+                unreadable_count: target.unreadable_count,
+                ext: RemovedExt::File(target.category),
+            }
+        }
+    }
+
+    /// The deltas for removing everything *inside* `target` but keeping
+    /// the directory itself.
+    fn emptying(target: &Node) -> Self {
+        Self {
+            size: target.size,
+            physical_size: target.physical_size,
+            file_count: target.file_count,
+            dir_count: target.dir_count,
+            unreadable_count: target.unreadable_count,
+            ext: RemovedExt::Dir(target.ext_totals.clone()),
+        }
+    }
+}
+
+impl App {
+    /// Applies `removed` to the root and to every directory down
+    /// `path_indices`, and hands back the last one — the parent the
+    /// caller is about to remove a child from, or empty.
+    ///
+    /// Both delete paths walked this by hand, with the same thirty lines
+    /// and the same comment about why the loop indexes rather than using
+    /// `get_mut`. Two copies of a bookkeeping walk is two places for the
+    /// aggregates to go wrong, and only one of them would be noticed.
+    fn subtract_along_current_path(&mut self, removed: &Removed) -> &mut Node {
+        let mut n = &mut self.tree.root;
+        subtract_totals(n, removed);
+        for &idx in &self.path_indices {
+            // Bounds-checked, then indexed. `get_mut` would be the
+            // natural spelling, but it returns a value whose borrow the
+            // compiler cannot shorten across this loop, which stops `n`
+            // being used at all afterwards; indexing is a place
+            // expression and reborrows cleanly. The check above it is
+            // what makes the index infallible rather than merely
+            // unlikely to fail.
+            if idx >= n.children.len() {
+                break;
+            }
+            n = &mut n.children[idx];
+            subtract_totals(n, removed);
+        }
+        n
+    }
+}
+
+fn subtract_totals(n: &mut Node, removed: &Removed) {
+    let Removed {
+        size,
+        physical_size,
+        file_count,
+        dir_count,
+        unreadable_count,
+        ref ext,
+    } = *removed;
     // Saturating throughout. These aggregates are maintained by hand as
     // deletions come in, so a disagreement between them and the delta
     // being applied is possible in a way it is not for a freshly scanned
@@ -201,19 +286,8 @@ impl App {
         };
         let path = self.tree.path_for(&full_index_path);
 
-        let unreadable_delta = target.unreadable_count;
-        let physical_delta = target.physical_size;
-        let (is_dir, size, file_count, dir_count_delta, removed_ext) = if target.is_dir {
-            (
-                true,
-                target.size,
-                target.file_count,
-                target.dir_count + 1,
-                RemovedExt::Dir(target.ext_totals.clone()),
-            )
-        } else {
-            (false, target.size, 1, 0, RemovedExt::File(target.category))
-        };
+        let is_dir = target.is_dir;
+        let removed = Removed::deleting(target);
 
         if pending.permanent {
             if is_dir {
@@ -225,50 +299,12 @@ impl App {
             trash::delete(&path).map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
         }
 
-        let mut n = &mut self.tree.root;
-        subtract_totals(
-            n,
-            size,
-            physical_delta,
-            file_count,
-            dir_count_delta,
-            unreadable_delta,
-            &removed_ext,
-        );
-        for &idx in &self.path_indices {
-            // Bounds-checked, then indexed. `get_mut` would be the
-            // natural spelling, but it returns a value whose borrow the
-            // compiler cannot shorten across this loop, which stops `n`
-            // being used at all afterwards; indexing is a place
-            // expression and reborrows cleanly. The check above it is
-            // what makes the index infallible rather than merely
-            // unlikely to fail.
-            if idx >= n.children.len() {
-                break;
-            }
-            n = &mut n.children[idx];
-            subtract_totals(
-                n,
-                size,
-                physical_delta,
-                file_count,
-                dir_count_delta,
-                unreadable_delta,
-                &removed_ext,
-            );
-        }
-        if pending.orig_idx < n.children.len() {
-            n.children.remove(pending.orig_idx);
+        let parent = self.subtract_along_current_path(&removed);
+        if pending.orig_idx < parent.children.len() {
+            parent.children.remove(pending.orig_idx);
         }
 
-        let len = self.display_children().len();
-        if self.selected >= len {
-            self.selected = len.saturating_sub(1);
-        }
-        self.refresh_ext_stats();
-        if self.show_top_files {
-            self.refresh_top_files();
-        }
+        self.after_removal();
         let verb = if pending.permanent {
             "Permanently deleted"
         } else {
@@ -302,12 +338,7 @@ impl App {
         };
         let path = self.tree.path_for(&full_index_path);
 
-        let unreadable_delta = target.unreadable_count;
-        let physical_delta = target.physical_size;
-        let size = target.size;
-        let file_count = target.file_count;
-        let dir_count_delta = target.dir_count;
-        let removed_ext = RemovedExt::Dir(target.ext_totals.clone());
+        let removed = Removed::emptying(target);
 
         let children: Vec<std::path::PathBuf> = std::fs::read_dir(&path)?
             .filter_map(|e| e.ok())
@@ -318,41 +349,12 @@ impl App {
                 .map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
         }
 
-        let mut n = &mut self.tree.root;
-        subtract_totals(
-            n,
-            size,
-            physical_delta,
-            file_count,
-            dir_count_delta,
-            unreadable_delta,
-            &removed_ext,
-        );
-        for &idx in &self.path_indices {
-            // Bounds-checked, then indexed. `get_mut` would be the
-            // natural spelling, but it returns a value whose borrow the
-            // compiler cannot shorten across this loop, which stops `n`
-            // being used at all afterwards; indexing is a place
-            // expression and reborrows cleanly. The check above it is
-            // what makes the index infallible rather than merely
-            // unlikely to fail.
-            if idx >= n.children.len() {
-                break;
-            }
-            n = &mut n.children[idx];
-            subtract_totals(
-                n,
-                size,
-                physical_delta,
-                file_count,
-                dir_count_delta,
-                unreadable_delta,
-                &removed_ext,
-            );
-        }
-        let Some(node) = n.children.get_mut(pending.orig_idx) else {
+        let parent = self.subtract_along_current_path(&removed);
+        let Some(node) = parent.children.get_mut(pending.orig_idx) else {
             return Ok(());
         };
+        // Zeroed in place rather than removed, so the folder is still
+        // listed afterwards — just empty.
         node.size = 0;
         node.physical_size = 0;
         node.file_count = 0;
@@ -361,6 +363,15 @@ impl App {
         node.ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
         node.children.clear();
 
+        self.after_removal();
+        self.message = Some(format!("Emptied: {}", path.display()));
+        Ok(())
+    }
+
+    /// Re-derives what the removal invalidated: the selection may now be
+    /// past the end of a shorter list, and both cached views are built
+    /// from totals that just changed.
+    fn after_removal(&mut self) {
         let len = self.display_children().len();
         if self.selected >= len {
             self.selected = len.saturating_sub(1);
@@ -369,7 +380,5 @@ impl App {
         if self.show_top_files {
             self.refresh_top_files();
         }
-        self.message = Some(format!("Emptied: {}", path.display()));
-        Ok(())
     }
 }
