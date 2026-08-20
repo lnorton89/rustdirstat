@@ -155,22 +155,10 @@ pub(in crate::gui) fn push_tree_rows(
     }
 }
 
-pub(in crate::gui) fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) {
-    match sort {
-        SortMode::SizeDesc => nodes.sort_by(|a, b| {
-            b.1.effective_size(physical)
-                .cmp(&a.1.effective_size(physical))
-        }),
-        SortMode::SizeAsc => nodes.sort_by(|a, b| {
-            a.1.effective_size(physical)
-                .cmp(&b.1.effective_size(physical))
-        }),
-        SortMode::NameAsc => nodes.sort_by_key(|a| a.1.name.to_lowercase()),
-        SortMode::NameDesc => nodes.sort_by_key(|b| std::cmp::Reverse(b.1.name.to_lowercase())),
-        SortMode::ModifiedDesc => nodes.sort_by_key(|b| std::cmp::Reverse(b.1.modified)),
-        SortMode::ModifiedAsc => nodes.sort_by_key(|a| a.1.modified),
-    }
-}
+// The ordering itself lives on the model, beside the nodes it orders —
+// the terminal front end sorts the same six ways over the same type, and
+// keeping two copies of the match is what let them drift apart.
+pub(in crate::gui) use crate::model::sort_nodes;
 
 impl GuiApp {
     pub(in crate::gui) fn selected_node(&self) -> Option<&Node> {

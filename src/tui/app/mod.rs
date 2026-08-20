@@ -24,15 +24,14 @@
 //! cancel — treating everything else as a cancel meant the next
 //! keystroke, aimed at the dialog, landed in the file list instead.
 
-use super::search::{self, SearchHit};
-use super::top_files::{self, TopFile};
 use crate::color::Category;
 use crate::config::Config;
-use crate::model::{Node, Tree};
+use crate::model::{Node, SortMode, Tree};
+use crate::search::{self, SearchHit};
 use crate::stats::{self, ExtStat};
+use crate::top_files::{self, TopFile};
 use anyhow::Result;
 use crossterm::event::KeyCode;
-use std::cmp::Reverse;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -44,40 +43,6 @@ mod views;
 // Re-exported so the rest of the front end still names these at
 // `tui::app::`, as it did when this was one file.
 pub(in crate::tui) use input::ClickZone;
-
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SortMode {
-    SizeDesc,
-    SizeAsc,
-    NameAsc,
-    NameDesc,
-    ModifiedDesc,
-    ModifiedAsc,
-}
-
-impl SortMode {
-    pub fn next(self) -> Self {
-        match self {
-            SortMode::SizeDesc => SortMode::SizeAsc,
-            SortMode::SizeAsc => SortMode::NameAsc,
-            SortMode::NameAsc => SortMode::NameDesc,
-            SortMode::NameDesc => SortMode::ModifiedDesc,
-            SortMode::ModifiedDesc => SortMode::ModifiedAsc,
-            SortMode::ModifiedAsc => SortMode::SizeDesc,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            SortMode::SizeDesc => "size desc",
-            SortMode::SizeAsc => "size asc",
-            SortMode::NameAsc => "name asc",
-            SortMode::NameDesc => "name desc",
-            SortMode::ModifiedDesc => "newest first",
-            SortMode::ModifiedAsc => "oldest first",
-        }
-    }
-}
 
 /// Every user-triggerable operation, so keyboard and mouse input can share
 /// one code path instead of duplicating behavior.
@@ -631,6 +596,56 @@ mod tests {
     use super::operations::STALE_TARGET;
     use super::*;
     use std::path::PathBuf;
+
+    /// An app browsing a root holding two files whose logical and
+    /// on-disk sizes disagree in opposite directions.
+    fn app_with_a_sparse_and_a_packed_file() -> App {
+        use crate::model::fixtures::file_sized;
+        let mut tree = Tree::placeholder(PathBuf::from("root"));
+        tree.root.children = vec![
+            file_sized("sparse.img", 1_000_000, 4_096),
+            file_sized("packed.bin", 500_000, 500_000),
+        ];
+        App::new(tree)
+    }
+
+    /// Toggling to on-disk sizes reorders the list, rather than only
+    /// changing the numbers in it.
+    ///
+    /// `display_children` had its own copy of the sort, and that copy
+    /// read `size` regardless of `use_physical` — so pressing `p` swapped
+    /// every size on screen and left the rows in logical order, which
+    /// reads as the toggle having done nothing at all. Both front ends
+    /// call `model::sort_nodes` now.
+    #[test]
+    fn switching_to_on_disk_sizes_reorders_the_file_list() {
+        let mut app = app_with_a_sparse_and_a_packed_file();
+        app.sort = SortMode::SizeDesc;
+
+        app.use_physical = false;
+        let logical: Vec<&str> = app
+            .display_children()
+            .iter()
+            .map(|(_, n)| n.name.as_str())
+            .collect();
+        assert_eq!(
+            logical,
+            ["sparse.img", "packed.bin"],
+            "by logical size the sparse file leads"
+        );
+
+        app.use_physical = true;
+        let physical: Vec<&str> = app
+            .display_children()
+            .iter()
+            .map(|(_, n)| n.name.as_str())
+            .collect();
+        assert_eq!(
+            physical,
+            ["packed.bin", "sparse.img"],
+            "the list should be ordered by the size it is showing"
+        );
+    }
 
     fn app_awaiting_delete_confirmation(is_dir: bool) -> App {
         let mut app = App::new(Tree::placeholder(PathBuf::from("root")));

@@ -4,7 +4,7 @@
 //               operations live in a submodule beside it.
 //
 // Dependencies: eframe::egui, trash (delete to recycle bin); crate::{model,
-//               duplicates, color}, crate::tui::{search, top_files}
+//               duplicates, color, search, top_files}
 // ============================================================================
 
 //! `GuiApp`: the state the desktop window owns — the scanned tree, the
@@ -44,9 +44,10 @@
 
 use crate::color::Category;
 use crate::duplicates::DupGroup;
+use crate::model::SortMode;
 use crate::model::{category_for_name, Node, Tree};
-use crate::tui::{search, top_files, SortMode};
 use crate::util::human_bytes;
+use crate::{search, top_files};
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -388,7 +389,7 @@ mod tests {
         extension_label, Category, FileView, GuiApp, Node, PaneOrientation, PendingDelete, Tree,
         ViewOptions,
     };
-    use crate::tui::SortMode;
+    use crate::model::SortMode;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 

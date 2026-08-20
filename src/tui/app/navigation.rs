@@ -71,14 +71,10 @@ impl App {
             let f = self.filter.to_lowercase();
             v.retain(|(_, n)| n.name.to_lowercase().contains(&f));
         }
-        match self.sort {
-            SortMode::SizeDesc => v.sort_by_key(|b| Reverse(b.1.size)),
-            SortMode::SizeAsc => v.sort_by_key(|a| a.1.size),
-            SortMode::NameAsc => v.sort_by_key(|a| a.1.name.to_lowercase()),
-            SortMode::NameDesc => v.sort_by_key(|b| Reverse(b.1.name.to_lowercase())),
-            SortMode::ModifiedDesc => v.sort_by_key(|b| Reverse(b.1.modified)),
-            SortMode::ModifiedAsc => v.sort_by_key(|a| a.1.modified),
-        }
+        // `use_physical`, not always-logical: this used to sort by
+        // `size` whatever the view was showing, so pressing `p` swapped
+        // every number in the list without reordering a single row.
+        crate::model::sort_nodes(&mut v, self.sort, self.use_physical);
         v
     }
 

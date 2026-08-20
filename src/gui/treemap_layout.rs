@@ -416,42 +416,8 @@ mod tests {
     /// Stands in for what the renderer measures from its font.
     const TEST_LABEL_STRIP: f32 = 16.0;
 
-    fn leaf(name: &str, size: u64) -> Node {
-        Node {
-            name: name.to_string(),
-            is_dir: false,
-            is_symlink: false,
-            size,
-            physical_size: size,
-            file_count: 1,
-            dir_count: 0,
-            modified: None,
-            children: Vec::new(),
-            error: false,
-            category: None,
-            ext_totals: Vec::new(),
-            unreadable_count: 0,
-        }
-    }
-
-    fn dir(name: &str, children: Vec<Node>) -> Node {
-        let size = children.iter().map(|c| c.size).sum();
-        Node {
-            name: name.to_string(),
-            is_dir: true,
-            is_symlink: false,
-            size,
-            physical_size: size,
-            file_count: children.iter().map(|c| c.file_count).sum(),
-            dir_count: children.iter().filter(|c| c.is_dir).count() as u64,
-            modified: None,
-            children,
-            error: false,
-            category: None,
-            ext_totals: vec![(0, 0, 0); Category::COUNT],
-            unreadable_count: 0,
-        }
-    }
+    // The tree builders are shared — see `crate::model::fixtures`.
+    use crate::model::fixtures::{dir, file as leaf};
 
     /// A drive-shaped tree: a handful of very large top-level directories,
     /// each of them deeply nested and widely fanned out.

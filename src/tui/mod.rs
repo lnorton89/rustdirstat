@@ -28,15 +28,12 @@
 
 mod app;
 mod nested;
-pub(crate) mod search;
 mod theme;
-pub(crate) mod top_files;
 mod ui;
 
 use crate::scanner::{self, Progress};
 use anyhow::Result;
 use app::App;
-pub use app::SortMode;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };

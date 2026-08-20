@@ -4,7 +4,7 @@
 //               on a normal quit.
 //
 // Dependencies: serde + toml (on-disk format), dirs (config location);
-//               crate::tui::SortMode
+//               crate::model::SortMode
 // ============================================================================
 
 //! Persisted user preferences (sort order, treemap visibility/split,
@@ -16,7 +16,7 @@
 //! not anything that could hide data loss the way silently-dropped scan
 //! errors could.
 
-use crate::tui::SortMode;
+use crate::model::SortMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
