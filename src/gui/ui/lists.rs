@@ -84,15 +84,18 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
         );
     });
     ui.label(
-        RichText::new("Find files by glob pattern or regular expression.")
-            .color(palette().secondary_text),
+        RichText::new(
+            "Find files by glob pattern — * ? [a-z] {jpg,png} — or by regular \
+             expression with re:.",
+        )
+        .color(palette().secondary_text),
     );
     ui.add_space(SPACE_SM);
     ui.horizontal(|ui| {
         let search_width = ui.available_width().min(420.0);
         let edit = ui.add(
             egui::TextEdit::singleline(&mut app.search_query)
-                .hint_text("*.iso or re:^archive-")
+                .hint_text("*.{iso,img} or re:^archive-")
                 .desired_width(search_width),
         );
         if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

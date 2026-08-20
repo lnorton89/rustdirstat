@@ -108,22 +108,225 @@ fn visit(
     }
 }
 
-/// Translates a shell-style glob (`*` = any run of characters, `?` = any
-/// one character, everything else literal) into an equivalent regex.
+/// Translates a shell-style glob into an equivalent regex.
+///
+/// Supports the four things people actually type:
+///
+/// - `*` — any run of characters
+/// - `?` — any one character
+/// - `[abc]`, `[a-z]`, `[!0-9]` — a character class, negated with `!` or `^`
+/// - `{jpg,png}` — alternatives, and they nest
+///
+/// A backslash escapes the next character, so `\[` matches a literal
+/// bracket. Anything else is literal.
+///
+/// `[...]` and `{...}` used to be escaped into literals, so `*.{jpg,png}`
+/// matched nothing and said nothing about why — the pattern is valid, so
+/// there was no error to report, only an empty result list. An
+/// unterminated `[` or `{` still falls back to a literal rather than
+/// becoming an error: half-typed patterns are the normal state of a
+/// search box.
 fn glob_to_regex(glob: &str) -> String {
+    let chars: Vec<char> = glob.chars().collect();
     let mut out = String::with_capacity(glob.len() * 2 + 2);
     out.push('^');
-    for c in glob.chars() {
-        match c {
-            '*' => out.push_str(".*"),
-            '?' => out.push('.'),
-            '.' | '+' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\' => {
-                out.push('\\');
-                out.push(c);
+    let mut i = 0;
+    let mut open_groups = 0_usize;
+    while i < chars.len() {
+        match chars[i] {
+            '*' => {
+                out.push_str(".*");
+                i += 1;
             }
-            c => out.push(c),
+            '?' => {
+                out.push('.');
+                i += 1;
+            }
+            '\\' if i + 1 < chars.len() => {
+                push_literal(&mut out, chars[i + 1]);
+                i += 2;
+            }
+            '[' => match class_end(&chars, i) {
+                Some(end) => {
+                    push_class(&mut out, &chars[i + 1..end]);
+                    i = end + 1;
+                }
+                None => {
+                    push_literal(&mut out, '[');
+                    i += 1;
+                }
+            },
+            '{' if group_end(&chars, i).is_some() => {
+                out.push_str("(?:");
+                open_groups += 1;
+                i += 1;
+            }
+            ',' if open_groups > 0 => {
+                out.push('|');
+                i += 1;
+            }
+            '}' if open_groups > 0 => {
+                out.push(')');
+                open_groups -= 1;
+                i += 1;
+            }
+            c => {
+                push_literal(&mut out, c);
+                i += 1;
+            }
         }
     }
     out.push('$');
     out
+}
+
+/// Index of the `]` closing the class opened at `open`, if there is one.
+///
+/// A `]` in the first position is a literal member of the class, the
+/// same rule shells use, so `[]]` matches a single `]`.
+fn class_end(chars: &[char], open: usize) -> Option<usize> {
+    let mut i = open + 1;
+    if matches!(chars.get(i), Some('!') | Some('^')) {
+        i += 1;
+    }
+    if chars.get(i) == Some(&']') {
+        i += 1;
+    }
+    while i < chars.len() {
+        if chars[i] == ']' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Index of the `}` closing the group opened at `open`, counting nested
+/// braces so `{a,{b,c}}` closes at the outer one.
+fn group_end(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (i, c) in chars.iter().enumerate().skip(open) {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn push_class(out: &mut String, body: &[char]) {
+    out.push('[');
+    let body = match body.first() {
+        Some('!') | Some('^') => {
+            out.push('^');
+            &body[1..]
+        }
+        _ => body,
+    };
+    for &c in body {
+        // `-` is left alone so ranges keep working. The rest are escaped
+        // because the `regex` crate gives them meaning *inside* a class:
+        // `[` opens a nested one, `&&` intersects, `~~` differences.
+        if matches!(c, '\\' | ']' | '^' | '[' | '&' | '~') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push(']');
+}
+
+fn push_literal(out: &mut String, c: char) {
+    if matches!(
+        c,
+        '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
+    ) {
+        out.push('\\');
+    }
+    out.push(c);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Matches the way the search box does: case-insensitively, anchored.
+    fn matches(glob: &str, name: &str) -> bool {
+        let source = glob_to_regex(glob);
+        let built = RegexBuilder::new(&source).case_insensitive(true).build();
+        assert!(
+            built.is_ok(),
+            "{glob:?} translated to {source:?}, which is not a valid regex"
+        );
+        built.map(|re| re.is_match(name)).unwrap_or(false)
+    }
+
+    #[test]
+    fn stars_and_question_marks_still_mean_what_they_did() {
+        assert!(matches("*.iso", "ubuntu.iso"));
+        assert!(!matches("*.iso", "ubuntu.iso.part"));
+        assert!(matches("photo?.jpg", "photo1.jpg"));
+        assert!(!matches("photo?.jpg", "photo12.jpg"));
+        assert!(matches("*", "anything at all"));
+        // Anchored at both ends: a glob describes the whole name.
+        assert!(!matches("iso", "ubuntu.iso"));
+        // And case does not matter, the same as the search box.
+        assert!(matches("*.ISO", "ubuntu.iso"));
+    }
+
+    /// Brace alternation. `*.{jpg,png}` used to match nothing at all,
+    /// with no error to explain it.
+    #[test]
+    fn braces_offer_alternatives() {
+        assert!(matches("*.{jpg,png}", "holiday.jpg"));
+        assert!(matches("*.{jpg,png}", "holiday.png"));
+        assert!(!matches("*.{jpg,png}", "holiday.gif"));
+        assert!(matches("report.{doc,docx}", "report.docx"));
+        // Nested, closing on the outer brace.
+        assert!(matches("*.{jpg,{tar,tar.gz}}", "archive.tar.gz"));
+        assert!(matches("*.{jpg,{tar,tar.gz}}", "archive.tar"));
+        assert!(!matches("*.{jpg,{tar,tar.gz}}", "archive.zip"));
+    }
+
+    /// Character classes, including ranges and negation.
+    #[test]
+    fn classes_match_one_character_from_a_set() {
+        assert!(matches("photo[123].jpg", "photo2.jpg"));
+        assert!(!matches("photo[123].jpg", "photo4.jpg"));
+        assert!(matches("file[a-f].txt", "filec.txt"));
+        assert!(!matches("file[a-f].txt", "filez.txt"));
+        assert!(matches("log[!0-9].txt", "logx.txt"));
+        assert!(!matches("log[!0-9].txt", "log7.txt"));
+        // `^` negates too, the way a shell accepts either spelling.
+        assert!(matches("log[^0-9].txt", "logx.txt"));
+        assert!(!matches("log[^0-9].txt", "log7.txt"));
+        // A class matches exactly one character.
+        assert!(!matches("photo[123].jpg", "photo12.jpg"));
+    }
+
+    /// Anything the translation cannot make sense of stays literal
+    /// rather than becoming an error. A search box spends most of its
+    /// time holding a half-typed pattern.
+    #[test]
+    fn unfinished_and_escaped_patterns_stay_literal() {
+        // No closing bracket or brace: the opener is just a character.
+        assert!(matches("draft[1.txt", "draft[1.txt"));
+        assert!(matches("draft{1.txt", "draft{1.txt"));
+        assert!(matches("[", "["));
+        assert!(matches("{", "{"));
+        // Escaped, so it means itself even though it is well-formed.
+        assert!(matches(r"photo\[1\].jpg", "photo[1].jpg"));
+        assert!(!matches(r"photo\[1\].jpg", "photo1.jpg"));
+        // Regex metacharacters carry no meaning of their own.
+        assert!(matches("a+b.txt", "a+b.txt"));
+        assert!(!matches("a+b.txt", "aab.txt"));
+        assert!(matches("(x).txt", "(x).txt"));
+        // `]` first in a class is a literal member, as in a shell.
+        assert!(matches("end[]].txt", "end].txt"));
+    }
 }

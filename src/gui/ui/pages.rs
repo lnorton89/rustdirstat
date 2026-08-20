@@ -551,7 +551,7 @@ fn draw_guide(ui: &mut egui::Ui) {
         ui.label("Every file is an area proportional to its size. Directory areas nest, tiles take their extension's color, and clicking one selects the matching path in the tree.");
     });
     group(ui, Icon::Largest, "The other file views", |ui| {
-        ui.label("Largest Files is a flat top-200 by size. Duplicate Files groups byte-identical files by hash. Search Results accepts glob patterns, and regular expressions when the query starts with re:.");
+        ui.label("Largest Files is a flat top-200 by size. Duplicate Files groups byte-identical files by hash. Search Results accepts glob patterns — * for any run of characters, ? for one, [a-z] for a character class and {jpg,png} for alternatives — and regular expressions when the query starts with re:.");
     });
     ui.label(
         RichText::new(
