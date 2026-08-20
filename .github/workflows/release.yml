@@ -1,0 +1,165 @@
+name: Release
+
+# Tagging is the trigger: `git tag v0.1.0 && git push origin v0.1.0`.
+# The release is created as a draft, the per-platform archives are
+# attached to it, and it is only published once every platform has
+# succeeded -- so a failed build leaves an unpublished draft rather than a
+# half-populated public release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build a release from (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  draft:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, reusing it."
+          else
+            gh release create "$TAG" \
+              --draft \
+              --title "rustdirstat $TAG" \
+              --generate-notes
+          fi
+
+  build:
+    name: ${{ matrix.target }}
+    needs: draft
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          # macos-latest is Apple Silicon; macos-13 is the last Intel image.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.draft.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install Linux windowing dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev
+
+      - name: Build
+        run: cargo build --release --bins --target ${{ matrix.target }}
+
+      # Both binaries ship together: the TUI/report tool and the desktop
+      # GUI are two front ends over one scanner, and someone who wants one
+      # usually wants the other available.
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          TAG: ${{ needs.draft.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          name="rustdirstat-${TAG}-${TARGET}"
+          staging="dist/${name}"
+          mkdir -p "$staging"
+
+          bindir="target/${TARGET}/release"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "${bindir}/rustdirstat.exe" "${bindir}/rustdirstat-gui.exe" "$staging/"
+          else
+            cp "${bindir}/rustdirstat" "${bindir}/rustdirstat-gui" "$staging/"
+          fi
+          cp README.md LICENSE "$staging/"
+
+          cd dist
+          if [ "$ARCHIVE" = "zip" ]; then
+            7z a -tzip "${name}.zip" "$name" >/dev/null
+          else
+            tar czf "${name}.tar.gz" "$name"
+          fi
+
+          asset="${name}.${ARCHIVE}"
+          # Checksums travel with the archive so a download can be verified
+          # without trusting the transfer.
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$asset" > "${asset}.sha256"
+          else
+            shasum -a 256 "$asset" > "${asset}.sha256"
+          fi
+          echo "asset=dist/${asset}" >> "$GITHUB_OUTPUT"
+          echo "checksum=dist/${asset}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            "${{ steps.package.outputs.asset }}" \
+            "${{ steps.package.outputs.checksum }}" \
+            --clobber
+
+  publish:
+    name: Publish release
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Undraft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false --latest

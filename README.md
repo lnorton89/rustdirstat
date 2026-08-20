@@ -1,5 +1,7 @@
 # rustdirstat
 
+[![CI](https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml/badge.svg)](https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml)
+
 A cross-platform clone of [WinDirStat](https://windirstat.net/), written in
 Rust, with both a native desktop GUI and a terminal UI.
 
@@ -19,7 +21,14 @@ core:
 
 Both run anywhere Rust does: Linux, macOS, and Windows.
 
-## Install / build
+## Install
+
+Prebuilt archives for Linux, macOS (Intel and Apple Silicon), and Windows
+are attached to each [release](https://github.com/lnorton89/rustdirstat/releases).
+Each contains both binaries and a `.sha256` companion file to verify the
+download against.
+
+### Build from source
 
 Requires a recent stable Rust toolchain (install via [rustup](https://rustup.rs)).
 
@@ -27,6 +36,11 @@ Requires a recent stable Rust toolchain (install via [rustup](https://rustup.rs)
 cargo build --release
 ./target/release/rustdirstat /path/to/scan
 ```
+
+On Linux the desktop GUI needs the usual windowing development packages
+(`libxkbcommon-dev`, `libwayland-dev`, `libx11-dev`, `libxcursor-dev`,
+`libxi-dev`, `libxrandr-dev` on Debian/Ubuntu). The terminal UI needs
+none of them.
 
 ## Usage
 
