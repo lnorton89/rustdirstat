@@ -29,9 +29,15 @@
 //! Windows console session from a test, so this doesn't attempt one.
 
 #![cfg(unix)]
-// See the note in src/lib.rs: test code is exempt from the crate-wide
-// deny on unwrap/expect/panic.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// See the note in src/lib.rs for why test code is exempt from the
+// crate-wide deny on unwrap/expect. `clippy::panic` is deliberately not
+// listed: nothing here calls `panic!` directly, and `expect` fails when
+// the lint it names never fires.
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code is exempt; see src/lib.rs"
+)]
 
 use std::io::{Read, Write};
 use std::os::unix::io::{FromRawFd, RawFd};
@@ -83,20 +89,27 @@ fn make_test_tree() -> std::path::PathBuf {
     dir
 }
 
-/// Opens a pty, spawns the built `rustdirstat` binary attached to it as
-/// its controlling terminal (matching how a real interactive terminal
-/// session attaches to a program), and returns the child plus the pty
-/// master fd for writing synthetic input / draining output.
-fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
+// ---------------------------------------------------------------------
+// Leaf wrappers over the raw libc calls.
+//
+// Each one keeps its `unsafe` block down to the FFI call itself and
+// hands back an ordinary Rust value, so the test bodies below contain no
+// `unsafe` at all and nothing there can violate an invariant it cannot
+// see. Every block carries the argument-validity reasoning it depends on.
+// ---------------------------------------------------------------------
+
+/// Opens a pty pair sized like a real terminal window, returning
+/// `(master, slave)`.
+///
+/// The size matters: the default is 0x0, which starves the app's
+/// list/treemap rendering of anything meaningful to lay out and makes the
+/// flood a much weaker test of real redraw behavior.
+fn open_pty(rows: u16, cols: u16) -> (RawFd, RawFd) {
     let mut master: RawFd = -1;
     let mut slave: RawFd = -1;
-    // A real, non-degenerate size — without this the pty defaults to 0x0,
-    // which starves the app's list/treemap rendering of anything
-    // meaningful to lay out and makes the flood a much weaker test of
-    // real redraw behavior.
     let mut winsize = libc::winsize {
-        ws_row: 50,
-        ws_col: 200,
+        ws_row: rows,
+        ws_col: cols,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
@@ -107,6 +120,10 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
     // winsize` inline also keeps clippy from flagging the mutable
     // reference as unnecessary on the platforms where it would be.
     let winsize_ptr: *mut libc::winsize = &mut winsize;
+    // SAFETY: the two fd out-parameters are live `RawFd`s for the
+    // duration of the call, `winsize_ptr` points at a fully initialized
+    // `winsize` that outlives it, and the two termios/name arguments are
+    // documented as optional and passed as null.
     let rc = unsafe {
         libc::openpty(
             &mut master,
@@ -117,28 +134,46 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
         )
     };
     assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
+    (master, slave)
+}
 
-    let dup_slave = || unsafe {
-        let fd = libc::dup(slave);
-        assert!(
-            fd >= 0,
-            "dup(slave) failed: {}",
-            std::io::Error::last_os_error()
-        );
-        Stdio::from(std::fs::File::from_raw_fd(fd))
-    };
+/// Duplicates `fd` and wraps the copy in an owning `File`.
+///
+/// Safe because the duplicate is a brand-new descriptor that nothing else
+/// holds, so handing ownership of it to `File` cannot double-close
+/// anything -- which is the invariant `from_raw_fd` exists to ask about.
+fn owned_dup(fd: RawFd) -> std::fs::File {
+    // SAFETY: `dup` returns a fresh descriptor owned by this process.
+    let copy = unsafe { libc::dup(fd) };
+    assert!(
+        copy >= 0,
+        "dup({fd}) failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: `copy` was just created, is valid, and is not owned
+    // anywhere else, so `File` becomes its sole owner.
+    unsafe { std::fs::File::from_raw_fd(copy) }
+}
 
-    let bin = env!("CARGO_BIN_EXE_rustdirstat");
-    let mut cmd = Command::new(bin);
-    cmd.arg(target)
-        .env("TERM", "xterm-256color")
-        .stdin(dup_slave())
-        .stdout(dup_slave())
-        .stderr(dup_slave());
+/// Closes a raw descriptor this test still owns.
+fn close_fd(fd: RawFd) {
+    // SAFETY: `fd` is a valid descriptor owned by the caller, which drops
+    // its claim to it by calling this.
+    unsafe {
+        libc::close(fd);
+    }
+}
 
-    // Make the pty slave the child's controlling terminal — without this,
-    // crossterm's isatty/terminal-mode setup on the slave fd doesn't
-    // behave the way it would for a real interactively-attached terminal.
+/// Arranges for the spawned child to adopt its stdin as a controlling
+/// terminal, the way a real interactively-attached program has one.
+///
+/// Without this, crossterm's isatty and terminal-mode setup on the slave
+/// fd does not behave the way it would for a real terminal session.
+fn adopt_controlling_terminal(cmd: &mut Command) {
+    // SAFETY: `pre_exec` runs between fork and exec, where only
+    // async-signal-safe calls are allowed. `setsid` and `ioctl` are both
+    // on that list, and the closure allocates nothing and touches no
+    // shared state.
     unsafe {
         cmd.pre_exec(|| {
             if libc::setsid() < 0 {
@@ -150,11 +185,28 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
             Ok(())
         });
     }
+}
+
+/// Opens a pty, spawns the built `rustdirstat` binary attached to it as
+/// its controlling terminal (matching how a real interactive terminal
+/// session attaches to a program), and returns the child plus the pty
+/// master fd for writing synthetic input / draining output.
+fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
+    let (master, slave) = open_pty(50, 200);
+
+    let bin = env!("CARGO_BIN_EXE_rustdirstat");
+    let mut cmd = Command::new(bin);
+    cmd.arg(target)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(owned_dup(slave)))
+        .stdout(Stdio::from(owned_dup(slave)))
+        .stderr(Stdio::from(owned_dup(slave)));
+    adopt_controlling_terminal(&mut cmd);
 
     let child = cmd.spawn().expect("spawn rustdirstat");
-    unsafe {
-        libc::close(slave);
-    }
+    // The child holds its own duplicates now; keeping this open would
+    // stop the master from ever seeing EOF.
+    close_fd(slave);
     (child, master)
 }
 
@@ -163,7 +215,7 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
 /// input flood — a real terminal would be reading the whole time too.
 fn spawn_output_drain(master: RawFd) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let mut file = unsafe { std::fs::File::from_raw_fd(libc::dup(master)) };
+        let mut file = owned_dup(master);
         let mut buf = [0u8; 8192];
         loop {
             match file.read(&mut buf) {
@@ -193,7 +245,7 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::E
 /// enabled for the treemap-resize handle — followed by the given trailing
 /// bytes (the actual quit input).
 fn flood_then_send(master: RawFd, trailing: &[u8]) {
-    let mut file = unsafe { std::fs::File::from_raw_fd(libc::dup(master)) };
+    let mut file = owned_dup(master);
     let mut payload = Vec::with_capacity(FLOOD_EVENTS * 16 + trailing.len());
     for i in 0..FLOOD_EVENTS {
         let col = 10 + (i % 60);
@@ -278,7 +330,7 @@ fn ctrl_c_works_after_large_event_backlog_and_overrides_help_popup() {
     // regardless of modal state, which is exactly the earlier bug (Ctrl+C
     // was never bound to any action at all).
     {
-        let mut file = unsafe { std::fs::File::from_raw_fd(libc::dup(master)) };
+        let mut file = owned_dup(master);
         file.write_all(b"?").expect("send '?' to open help");
     }
     std::thread::sleep(Duration::from_millis(100));

@@ -14,8 +14,11 @@
 pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     // st_blocks is always in 512-byte units regardless of the filesystem's
-    // actual block size (POSIX convention, not configurable).
-    meta.blocks() * 512
+    // actual block size (POSIX convention, not configurable). Saturating
+    // because a corrupt or hostile filesystem can report a block count
+    // that overflows when scaled, and a wrong size is a better outcome
+    // than a panic in a release build or a wrapped one in a debug build.
+    meta.blocks().saturating_mul(512)
 }
 
 #[cfg(not(unix))]
@@ -30,34 +33,49 @@ pub fn volume_space(path: &std::path::Path) -> (Option<u64>, Option<u64>) {
 
 #[cfg(unix)]
 mod imp {
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
+    use std::mem::MaybeUninit;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
-    // `statvfs`'s block-count fields aren't a fixed width across Unix
-    // targets (narrower on some 32-bit/musl/macOS configurations), so the
-    // `as u64` widening below is genuinely needed for portability even
-    // though it's a same-type no-op on this particular platform (x86_64
-    // glibc, where clippy is analyzing it from).
-    #[allow(clippy::unnecessary_cast)]
-    pub fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
+    /// Safe leaf wrapper over `statvfs(2)`, and the only `unsafe` in this
+    /// module. Everything a caller needs to reason about is here: it takes
+    /// a borrowed C string, and either returns a fully initialized struct
+    /// or nothing. No caller can misuse it, so no caller has to be
+    /// `unsafe` itself.
+    fn statvfs_for(path: &CStr) -> Option<libc::statvfs> {
+        let mut stat = MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: `path` is a valid NUL-terminated C string that outlives
+        // the call, and `stat` points to writable memory of exactly the
+        // size and alignment `statvfs` expects for its out-parameter.
+        let rc = unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) };
+        if rc != 0 {
+            return None;
+        }
+        // SAFETY: `statvfs` returned 0, which is documented to mean it
+        // filled in the whole struct. This is the only path that reads it.
+        Some(unsafe { stat.assume_init() })
+    }
+
+    pub(super) fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
+        // A path containing an interior NUL cannot name a real file, so
+        // there is nothing to report.
         let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
             return (None, None);
         };
-        // SAFETY: `c_path` is a valid, NUL-terminated C string for the
-        // duration of this call; `stat` is a plain out-parameter struct
-        // fully initialized by a successful `statvfs` call before we read
-        // any field from it.
-        unsafe {
-            let mut stat: libc::statvfs = std::mem::zeroed();
-            if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
-                return (None, None);
-            }
-            let block_size = stat.f_frsize as u64;
-            let free = stat.f_bavail as u64 * block_size;
-            let total = stat.f_blocks as u64 * block_size;
-            (Some(free), Some(total))
-        }
+        let Some(stat) = statvfs_for(&c_path) else {
+            return (None, None);
+        };
+        // These fields are not a fixed width across Unix targets --
+        // `fsblkcnt_t` is 32-bit on macOS and on 32-bit Linux, 64-bit on
+        // 64-bit Linux. `u64::from` widens on the narrow platforms and is
+        // an identity conversion on the wide ones, which an `as` cast
+        // cannot express without tripping `unnecessary_cast` on exactly
+        // the platforms where the cast is redundant.
+        let block_size = u64::from(stat.f_frsize);
+        let free = u64::from(stat.f_bavail).saturating_mul(block_size);
+        let total = u64::from(stat.f_blocks).saturating_mul(block_size);
+        (Some(free), Some(total))
     }
 }
 
@@ -67,34 +85,40 @@ mod imp {
     use std::path::Path;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
-    pub(super) fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
-        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-        wide.push(0);
-
+    /// Safe leaf wrapper over `GetDiskFreeSpaceExW`, and the only `unsafe`
+    /// in this module. Returns `(free, total)` or nothing.
+    fn disk_free_space(wide_path: &[u16]) -> Option<(u64, u64)> {
         let mut free_available: u64 = 0;
         let mut total_bytes: u64 = 0;
-        // SAFETY: `wide` is a NUL-terminated UTF-16 string valid for the
-        // call; the two `u64` out-parameters are always written by
-        // `GetDiskFreeSpaceExW` on success, and left unread on failure.
+        // SAFETY: `wide_path` is NUL-terminated (the caller pushes the
+        // terminator) and valid for the duration of the call; both
+        // out-parameters are live `u64`s for the same duration, and the
+        // fourth is documented as optional and passed as null.
         let ok = unsafe {
             GetDiskFreeSpaceExW(
-                wide.as_ptr(),
+                wide_path.as_ptr(),
                 &mut free_available,
                 &mut total_bytes,
                 std::ptr::null_mut(),
             )
         };
-        if ok == 0 {
-            (None, None)
-        } else {
-            (Some(free_available), Some(total_bytes))
+        // The out-parameters are only meaningful on success.
+        (ok != 0).then_some((free_available, total_bytes))
+    }
+
+    pub(super) fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        match disk_free_space(&wide) {
+            Some((free, total)) => (Some(free), Some(total)),
+            None => (None, None),
         }
     }
 }
 
 #[cfg(not(any(unix, windows)))]
 mod imp {
-    pub fn volume_space(_path: &std::path::Path) -> (Option<u64>, Option<u64>) {
+    pub(super) fn volume_space(_path: &std::path::Path) -> (Option<u64>, Option<u64>) {
         (None, None)
     }
 }
