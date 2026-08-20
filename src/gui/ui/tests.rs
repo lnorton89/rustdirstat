@@ -18,7 +18,6 @@
 
 use super::chrome::*;
 use super::directory::*;
-use super::draw_file_area;
 use super::extensions::*;
 use super::lists::*;
 use super::probes::*;
@@ -301,10 +300,10 @@ fn render_duplicates(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInpu
     });
 }
 
-fn render_file_area(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+fn render_toolbar(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
     let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_file_area(app, ui));
+        draw_toolbar(app, ctx);
     });
 }
 
@@ -1047,7 +1046,7 @@ fn clicking_a_view_tab_switches_the_file_view() -> anyhow::Result<()> {
     let mut app = app_with_one_file();
     probe(&TEST_VIEW_TAB_RECTS).clear();
     for _ in 0..3 {
-        render_file_area(&ctx, &mut app, raw_input(Vec::new()));
+        render_toolbar(&ctx, &mut app, raw_input_at_width(Vec::new(), 1600.0));
     }
     let search = probe(&TEST_VIEW_TAB_RECTS)
         .iter()
@@ -1056,8 +1055,16 @@ fn clicking_a_view_tab_switches_the_file_view() -> anyhow::Result<()> {
         .map(|(_, rect)| rect.center())
         .context("the Search Results tab should render a click target")?;
 
-    render_file_area(&ctx, &mut app, raw_input(pointer_button(search, true)));
-    render_file_area(&ctx, &mut app, raw_input(pointer_button(search, false)));
+    render_toolbar(
+        &ctx,
+        &mut app,
+        raw_input_at_width(pointer_button(search, true), 1600.0),
+    );
+    render_toolbar(
+        &ctx,
+        &mut app,
+        raw_input_at_width(pointer_button(search, false), 1600.0),
+    );
 
     assert_eq!(app.file_view, FileView::SearchResults);
     Ok(())

@@ -53,7 +53,6 @@ use self::lists::*;
 use self::modal::*;
 use self::theme::*;
 use self::treemap::*;
-use self::widgets::*;
 
 pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
     apply_style(ctx, app.palette);
@@ -143,30 +142,6 @@ pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
             });
         ui.add_space(SPACE_SM);
     }
-    Frame::none()
-        .fill(palette().app)
-        .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::same(SPACE_XS))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for view in [
-                    FileView::AllFiles,
-                    FileView::LargestFiles,
-                    FileView::DuplicateFiles,
-                    FileView::SearchResults,
-                ] {
-                    let clicked = view_tab(ui, app.file_view == view, view).clicked();
-                    if clicked {
-                        if view == FileView::DuplicateFiles && app.duplicate_groups.is_empty() {
-                            app.find_duplicates();
-                        } else {
-                            app.file_view = view;
-                        }
-                    }
-                }
-            });
-        });
-    ui.add_space(SPACE_SM);
     match app.file_view {
         FileView::AllFiles => draw_directory_tree(app, ui),
         FileView::LargestFiles => draw_largest_files(app, ui),

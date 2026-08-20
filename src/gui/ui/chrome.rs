@@ -405,6 +405,26 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                             );
                         });
                 }
+                // The four-way view selector sits here, right of the
+                // current folder, instead of on its own strip at the top
+                // of the file area. It is the same control; only the
+                // click handling for Duplicate Files has to travel with
+                // it, because that tab still starts a scan on first use.
+                toolbar_separator(ui);
+                for view in [
+                    FileView::AllFiles,
+                    FileView::LargestFiles,
+                    FileView::DuplicateFiles,
+                    FileView::SearchResults,
+                ] {
+                    if view_tab(ui, app.file_view == view, view).clicked() {
+                        if view == FileView::DuplicateFiles && app.duplicate_groups.is_empty() {
+                            app.find_duplicates();
+                        } else {
+                            app.file_view = view;
+                        }
+                    }
+                }
             });
         });
 }
