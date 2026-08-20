@@ -3167,6 +3167,7 @@ dependencies = [
 name = "rustdirstat"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "blake3",
  "clap",
@@ -3175,6 +3176,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "image",
  "libc",
  "ratatui",
  "rayon",

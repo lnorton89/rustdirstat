@@ -572,7 +572,7 @@ fn draw_guide(ui: &mut egui::Ui) {
 fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
     ui.horizontal(|ui| {
-        paint_inline_icon(ui, Icon::App, 40.0, palette.accent);
+        paint_inline_brand(ui, 40.0);
         ui.add_space(6.0);
         ui.vertical(|ui| {
             ui.label(RichText::new("RustDirStat").heading().strong());

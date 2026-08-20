@@ -299,7 +299,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                 // between them than text controls do to stay readable as
                 // separate targets rather than one strip of glyphs.
                 ui.spacing_mut().item_spacing = Vec2::new(6.0, SPACE_SM);
-                paint_inline_icon(ui, Icon::App, 20.0, palette().accent);
+                paint_inline_brand(ui, 20.0);
                 ui.add_space(SPACE_XS);
                 ui.label(RichText::new("RustDirStat").strong().size(15.0));
                 toolbar_separator(ui);

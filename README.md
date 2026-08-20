@@ -1,6 +1,12 @@
-# rustdirstat
+<p align="center">
+  <img src="assets/brand/banner.png" width="720"
+       alt="RustDirStat — a WinDirStat clone in Rust, native GUI and terminal UI over one scanning core.">
+</p>
 
-[![CI](https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml/badge.svg)](https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml"><img
+     src="https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
 A cross-platform clone of [WinDirStat](https://windirstat.net/), written in
 Rust, with both a native desktop GUI and a terminal UI.
@@ -174,6 +180,32 @@ extra is opt-in rather than always-on:
   are one keystroke away and listed in `?`.
 - Color is reserved for where it's informative — the treemap, the
   extension legend, and highlighting — not sprayed across every row.
+
+### The mark
+
+<img src="assets/brand/icon-128.png" width="96" align="left" alt="The RustDirStat icon">
+
+The icon is the app's own subject matter: four tiles squarified into a
+frame, which is what the treemap does to a directory of mixed sizes. It
+is defined once — geometry and colour — in [`src/brand.rs`](src/brand.rs),
+and everything that shows it reads from there. The window and taskbar
+icon rasterises it, the mark beside the product name in the toolbar and
+the About card paints it as vectors, and the PNGs in
+[`assets/brand/`](assets/brand) are the same call at 32 through 512.
+
+<br clear="left">
+
+Those PNGs are generated, not drawn, so regenerate them rather than
+editing them:
+
+```sh
+cargo run --example brand_assets
+```
+
+The mark is also the one thing in the GUI that does not come from the
+active theme. Everything else is interface and restyles with the theme;
+the mark is identity, and a logo that changes colour under a dark theme
+is not a logo.
 
 Being cross-platform doesn't mean every feature has to work everywhere.
 The `T` Windows tools menu (Disk Cleanup, DISM component-store cleanup,

@@ -271,6 +271,18 @@ pub(super) fn paint_inline_icon(
     rect
 }
 
+/// Lays the full-colour brand mark into the current row, sized like an
+/// inline icon.
+///
+/// Separate from [`paint_inline_icon`] because it takes no colour: the
+/// mark is identity rather than interface, so there is nothing here for
+/// a caller — or a theme — to tint. See [`crate::brand`].
+pub(super) fn paint_inline_brand(ui: &mut egui::Ui, size: f32) -> egui::Rect {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    crate::gui::icons::paint_brand(ui.painter(), rect.shrink(1.0));
+    rect
+}
+
 pub(super) fn icon_selectable_label(
     ui: &mut egui::Ui,
     selected: bool,

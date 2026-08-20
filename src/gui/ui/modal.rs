@@ -440,7 +440,7 @@ fn draw_nav(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
             ui.set_min_height(height);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    paint_inline_icon(ui, Icon::App, 18.0, palette.accent);
+                    paint_inline_brand(ui, 18.0);
                     ui.label(RichText::new("RustDirStat").strong());
                 });
                 ui.add_space(12.0);

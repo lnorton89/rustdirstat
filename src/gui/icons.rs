@@ -14,39 +14,57 @@
 
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Shape, Stroke};
 
-/// Rasterized companion to [`Icon::App`] for the native window and taskbar.
-/// Keeping it generated here means the shell icon and in-app mark cannot drift.
+/// The window and taskbar icon, rasterised from the shared brand mark.
+///
+/// 64 pixels is what every desktop shell this runs on scales from; going
+/// higher only asks the shell to downsample something it will downsample
+/// anyway. Larger renders of the same mark are the asset generator's job.
 pub(super) fn app_icon() -> egui::IconData {
-    const SIZE: usize = 64;
-    let mut rgba = vec![0_u8; SIZE * SIZE * 4];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let rounded_corner = (x < 6 && y < 6 && (6 - x).pow(2) + (6 - y).pow(2) > 36)
-                || (x > 57 && y < 6 && (x - 57).pow(2) + (6 - y).pow(2) > 36)
-                || (x < 6 && y > 57 && (6 - x).pow(2) + (y - 57).pow(2) > 36)
-                || (x > 57 && y > 57 && (x - 57).pow(2) + (y - 57).pow(2) > 36);
-            if rounded_corner {
-                continue;
-            }
-            let color = if !(5..59).contains(&x) || !(5..59).contains(&y) {
-                [115, 178, 255, 255]
-            } else if x < 31 && y < 34 {
-                [55, 129, 229, 255]
-            } else if x >= 33 && y < 24 {
-                [71, 194, 137, 255]
-            } else if x >= 33 && y >= 26 {
-                [239, 168, 67, 255]
-            } else {
-                [168, 92, 216, 255]
-            };
-            let offset = (y * SIZE + x) * 4;
-            rgba[offset..offset + 4].copy_from_slice(&color);
-        }
-    }
+    const SIZE: u32 = 64;
     egui::IconData {
-        rgba,
-        width: SIZE as u32,
-        height: SIZE as u32,
+        rgba: crate::brand::rgba(SIZE as usize),
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Paints the brand mark into `rect` as vector primitives.
+///
+/// The in-app counterpart of [`app_icon`], reading the same tile table,
+/// so the mark beside the product name and the one in the title bar are
+/// the same mark rather than two drawings of it.
+///
+/// This is the one place in the GUI that paints colours the active theme
+/// did not choose, and deliberately: see the module docs on
+/// [`crate::brand`]. Everything around it still comes from `palette()`.
+pub(super) fn paint_brand(painter: &Painter, rect: Rect) {
+    let rgb = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
+    let extent = rect.width().min(rect.height());
+    painter.rect_filled(
+        rect,
+        crate::brand::CORNER * extent,
+        rgb(crate::brand::FRAME),
+    );
+
+    let interior = rect.shrink(crate::brand::INSET * extent);
+    // Tiles round off only enough to soften the corner at icon sizes; a
+    // radius that reads as a rounded square here would eat the gutters.
+    let tile_corner = (crate::brand::CORNER * extent * 0.35).min(3.0);
+    for (x0, y0, x1, y1, color) in crate::brand::TILES {
+        painter.rect_filled(
+            Rect::from_min_max(
+                egui::pos2(
+                    interior.left() + interior.width() * x0,
+                    interior.top() + interior.height() * y0,
+                ),
+                egui::pos2(
+                    interior.left() + interior.width() * x1,
+                    interior.top() + interior.height() * y1,
+                ),
+            ),
+            tile_corner,
+            rgb(color),
+        );
     }
 }
 
@@ -422,8 +440,8 @@ fn arc(center: Pos2, radius: f32, start: f32, end: f32, painter: &Painter, strok
 
 #[cfg(test)]
 mod tests {
-    use super::{app_icon, Icon};
-    use eframe::egui;
+    use super::{app_icon, paint_brand, Icon};
+    use eframe::egui::{self, Color32};
 
     #[test]
     fn icon_catalog_has_no_missing_variants() {
@@ -450,6 +468,49 @@ mod tests {
             .0
             .iter()
             .any(|pixel| pixel[3] != 0));
+    }
+
+    #[test]
+    fn the_vector_mark_paints_the_same_tiles_the_raster_one_does() {
+        // The two are drawn by different code against one table, which
+        // is only worth anything if the vector path actually puts every
+        // colour on screen. A tile dropped here would show up as the
+        // frame colour behind it and nowhere else.
+        let context = egui::Context::default();
+        let output = context.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                paint_brand(
+                    ui.painter(),
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::Vec2::splat(64.0)),
+                );
+            });
+        });
+
+        let painted: Vec<egui::Color32> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| {
+                // `if let` rather than a match with a catch-all: the
+                // crate denies wildcard arms, and enumerating every
+                // shape egui has just to ignore all but one of them
+                // documents nothing.
+                if let egui::Shape::Rect(rect) = &clipped.shape {
+                    Some(rect.fill)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (i, (_, _, _, _, color)) in crate::brand::TILES.iter().enumerate() {
+            let expected = Color32::from_rgb(color[0], color[1], color[2]);
+            assert!(painted.contains(&expected), "tile {i} was not painted");
+        }
+        let frame = crate::brand::FRAME;
+        assert!(
+            painted.contains(&Color32::from_rgb(frame[0], frame[1], frame[2])),
+            "the frame was not painted"
+        );
     }
 
     #[test]

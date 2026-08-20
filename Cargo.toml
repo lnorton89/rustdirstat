@@ -66,6 +66,14 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Only the brand-asset generator needs these: `cargo run --example
+# brand_assets` re-renders the PNGs in `assets/brand/` from `src/brand.rs`.
+# Both are already in the tree as eframe dependencies, so this pulls
+# nothing new down.
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+ab_glyph = "0.2"
+
 [profile.release]
 opt-level = 3
 lto = true

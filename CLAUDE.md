@@ -51,6 +51,39 @@ There is also a Nix flake — `nix flake check` and `nix develop`, with
 [`NIX.md`](NIX.md) covering installation. If WSL has Nix, `nix flake
 check` there is another way to exercise the Linux build.
 
+## Commit only what you changed
+
+**This repository is often worked on by more than one agent at a time.**
+Assume the working tree holds someone else's half-finished work, and
+check `git status` before staging anything: files you never opened will
+be modified, and files you *did* open will carry their edits alongside
+yours.
+
+So never `git add -A`, never `git add .`, and never `git commit -a`.
+Stage the files you actually changed, by name. Where a file you touched
+also carries someone else's in-flight edits, stage only your own hunks —
+build the blob from `HEAD` plus your change and `git update-index` it
+rather than adding the whole file:
+
+```bash
+git show HEAD:path/to/file.rs > /tmp/base && patch it, then: git hash-object -w /tmp/base
+```
+
+Two things that follow from this and are easy to get wrong:
+
+- **A partial stage leaves the worktree ahead of the commit.** That is
+  fine for code, but for a shared prose file — `CLAUDE.md`,
+  `docs/ARCHITECTURE.md` — write your paragraph into the worktree copy
+  *as well*, or the next agent to commit that file will silently revert
+  it.
+- **`cargo fmt --all` reformats the whole tree**, including the other
+  agent's in-progress files. That is harmless, but it is not yours to
+  commit; it is another reason to stage by name.
+
+Verify before you push: the committed combination is `HEAD` plus your
+hunks, which is *not* what you just tested if the worktree had other
+work in it. Reason it through, or check out the index somewhere clean.
+
 ## Rules this codebase actually enforces
 
 **Every source file opens with the header banner.** A ruled block naming
@@ -130,6 +163,15 @@ checks all of them for layer separation and WCAG contrast; a theme that
 fails is a failing build. The only literals left are lighting effects
 that are not theme colors at all — the treemap cushion highlight, and
 alpha-only scrims.
+
+**The brand mark is the exception to the palette rule, and the only
+one.** `src/brand.rs` holds the mark's geometry and its five colours as
+literals, because a logo that restyles itself under a dark theme is not
+a logo. `gui::icons::paint_brand` paints it and `app_icon` rasterises
+it, both from that one table, and `assets/brand/` is the same call at
+larger sizes — regenerate those with `cargo run --example brand_assets`
+rather than editing the PNGs. Nothing else in drawing code gets to hold
+a literal on this argument.
 
 **No hand-picked pixel gaps.** Every margin, inset, and `add_space` in
 the GUI is one of `SPACE_XS` / `SPACE_SM` / `SPACE_MD` / `SPACE_LG` in
