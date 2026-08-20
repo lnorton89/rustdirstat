@@ -204,3 +204,141 @@ fn worst_ratio(row: &[f64], side: f64) -> f64 {
     }
     worst
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Total area covered, counting any overlap twice — so a sum larger
+    /// than the panel is itself evidence of overlap.
+    fn covered(rects: &[Rect]) -> u32 {
+        rects.iter().map(|r| u32::from(r.w) * u32::from(r.h)).sum()
+    }
+
+    fn overlaps(a: &Rect, b: &Rect) -> bool {
+        let ax2 = u32::from(a.x) + u32::from(a.w);
+        let ay2 = u32::from(a.y) + u32::from(a.h);
+        let bx2 = u32::from(b.x) + u32::from(b.w);
+        let by2 = u32::from(b.y) + u32::from(b.h);
+        u32::from(a.x) < bx2 && u32::from(b.x) < ax2 && u32::from(a.y) < by2 && u32::from(b.y) < ay2
+    }
+
+    /// The three properties a treemap has to have, over a spread of
+    /// shapes and value distributions.
+    ///
+    /// Asserted together over many inputs rather than as three separate
+    /// hand-picked cases: the interesting failures are at particular
+    /// aspect ratios and particular value spreads, and which ones those
+    /// are is exactly what nobody knows in advance.
+    #[test]
+    fn tiles_tile_the_panel_without_gaps_or_overlaps() {
+        let shapes = [
+            (40_u16, 20_u16),
+            (1, 50),
+            (50, 1),
+            (7, 13),
+            (200, 120),
+            (3, 3),
+        ];
+        let distributions: [&[u64]; 6] = [
+            &[1],
+            &[1, 1, 1, 1],
+            &[100, 1, 1, 1, 1],
+            &[5, 4, 3, 2, 1],
+            &[1_000_000, 999_999, 2, 1],
+            &[7; 32],
+        ];
+
+        for (width, height) in shapes {
+            for values in distributions {
+                let rects = layout(values, width, height);
+                assert_eq!(
+                    rects.len(),
+                    values.len(),
+                    "every value must get a rect ({width}x{height}, {values:?})"
+                );
+
+                for (i, r) in rects.iter().enumerate() {
+                    assert!(
+                        u32::from(r.x) + u32::from(r.w) <= u32::from(width)
+                            && u32::from(r.y) + u32::from(r.h) <= u32::from(height),
+                        "tile {i} at ({},{}) {}x{} escapes a {width}x{height} panel",
+                        r.x,
+                        r.y,
+                        r.w,
+                        r.h
+                    );
+                }
+
+                for i in 0..rects.len() {
+                    for j in (i + 1)..rects.len() {
+                        let (a, b) = (&rects[i], &rects[j]);
+                        if a.w == 0 || a.h == 0 || b.w == 0 || b.h == 0 {
+                            continue;
+                        }
+                        assert!(
+                            !overlaps(a, b),
+                            "tiles {i} and {j} overlap ({width}x{height}, {values:?})"
+                        );
+                    }
+                }
+
+                // Every cell accounted for. Rounding is done on tile
+                // *edges* precisely so neighbours cannot round into a gap
+                // or an overlap, which is what this pins.
+                assert_eq!(
+                    covered(&rects),
+                    u32::from(width) * u32::from(height),
+                    "tiles should cover the whole {width}x{height} panel ({values:?})"
+                );
+            }
+        }
+    }
+
+    /// A bigger value gets a bigger tile.
+    ///
+    /// Not exact proportionality — integer cells cannot deliver that —
+    /// but the ordering has to hold, or the picture is lying about which
+    /// directory is larger, which is the one thing the view exists to
+    /// say.
+    #[test]
+    fn a_larger_value_never_gets_a_smaller_tile() {
+        let values = [1_000_u64, 500, 250, 125, 60, 30, 15, 8, 4, 2, 1];
+        let rects = layout(&values, 160, 100);
+        let areas: Vec<u32> = rects
+            .iter()
+            .map(|r| u32::from(r.w) * u32::from(r.h))
+            .collect();
+
+        for i in 1..areas.len() {
+            assert!(
+                areas[i] <= areas[i - 1],
+                "value {} got {}px but the larger value {} got only {}px",
+                values[i],
+                areas[i],
+                values[i - 1],
+                areas[i - 1]
+            );
+        }
+    }
+
+    /// Degenerate inputs produce empty rects rather than panicking or
+    /// dividing by zero.
+    #[test]
+    fn empty_and_zero_sized_inputs_are_handled() {
+        assert!(layout(&[], 10, 10).is_empty(), "no values, no rects");
+
+        for (w, h) in [(0_u16, 10_u16), (10, 0), (0, 0)] {
+            let rects = layout(&[1, 2, 3], w, h);
+            assert_eq!(rects.len(), 3, "a rect per value even at {w}x{h}");
+            assert!(
+                rects.iter().all(|r| r.w == 0 || r.h == 0),
+                "a zero-sized panel cannot hold a tile with area"
+            );
+        }
+
+        // All-zero values must not divide by zero.
+        let rects = layout(&[0, 0, 0], 20, 10);
+        assert_eq!(rects.len(), 3);
+    }
+}
