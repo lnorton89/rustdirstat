@@ -26,6 +26,10 @@ pub(super) fn extension_column_min_width(column: ExtensionColumn) -> f32 {
     }
 }
 
+/// Below this pane width the category breakdown is hidden; see the call
+/// site for why it cannot simply be squeezed.
+pub(super) const CATEGORIES_MIN_WIDTH: f32 = 320.0;
+
 /// Total width the extension columns need before anything has to scroll.
 pub(super) fn extension_table_min_width(columns: &[ExtensionColumn], item_spacing: f32) -> f32 {
     let widths: f32 = columns
@@ -161,12 +165,14 @@ pub(super) fn draw_extension_cell(
                             .maintain_aspect_ratio(true),
                     );
                 }
-                None => paint_inline_icon(
-                    ui,
-                    Icon::for_category(ext.category),
-                    14.0,
-                    ui.visuals().text_color(),
-                ),
+                None => {
+                    paint_inline_icon(
+                        ui,
+                        Icon::for_category(ext.category),
+                        14.0,
+                        ui.visuals().text_color(),
+                    );
+                }
             }
             ui.add_space(2.0);
             let _response = ui.label(&ext.extension);
@@ -213,7 +219,7 @@ pub(super) fn draw_extension_header(
         ui.painter().rect_stroke(
             response.rect.shrink(1.0),
             2.0,
-            Stroke::new(1.0_f32, ACCENT_COLOR),
+            Stroke::new(1.0_f32, palette().accent),
         );
     }
     let reorder = response
@@ -231,14 +237,20 @@ pub(super) fn draw_extension_header(
 }
 
 pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        paint_inline_icon(ui, Icon::Extensions, 19.0, ACCENT_COLOR);
-        ui.heading("Extensions");
-        ui.label(
-            RichText::new(format!("{} types", app.extensions.len()))
-                .small()
-                .color(SECONDARY_TEXT_COLOR),
-        );
+    // Wrapped, and the trimmings drop out as the pane narrows. A plain
+    // `horizontal` row reports the sum of its children as a minimum
+    // width, and that propagates out through the panel until the divider
+    // refuses to be dragged any further — the panel was pinned at 245px
+    // by its own heading.
+    ui.horizontal_wrapped(|ui| {
+        section_title(ui, Icon::Extensions, "Extensions");
+        if ui.available_width() > 90.0 {
+            ui.label(
+                RichText::new(format!("{} types", app.extensions.len()))
+                    .small()
+                    .color(palette().secondary_text),
+            );
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let highlighted =
                 app.highlighted_extension.is_some() || app.highlighted_category.is_some();
@@ -251,19 +263,25 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             }
         });
     });
-    ui.add_space(6.0);
+    ui.add_space(SPACE_SM);
     // The category breakdown sits above the per-extension table because
     // it answers the coarser question first — what kind of thing is
     // filling the disk — and the table then says which extensions make
     // that up. Collapsible, since on a narrow pane the table is what
     // people are usually here for.
-    egui::CollapsingHeader::new(RichText::new("File categories").strong())
-        .id_salt("file_categories")
-        .default_open(true)
-        .show(ui, |ui| super::categories::draw_categories(app, ui));
-    ui.add_space(3.0);
-    ui.separator();
-    ui.add_space(5.0);
+    // Hidden below a certain pane width rather than allowed to squeeze.
+    // A category chip is a fixed-size row of icon, name, size and
+    // percentage; `horizontal_wrapped` can wrap between chips but not
+    // inside one, so the widest chip becomes a minimum width for the
+    // whole panel and the divider cannot be dragged past it. The table
+    // is what people keep a narrow pane open for anyway.
+    if ui.available_width() >= CATEGORIES_MIN_WIDTH {
+        egui::CollapsingHeader::new(RichText::new("File categories").strong())
+            .id_salt("file_categories")
+            .default_open(true)
+            .show(ui, |ui| super::categories::draw_categories(app, ui));
+    }
+    section_rule(ui);
     let total = app.extensions.iter().map(|e| e.size).sum::<u64>().max(1);
     let rows = app.extensions.clone();
     let columns = app.extension_column_order.clone();
@@ -320,7 +338,8 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                     });
                 }
             })
-            .body(|body| {
+            .body(|mut body| {
+                let painter = body.ui_mut().painter().clone();
                 body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
                     let index = row.index();
                     let ext = &rows[index];
@@ -340,6 +359,11 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                         });
                     }
                     let response = row.response();
+                    row_hover_edge(
+                        &painter,
+                        &response,
+                        egui::Id::new(("extension_row", &ext.extension)),
+                    );
                     #[cfg(test)]
                     probe(&TEST_EXTENSION_ROW_RECTS).push((ext.extension.clone(), response.rect));
                     if response.clicked() {

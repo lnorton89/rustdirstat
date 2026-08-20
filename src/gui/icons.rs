@@ -74,6 +74,14 @@ pub(super) enum Icon {
     Check,
     /// Filled dot for menu items that pick one of a set of choices.
     Dot,
+    /// Dismiss control on the modal card.
+    Close,
+    /// Marks a callout whose consequences the reader has to take in
+    /// before acting — a destructive operation, an elevation
+    /// requirement.
+    Warning,
+    /// A theme swatch, for the appearance picker.
+    Palette,
     // One per file category, so a row can be recognised by shape before
     // its label is read — the same reason a phone's storage breakdown
     // uses them.
@@ -107,7 +115,7 @@ impl Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 34] = [
+    pub(super) const ALL: [Self; 37] = [
         Self::App,
         Self::Folder,
         Self::FolderOpen,
@@ -136,6 +144,9 @@ impl Icon {
         Self::Help,
         Self::Check,
         Self::Dot,
+        Self::Close,
+        Self::Warning,
+        Self::Palette,
         Self::Archive,
         Self::Image,
         Self::Video,
@@ -145,12 +156,30 @@ impl Icon {
     ];
 
     pub(super) fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
+        self.paint_turned(painter, rect, color, 0.0);
+    }
+
+    /// Paints the icon turned `turns` clockwise about the centre of
+    /// `rect`, where `1.0` is a full turn.
+    ///
+    /// The rotation is applied inside the point mapping every icon's
+    /// geometry already goes through, so a polyline icon turns exactly.
+    /// The icons built from `rect_stroke` or `circle_filled` take
+    /// axis-aligned inputs that a point mapping cannot turn, and would
+    /// come out skewed — which is fine, because the only caller that
+    /// passes a non-zero angle is the tree's expand chevron, and a
+    /// chevron is one polyline. At `turns == 0.0` the rotation is the
+    /// exact identity, so every other icon is unaffected.
+    pub(super) fn paint_turned(self, painter: &Painter, rect: Rect, color: Color32, turns: f32) {
         let s = Stroke::new((rect.width() / 16.0 * 1.45).max(1.0), color);
+        let rotation = egui::emath::Rot2::from_angle(turns * std::f32::consts::TAU);
+        let center = rect.center();
         let p = |x: f32, y: f32| -> Pos2 {
-            egui::pos2(
+            let point = egui::pos2(
                 rect.left() + rect.width() * x / 16.0,
                 rect.top() + rect.height() * y / 16.0,
-            )
+            );
+            center + rotation * (point - center)
         };
         let line = |points: &[(f32, f32)]| {
             painter.add(Shape::line(
@@ -317,6 +346,21 @@ impl Icon {
             }
             Self::Dot => {
                 painter.circle_filled(p(8.0, 8.0), rect.width() * 0.19, color);
+            }
+            Self::Close => {
+                line(&[(4.0, 4.0), (12.0, 12.0)]);
+                line(&[(12.0, 4.0), (4.0, 12.0)]);
+            }
+            Self::Warning => {
+                line(&[(8.0, 2.2), (14.6, 13.4), (1.4, 13.4), (8.0, 2.2)]);
+                line(&[(8.0, 6.2), (8.0, 9.8)]);
+                painter.circle_filled(p(8.0, 11.6), rect.width() * 0.06, color);
+            }
+            Self::Palette => {
+                painter.circle_stroke(p(8.0, 8.0), rect.width() * 0.40, s);
+                painter.circle_filled(p(5.6, 6.4), rect.width() * 0.07, color);
+                painter.circle_filled(p(9.0, 5.2), rect.width() * 0.07, color);
+                painter.circle_filled(p(11.2, 8.4), rect.width() * 0.07, color);
             }
             Self::Archive => {
                 box_outline(2.0, 2.5, 14.0, 6.0, 1.0);

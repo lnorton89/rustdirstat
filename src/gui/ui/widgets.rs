@@ -7,11 +7,99 @@
 
 use crate::gui::app::FileView;
 use crate::gui::icons::Icon;
-use eframe::egui::{self, Color32, Frame, Margin, RichText, Sense, Stroke, TextStyle, Vec2};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke, TextStyle, Vec2};
 
 #[cfg(test)]
 use super::probes::*;
 use super::theme::*;
+
+/// The hover animation for one control, on `0.0..=1.0`.
+///
+/// Everything hoverable in the window goes through this, so every
+/// highlight in the app eases in at the same rate and with the same
+/// curve. `cubic_out` rather than a linear ramp: the highlight has to be
+/// most of the way there the instant the pointer lands, or it reads as
+/// lag instead of as motion.
+pub(super) fn hover_t(ctx: &egui::Context, id: egui::Id, hovered: bool) -> f32 {
+    ctx.animate_bool_with_time_and_easing(
+        id,
+        hovered,
+        HOVER_SECONDS,
+        egui::emath::easing::cubic_out,
+    )
+}
+
+/// Fades `rest` towards `hot` by the control's hover animation, and
+/// returns the fill to paint.
+///
+/// Takes the responsibility for *which* id animates away from the twenty
+/// call sites that would otherwise each invent one.
+pub(super) fn hover_fill(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    rest: Color32,
+    hot: Color32,
+) -> Color32 {
+    let hot_now = response.hovered() || response.has_focus();
+    let t = hover_t(ui.ctx(), response.id.with("hover_fill"), hot_now);
+    if t <= 0.0 {
+        return rest;
+    }
+    // Blending from a transparent rest colour would drag the fill through
+    // whatever RGB that transparent value happens to carry, so fade the
+    // alpha instead and leave the hue alone.
+    if rest.a() == 0 {
+        return hot.gamma_multiply(t);
+    }
+    blend(rest, hot, t)
+}
+
+/// The hover animation for a control whose background is painted before
+/// its own response exists.
+///
+/// An `egui::Frame` paints its fill and *then* lays its contents out
+/// inside it, so a frame-shaped control cannot know it is hovered until
+/// after it has already been painted. Carrying one bool across the frame
+/// boundary is what lets such a control fade like everything else instead
+/// of stepping a frame late. Pair with [`remember_hover`].
+pub(super) fn remembered_hover(ui: &egui::Ui, id: egui::Id) -> f32 {
+    let was_hovered = ui.data(|data| data.get_temp::<bool>(id).unwrap_or(false));
+    hover_t(ui.ctx(), id, was_hovered)
+}
+
+/// Records this frame's hover state for [`remembered_hover`] to read on
+/// the next one.
+pub(super) fn remember_hover(ui: &egui::Ui, id: egui::Id, hovered: bool) {
+    ui.data_mut(|data| data.insert_temp(id, hovered));
+}
+
+/// The moving half of a table row's hover state.
+///
+/// `egui_extras` already washes the row under the pointer in the theme's
+/// `hover` colour, but it does that with no animation and one frame late,
+/// so on a long list it reads as a flicker trailing the pointer rather
+/// than as a highlight. This adds the part that actually carries the eye:
+/// an accent edge down the left of the row that grows out of the middle.
+///
+/// Painted *over* the finished row rather than under it, because a row's
+/// rect is not known until its cells have been drawn — an edge can sit on
+/// top of a row without touching a single glyph, which a second fill
+/// could not. The painter is the table body's own, so the edge is clipped
+/// to the table the way the row is.
+pub(super) fn row_hover_edge(painter: &egui::Painter, response: &egui::Response, id: egui::Id) {
+    let t = hover_t(&response.ctx, id, response.hovered());
+    if t <= 0.0 {
+        return;
+    }
+    let mut edge = response.rect;
+    edge.max.x = edge.min.x + ROW_HOVER_EDGE;
+    let inset = (1.0 - t) * edge.height() * 0.5;
+    painter.rect_filled(
+        edge.shrink2(Vec2::new(0.0, inset)),
+        egui::Rounding::same(1.5),
+        palette().accent.gamma_multiply(t),
+    );
+}
 
 pub(super) fn view_icon(view: FileView) -> Icon {
     match view {
@@ -37,37 +125,38 @@ pub(super) fn view_tab(ui: &mut egui::Ui, selected: bool, view: FileView) -> egu
         ui.allocate_exact_size(Vec2::new(width, VIEW_TAB_HEIGHT), Sense::click());
     if ui.is_rect_visible(rect) {
         let fill = if selected {
-            ACCENT_MUTED_COLOR
-        } else if response.hovered() || response.has_focus() {
-            HOVER_COLOR
+            palette().accent_muted
         } else {
-            Color32::TRANSPARENT
+            hover_fill(ui, &response, Color32::TRANSPARENT, palette().hover)
         };
         let stroke = if selected || response.has_focus() {
-            Stroke::new(1.0_f32, ACCENT_COLOR)
+            Stroke::new(1.0_f32, palette().accent)
         } else {
             Stroke::NONE
         };
         ui.painter()
             .rect(rect, egui::Rounding::same(6.0), fill, stroke);
         let color = if selected {
-            Color32::WHITE
+            palette().on_accent
         } else {
-            PRIMARY_TEXT_COLOR
+            palette().primary_text
         };
+        // An unselected tab lifts by a pixel under the pointer. The fill
+        // says "this is hoverable"; the lift is what says "and it will do
+        // something" without borrowing the selected state's colour.
+        let lift = if selected {
+            0.0
+        } else {
+            hover_t(ui.ctx(), response.id.with("tab_lift"), response.hovered())
+        };
+        let center_y = rect.center().y - lift;
         let icon_rect = egui::Rect::from_center_size(
-            egui::pos2(
-                rect.left() + HORIZONTAL_PADDING + ICON_SIZE * 0.5,
-                rect.center().y,
-            ),
+            egui::pos2(rect.left() + HORIZONTAL_PADDING + ICON_SIZE * 0.5, center_y),
             Vec2::splat(ICON_SIZE),
         );
         view_icon(view).paint(ui.painter(), icon_rect, color);
         ui.painter().galley(
-            egui::pos2(
-                icon_rect.right() + GAP,
-                rect.center().y - galley.size().y * 0.5,
-            ),
+            egui::pos2(icon_rect.right() + GAP, center_y - galley.size().y * 0.5),
             galley,
             color,
         );
@@ -110,24 +199,67 @@ pub(super) fn tool_enabled(
         .on_disabled_hover_text(format!("{tip} (unavailable right now)"))
 }
 
-pub(super) fn compact_icon_button(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {
+/// Width of the tree's disclosure control. Also the space a file row
+/// leaves where a folder row's toggle would be, so the two line up.
+pub(super) const EXPAND_TOGGLE_WIDTH: f32 = 20.0;
+
+/// The disclosure control in front of a directory row.
+///
+/// One chevron that *turns* rather than two that swap. Swapping
+/// `ChevronRight` for `ChevronDown` told you the new state and nothing
+/// about how you got there; turning through the quarter circle ties the
+/// row that just unfolded to the control that unfolded it, which matters
+/// in a tree where expanding a row pushes everything below it down the
+/// screen.
+///
+/// `id` identifies the *node*, not the row: the table hands its cells ids
+/// built from the row index, and expanding a folder renumbers every row
+/// under it — so an index-keyed animation would hand a half-turned
+/// chevron to whichever node had just slid into that slot.
+pub(super) fn expand_toggle(ui: &mut egui::Ui, id: egui::Id, expanded: bool) -> egui::Response {
+    const GLYPH: f32 = 12.0;
     let response = ui.add(
         egui::Button::new("")
             .frame(false)
-            .min_size(Vec2::splat(20.0)),
+            .min_size(Vec2::splat(EXPAND_TOGGLE_WIDTH)),
     );
-    let color = ui.style().interact(&response).fg_stroke.color;
-    icon.paint(
+    let center = response.rect.center();
+    let hot = hover_fill(ui, &response, Color32::TRANSPARENT, palette().hover);
+    if hot.a() > 0 {
+        ui.painter().rect_filled(
+            egui::Rect::from_center_size(center, Vec2::splat(EXPAND_TOGGLE_WIDTH)),
+            egui::Rounding::same(5.0),
+            hot,
+        );
+    }
+    // A quarter turn clockwise takes the right-pointing chevron to a
+    // down-pointing one, so the two states the tree has are the two ends
+    // of one animation rather than two unrelated pictures.
+    let turns =
+        ui.ctx()
+            .animate_value_with_time(id, if expanded { 0.25 } else { 0.0 }, TURN_SECONDS);
+    #[cfg(test)]
+    probe(&TEST_CHEVRON_TURNS).push(turns);
+    Icon::ChevronRight.paint_turned(
         ui.painter(),
-        egui::Rect::from_center_size(response.rect.center(), Vec2::splat(12.0)),
-        color,
+        egui::Rect::from_center_size(center, Vec2::splat(GLYPH)),
+        ui.style().interact(&response).fg_stroke.color,
+        turns,
     );
-    response.on_hover_text(tip)
+    response.on_hover_text(if expanded { "Collapse" } else { "Expand" })
 }
 
-pub(super) fn paint_inline_icon(ui: &mut egui::Ui, icon: Icon, size: f32, color: Color32) {
+/// Returns where the icon landed, which the tree's row-alignment test
+/// needs and every other caller ignores.
+pub(super) fn paint_inline_icon(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    size: f32,
+    color: Color32,
+) -> egui::Rect {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     icon.paint(ui.painter(), rect.shrink(1.0), color);
+    rect
 }
 
 pub(super) fn icon_selectable_label(
@@ -267,12 +399,25 @@ pub(super) fn menu_item(
 
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().interact_selectable(&response, selected);
-            if selected || response.hovered() || response.highlighted() || response.has_focus() {
+            // Faded in rather than switched on. A menu is a column of
+            // identical rows, so the highlight appearing from nowhere as
+            // the pointer travels down it is the one place in the window
+            // where a hard cut is most obvious.
+            let hot = response.hovered() || response.highlighted() || response.has_focus();
+            let t = if selected {
+                1.0
+            } else {
+                hover_t(ui.ctx(), response.id.with("menu_row"), hot)
+            };
+            if t > 0.0 {
                 ui.painter().rect(
                     rect.expand(visuals.expansion),
                     visuals.rounding,
-                    visuals.weak_bg_fill,
-                    visuals.bg_stroke,
+                    visuals.weak_bg_fill.gamma_multiply(t),
+                    Stroke::new(
+                        visuals.bg_stroke.width,
+                        visuals.bg_stroke.color.gamma_multiply(t),
+                    ),
                 );
             }
             let color = if enabled {
@@ -285,7 +430,7 @@ pub(super) fn menu_item(
             }
             if let Some(shortcut_galley) = &shortcut_galley {
                 let shortcut_color = if enabled {
-                    SECONDARY_TEXT_COLOR
+                    palette().secondary_text
                 } else {
                     ui.visuals().weak_text_color()
                 };
@@ -311,57 +456,51 @@ pub(super) fn menu_item(
     .inner
 }
 
-pub(super) fn icon_heading(ui: &mut egui::Ui, icon: Icon, label: &str) {
-    ui.horizontal(|ui| {
-        paint_inline_icon(ui, icon, 19.0, ACCENT_COLOR);
-        ui.heading(label);
-    });
-}
-
 pub(super) fn accent_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let palette = palette();
     ui.scope(|ui| {
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = ACCENT_MUTED_COLOR;
-        ui.visuals_mut().widgets.inactive.bg_fill = ACCENT_MUTED_COLOR;
-        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0_f32, ACCENT_COLOR);
-        ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::WHITE;
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = palette.accent_muted;
+        ui.visuals_mut().widgets.inactive.bg_fill = palette.accent_muted;
+        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+        ui.visuals_mut().widgets.inactive.fg_stroke.color = palette.on_accent;
         ui.button(label)
     })
     .inner
 }
 
 pub(super) fn danger_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let palette = palette();
+    // A little stronger than the callout background: this is the control
+    // that performs the destructive action, so it has to outrank the
+    // panel explaining it rather than blend into it.
+    let fill = blend(
+        palette.panel,
+        palette.danger,
+        if palette.mode.is_dark() { 0.34 } else { 0.22 },
+    );
     ui.scope(|ui| {
-        let red = Color32::from_rgb(220, 82, 92);
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::from_rgb(91, 36, 43);
-        ui.visuals_mut().widgets.inactive.bg_fill = Color32::from_rgb(91, 36, 43);
-        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0_f32, red);
-        ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::WHITE;
+        ui.visuals_mut().widgets.inactive.weak_bg_fill = fill;
+        ui.visuals_mut().widgets.inactive.bg_fill = fill;
+        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.danger);
+        ui.visuals_mut().widgets.inactive.fg_stroke.color = readable_text_color(fill);
         ui.button(label)
     })
     .inner
 }
 
-pub(super) fn settings_group(
-    ui: &mut egui::Ui,
-    icon: Icon,
-    title: &str,
-    add_contents: impl FnOnce(&mut egui::Ui),
-) {
-    Frame::none()
-        .fill(APP_COLOR)
-        .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::same(12.0))
-        .stroke(Stroke::new(1.0_f32, BORDER_COLOR))
-        .show(ui, |ui| {
-            icon_heading(ui, icon, title);
-            ui.add_space(5.0);
-            add_contents(ui);
-        });
-}
-
 /// Width of the strip at a header's right edge left to the column
 /// resizer rather than claimed for click-to-sort and drag-to-reorder.
 pub(super) const HEADER_RESIZE_MARGIN: f32 = 8.0;
+
+/// Distance from the left edge of a header cell to the start of its
+/// label.
+///
+/// Shared by both header widgets. They used to disagree: the sortable
+/// one painted its galley at `left + 7`, while the plain one asked for
+/// `add_space(7.0)` and then a label — and `add_space` is followed by the
+/// row's item spacing, so the text landed at 15 instead. Two tables side
+/// by side had their column names in two different places.
+pub(super) const HEADER_TEXT_INSET: f32 = 7.0;
 
 pub(super) fn sortable_header(
     ui: &mut egui::Ui,
@@ -394,21 +533,24 @@ pub(super) fn sortable_header(
     );
     if ui.is_rect_visible(rect) {
         let fill = if direction.is_some() {
-            ACCENT_MUTED_COLOR
-        } else if response.hovered() || response.has_focus() {
-            HOVER_COLOR
+            palette().accent_muted
         } else {
-            RAISED_COLOR
+            hover_fill(ui, &response, palette().raised, palette().hover)
         };
         ui.painter()
             .rect_filled(rect, egui::Rounding::same(4.0), fill);
-        let text_pos = egui::pos2(rect.left() + 7.0, rect.center().y - galley.size().y * 0.5);
+        let text_pos = egui::pos2(
+            rect.left() + HEADER_TEXT_INSET,
+            rect.center().y - galley.size().y * 0.5,
+        );
         let color = if direction.is_some() {
-            Color32::WHITE
+            palette().on_accent
         } else {
             ui.style().interact(&response).text_color()
         };
         ui.painter().galley(text_pos, galley.clone(), color);
+        #[cfg(test)]
+        probe(&TEST_TABLE_HEADER_TEXT).push((label.to_owned(), text_pos.x));
         if let Some(icon) = direction {
             let icon_rect = egui::Rect::from_center_size(
                 egui::pos2(
@@ -432,12 +574,66 @@ pub(super) fn sortable_header(
         .on_hover_text(format!("Click to sort by {label} · drag to reorder"))
 }
 
+/// A column name in a table whose columns cannot be sorted or reordered.
+///
+/// Painted the same way [`sortable_header`] is, rather than composed from
+/// `add_space` and a label, so the two kinds of header put their text in
+/// the same place. See [`HEADER_TEXT_INSET`] for what they used to do
+/// instead.
 pub(super) fn table_header_label(ui: &mut egui::Ui, label: &str) {
-    let rect = ui.available_rect_before_wrap();
-    ui.painter()
-        .rect_filled(rect, egui::Rounding::same(4.0), RAISED_COLOR);
-    ui.add_space(7.0);
-    ui.label(RichText::new(label).strong().color(PRIMARY_TEXT_COLOR));
+    let galley = egui::WidgetText::from(RichText::new(label).strong()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Button,
+    );
+    let (rect, _) = ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter()
+            .rect_filled(rect, egui::Rounding::same(4.0), palette().raised);
+        ui.painter().galley(
+            egui::pos2(
+                rect.left() + HEADER_TEXT_INSET,
+                rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            palette().primary_text,
+        );
+    }
+    #[cfg(test)]
+    probe(&TEST_TABLE_HEADER_TEXT).push((label.to_owned(), rect.left() + HEADER_TEXT_INSET));
+}
+
+/// The icon-and-name pair that opens a pane.
+///
+/// One helper rather than three near-identical `horizontal` blocks, so
+/// the icon size and the gap after it cannot drift apart between the
+/// treemap pane, the extension pane, and the search view — which they
+/// had.
+pub(super) fn section_title(ui: &mut egui::Ui, icon: Icon, title: &str) {
+    paint_inline_icon(ui, icon, SECTION_ICON_SIZE, palette().accent);
+    ui.add_space(SPACE_XS);
+    ui.heading(title);
+}
+
+pub(super) const SECTION_ICON_SIZE: f32 = 19.0;
+
+/// The rule under a pane's heading, with identical air above and below.
+///
+/// `ui.separator()` allocates its own padding on top of the row spacing,
+/// so every pane that reached for one and then nudged it with a hand-picked
+/// `add_space` ended up with a different gap: 3px above and 5px below in
+/// the treemap, 6 and 5 in the extension list, and something else again in
+/// search.
+pub(super) fn section_rule(ui: &mut egui::Ui) {
+    ui.add_space(SPACE_XS);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, 0.0, palette().border);
+    }
+    ui.add_space(SPACE_XS);
+    #[cfg(test)]
+    probe(&TEST_SECTION_RULE_RECTS).push(rect);
 }
 
 pub(super) fn percentage_bar(ui: &mut egui::Ui, fraction: f32) {
@@ -445,10 +641,10 @@ pub(super) fn percentage_bar(ui: &mut egui::Ui, fraction: f32) {
         Vec2::new(ui.available_width().min(180.0), 12.0),
         Sense::hover(),
     );
-    ui.painter().rect_filled(rect, 4.0, APP_COLOR);
+    ui.painter().rect_filled(rect, 4.0, palette().app);
     let mut fill = rect;
     fill.set_width(rect.width() * fraction.clamp(0.0, 1.0));
-    ui.painter().rect_filled(fill, 4.0, ACCENT_COLOR);
+    ui.painter().rect_filled(fill, 4.0, palette().accent);
 }
 
 pub(super) fn truncate_for_width(

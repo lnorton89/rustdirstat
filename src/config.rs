@@ -37,6 +37,12 @@ pub struct Config {
     pub gui_show_grid: Option<bool>,
     #[serde(default)]
     pub gui_show_labels: Option<bool>,
+    /// A theme `id` from `assets/themes.toml`, or from a user theme file.
+    /// An id that no longer exists falls back to the default rather than
+    /// failing to load — themes come and go, preferences should not
+    /// become unreadable when one does.
+    #[serde(default)]
+    pub gui_theme: Option<String>,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -78,6 +84,7 @@ mod tests {
             gui_show_free_space: Some(true),
             gui_show_grid: Some(false),
             gui_show_labels: Some(true),
+            gui_theme: Some("catppuccin-mocha".to_string()),
             ..Config::default()
         };
         let encoded = toml::to_string(&config)?;
@@ -86,6 +93,7 @@ mod tests {
         assert_eq!(decoded.gui_show_extensions, Some(false));
         assert_eq!(decoded.gui_show_grid, Some(false));
         assert_eq!(decoded.gui_show_labels, Some(true));
+        assert_eq!(decoded.gui_theme.as_deref(), Some("catppuccin-mocha"));
         Ok(())
     }
 }

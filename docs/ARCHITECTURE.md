@@ -70,18 +70,53 @@ gui/
   treemap_layout.rs  Node subtree -> positioned pixel tiles
   ui/
     mod.rs           draw() + panel composition
-    theme.rs         palette, egui style, color math
-    widgets.rs       menu rows, toolbar buttons, table headers, view tabs
+    themes.rs        theme catalog loading + Palette derivation
+    theme.rs         active palette, egui style, spacing scale, motion timings
+    widgets.rs       menu rows, toolbar buttons, table headers, view tabs,
+                     and the shared hover/motion helpers they all route through
+    categories.rs    the file-category bar and chips above the extension table
     chrome.rs        menu bar, toolbar, status bar
     directory.rs     the directory tree view
     extensions.rs    the extension list
     lists.rs         largest files, search results, duplicates
     treemap.rs       tile painting + cushion shading
-    dialogs.rs       modals
+    modal.rs         the one modal shell: scrim, blur, card, nav rail
+    pages.rs         the contents of each modal page + confirmations
     actions.rs       commands + keyboard shortcuts
     probes.rs        (test) recorded geometry
     tests.rs         (test) interaction suite
+assets/
+  themes.toml        the theme catalog, compiled in with include_str!
 ```
+
+### The modal layer
+
+There is exactly one modal surface. Everything that used to be a separate
+`egui::Window` — settings, properties, maintenance tools, the view guide
+— is a page of one card, reached from `app.modal: Option<ModalPage>`, and
+pages can link to one another. Delete and destructive-tool confirmations
+are a second layer above that, keyed off `pending_delete` and
+`pending_windows_tool`, so an "are you sure" can sit over the page that
+raised it.
+
+The backdrop behind the card is a real blur: the modal asks for a
+`ViewportCommand::Screenshot`, waits for the `Event::Screenshot` reply
+(one or two frames), downscales it to ~220px wide, runs three box passes,
+and uploads that as a texture. It costs one GPU readback per open and
+nothing per frame. A backend that never answers — including
+`egui::Context::default`, so every test — falls back to a plain scrim
+after two frames.
+
+### Themes
+
+`assets/themes.toml` is the catalog; `*.toml` under
+`<config dir>/rustdirstat/themes/` is loaded on top of it. A theme states
+twelve colors and `Palette::from_spec` derives the other dozen, so a
+theme cannot ship a selection or callout color that clashes with its own
+accent. `theme_layers_are_distinct_and_copy_is_readable` checks every
+theme in the catalog for layer separation (in CIE L*, not luminance —
+luminance collapses near black, where several of these themes live) and
+for WCAG AA/AAA contrast on both authored and derived colors.
 
 `GuiApp` owns everything; `ui` is stateless. `draw` runs top to bottom
 once per frame and rebuilds the window from scratch. That is the single
@@ -116,7 +151,11 @@ magnitude larger than a pixel.
 | A new column in the file table | `gui/ui/directory.rs` + `DirectoryColumn` in `gui/app.rs` |
 | A new menu item | `gui/ui/chrome.rs`; the command itself in `gui/ui/actions.rs` |
 | A new keyboard shortcut | `handle_shortcuts` in `gui/ui/actions.rs`, and show it on the matching menu row |
-| Colors, spacing, fonts | `gui/ui/theme.rs` |
+| A new theme | `assets/themes.toml` — data only, no code |
+| A new *derived* color | `Palette` in `gui/ui/themes.rs`, then the contrast test |
+| Spacing, fonts, egui style | `gui/ui/theme.rs` — pick one of the four `SPACE_*` steps |
+| A hover or motion effect | `hover_t` / `hover_fill` in `gui/ui/widgets.rs`, never a bespoke ramp |
+| A new settings surface | a `ModalPage` in `gui/ui/modal.rs` + its page in `gui/ui/pages.rs` |
 | How tiles are chosen or sized | `gui/treemap_layout.rs` |
 | The tiling math itself | `treemap.rs` (shared with the TUI — check both) |
 | Anything scanned or aggregated | `scanner.rs` + `model.rs` |

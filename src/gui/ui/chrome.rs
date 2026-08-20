@@ -1,5 +1,6 @@
 //! The frame around the workspace: menu bar, toolbar, status bar.
 
+use super::modal::ModalPage;
 use crate::gui::app::{size_label, FileView, GuiApp, PaneOrientation};
 use crate::gui::icons::Icon;
 use crate::util::thousands;
@@ -15,8 +16,18 @@ use super::widgets::*;
 /// is built for a compact look that leaves the names running into each
 /// other. `menu_bar_names_are_clearly_separated` pins the resulting
 /// on-screen gap so this cannot silently regress again.
-pub(super) const MENU_BAR_BUTTON_PADDING: Vec2 = Vec2::new(12.0, 6.0);
+pub(super) const MENU_BAR_BUTTON_PADDING: Vec2 = Vec2::new(12.0, 9.0);
 pub(super) const MENU_BAR_ITEM_GAP: f32 = 10.0;
+
+/// A menu bar's highlight is square and fills the bar.
+///
+/// The rest of the window rounds its widgets by 6, which under a
+/// top-level menu name paints a pill floating in the middle of the bar —
+/// it reads as a button someone dropped there rather than as the bar
+/// responding. Squaring it, and letting it run the full height of the
+/// strip, is what every desktop menu bar does and is why they read as
+/// bars.
+const MENU_BAR_ROUNDING: egui::Rounding = egui::Rounding::ZERO;
 /// Floors the test measures against. Deliberately below what is
 /// configured above, so ordinary tuning does not trip them, but far above
 /// what egui's `set_menu_style` leaves behind (2px padding, 0 gap) — the
@@ -34,6 +45,9 @@ fn menu_bar_button<R>(
     label: &str,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
+    #[cfg(test)]
+    super::probes::probe(&super::probes::TEST_MENU_BAR_ROUNDING)
+        .push((label.to_owned(), ui.visuals().widgets.hovered.rounding.nw));
     let response = ui.menu_button(label, add_contents);
     #[cfg(test)]
     super::probes::probe(&super::probes::TEST_MENU_BAR_RECTS)
@@ -41,13 +55,37 @@ fn menu_bar_button<R>(
     response
 }
 
+/// Squares off the hover, open, and pressed backgrounds for the bar.
+///
+/// Has to be applied to the child `Ui` *inside* `menu::bar`, for the same
+/// reason the padding does: `set_menu_style` runs first and overwrites
+/// whatever was configured on the way in.
+fn square_off_menu_bar(ui: &mut egui::Ui) {
+    let widgets = &mut ui.visuals_mut().widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.rounding = MENU_BAR_ROUNDING;
+    }
+}
+
 pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("menu_bar")
         .frame(
             Frame::none()
-                .fill(APP_COLOR)
-                .inner_margin(Margin::symmetric(8.0, 5.0))
-                .stroke(Stroke::new(1.0_f32, BORDER_COLOR)),
+                .fill(palette().app)
+                // No vertical margin: the highlight under a menu name is
+                // the button's own background, so anything the frame adds
+                // above and below shows as a gap the highlight cannot
+                // reach — which is what made it look like a floating pill
+                // instead of part of the bar. The height comes from the
+                // button padding below instead.
+                .inner_margin(Margin::symmetric(SPACE_XS, 0.0))
+                .stroke(Stroke::new(1.0_f32, palette().border)),
         )
         .show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -59,6 +97,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                 // no indication why.
                 ui.spacing_mut().button_padding = MENU_BAR_BUTTON_PADDING;
                 ui.spacing_mut().item_spacing.x = MENU_BAR_ITEM_GAP;
+                square_off_menu_bar(ui);
                 menu_bar_button(ui, "File", |ui| {
                     if menu_action(
                         ui,
@@ -115,7 +154,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ui.close_menu();
                     }
                     if icon_button(ui, selected, Icon::Info, "Properties").clicked() {
-                        app.show_properties = true;
+                        app.open_modal(ModalPage::Properties);
                         ui.close_menu();
                     }
                     ui.separator();
@@ -195,14 +234,18 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                     menu_toggle(ui, &mut app.show_toolbar, "Toolbar");
                     menu_toggle(ui, &mut app.show_status_bar, "Status bar");
                     ui.separator();
+                    if icon_button(ui, true, Icon::Palette, "Appearance…").clicked() {
+                        app.open_modal(ModalPage::Appearance);
+                        ui.close_menu();
+                    }
                     if icon_button(ui, true, Icon::Settings, "Settings…").clicked() {
-                        app.show_settings = true;
+                        app.open_modal(ModalPage::Views);
                         ui.close_menu();
                     }
                 });
                 menu_bar_button(ui, "Tools", |ui| {
                     if icon_button(ui, true, Icon::Tools, "Windows maintenance…").clicked() {
-                        app.show_windows_tools = true;
+                        app.open_modal(ModalPage::Maintenance);
                         ui.close_menu();
                     }
                     ui.separator();
@@ -212,12 +255,13 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                     }
                 });
                 menu_bar_button(ui, "Help", |ui| {
-                    if icon_button(ui, true, Icon::Help, "WinDirStat view guide").clicked() {
-                        app.show_about = true;
+                    // These used to open the same window as each other.
+                    if icon_button(ui, true, Icon::Help, "View guide").clicked() {
+                        app.open_modal(ModalPage::Guide);
                         ui.close_menu();
                     }
                     if icon_button(ui, true, Icon::Info, "About RustDirStat").clicked() {
-                        app.show_about = true;
+                        app.open_modal(ModalPage::About);
                         ui.close_menu();
                     }
                 });
@@ -236,18 +280,18 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("toolbar")
         .frame(
             Frame::none()
-                .fill(PANEL_COLOR)
-                .inner_margin(Margin::symmetric(12.0, 9.0))
-                .stroke(Stroke::new(1.0_f32, BORDER_COLOR)),
+                .fill(palette().panel)
+                .inner_margin(Margin::symmetric(PAD, SPACE_SM))
+                .stroke(Stroke::new(1.0_f32, palette().border)),
         )
         .show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 // Toolbar buttons are icon-only, so they need more air
                 // between them than text controls do to stay readable as
                 // separate targets rather than one strip of glyphs.
-                ui.spacing_mut().item_spacing = Vec2::new(6.0, 8.0);
-                paint_inline_icon(ui, Icon::App, 20.0, ACCENT_COLOR);
-                ui.add_space(4.0);
+                ui.spacing_mut().item_spacing = Vec2::new(6.0, SPACE_SM);
+                paint_inline_icon(ui, Icon::App, 20.0, palette().accent);
+                ui.add_space(SPACE_XS);
                 ui.label(RichText::new("RustDirStat").strong().size(15.0));
                 toolbar_separator(ui);
                 if tool_enabled(ui, !app.is_busy(), Icon::FolderOpen, "Select folder").clicked() {
@@ -293,7 +337,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                 }
                 if tool_enabled(ui, app.selected_path.is_some(), Icon::Info, "Properties").clicked()
                 {
-                    app.show_properties = true;
+                    app.open_modal(ModalPage::Properties);
                 }
                 toolbar_separator(ui);
                 if tool_enabled(
@@ -328,24 +372,27 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                 {
                     app.orientation.toggle();
                 }
+                if tool(ui, Icon::Palette, "Appearance and theme").clicked() {
+                    app.open_modal(ModalPage::Appearance);
+                }
                 if tool(ui, Icon::Settings, "Settings").clicked() {
-                    app.show_settings = true;
+                    app.open_modal(ModalPage::Views);
                 }
                 if tool_enabled(ui, !app.is_busy(), Icon::Tools, "Windows maintenance tools")
                     .clicked()
                 {
-                    app.show_windows_tools = true;
+                    app.open_modal(ModalPage::Maintenance);
                 }
                 if ui.available_width() > 240.0 {
                     toolbar_separator(ui);
                     Frame::none()
-                        .fill(APP_COLOR)
+                        .fill(palette().app)
                         .rounding(egui::Rounding::same(6.0))
-                        .inner_margin(Margin::symmetric(9.0, 5.0))
+                        .inner_margin(Margin::symmetric(SPACE_SM, SPACE_XS))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new(crate::util::display_path(&app.tree.root_path))
-                                    .color(SECONDARY_TEXT_COLOR),
+                                RichText::new(crate::util::display_name(&app.tree.root_path))
+                                    .color(palette().secondary_text),
                             );
                         });
                 }
@@ -358,25 +405,25 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
 /// undifferentiated row of glyphs; a bare `ui.separator()` inherits the
 /// same tight item spacing as the buttons and does not separate anything.
 pub(super) fn toolbar_separator(ui: &mut egui::Ui) {
-    ui.add_space(5.0);
+    ui.add_space(SPACE_XS);
     ui.separator();
-    ui.add_space(5.0);
+    ui.add_space(SPACE_XS);
 }
 
 pub(super) fn draw_status_bar(app: &mut GuiApp, ctx: &egui::Context) {
     egui::TopBottomPanel::bottom("status_bar")
         .frame(
             Frame::none()
-                .fill(APP_COLOR)
-                .inner_margin(Margin::symmetric(12.0, 5.0))
-                .stroke(Stroke::new(1.0_f32, BORDER_COLOR)),
+                .fill(palette().app)
+                .inner_margin(Margin::symmetric(PAD, SPACE_XS + 1.0))
+                .stroke(Stroke::new(1.0_f32, palette().border)),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if app.is_busy() {
                     ui.spinner();
                 } else {
-                    paint_inline_icon(ui, Icon::Info, 14.0, SECONDARY_TEXT_COLOR);
+                    paint_inline_icon(ui, Icon::Info, 14.0, palette().secondary_text);
                 }
                 ui.label(
                     app.busy_text()

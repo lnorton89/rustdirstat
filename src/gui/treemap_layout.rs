@@ -85,7 +85,17 @@ const MIN_TILE_AREA_PX: f32 = 6.0;
 const MAX_CHILDREN_PER_LEVEL: usize = 2048;
 /// Soft ceiling on emitted tiles, checked *between* levels and never
 /// inside one, so that any level which starts also finishes.
-const MAX_TILES: usize = 40_000;
+pub(super) const MAX_TILES: usize = 40_000;
+/// Tile budget while the user is dragging something.
+///
+/// The layout is keyed on the panel rect, so dragging a splitter changes
+/// the rect on every frame of the drag and re-lays-out the whole map each
+/// time. At the full budget that is forty thousand tiles per frame, which
+/// on a whole-drive scan is what made resizing anything feel like the
+/// window had stopped responding. A tenth of the detail is still a
+/// recognisable map to drag against, and the full one is rebuilt the
+/// moment the pointer comes up.
+pub(super) const MAX_TILES_INTERACTIVE: usize = 4_000;
 
 /// One directory queued to be subdivided into the rect it was given.
 struct Pending<'a> {
@@ -130,6 +140,9 @@ pub(super) struct LayoutRequest {
     /// Height a tile reserves for its own name, measured by the caller
     /// from the font it will draw with.
     pub label_strip: f32,
+    /// Ceiling on emitted tiles. `MAX_TILES` at rest,
+    /// `MAX_TILES_INTERACTIVE` while a drag is in flight.
+    pub max_tiles: usize,
 }
 
 pub(super) fn build(node: &Node, request: &LayoutRequest) -> Vec<Tile> {
@@ -141,6 +154,7 @@ pub(super) fn build(node: &Node, request: &LayoutRequest) -> Vec<Tile> {
         use_physical,
         free_space,
         label_strip,
+        max_tiles,
     } = *request;
     // Whole pixels, so nested tiles stay on integer origins. The caller
     // measures this from the font it will actually draw with rather than
@@ -159,7 +173,7 @@ pub(super) fn build(node: &Node, request: &LayoutRequest) -> Vec<Tile> {
         index_path: Vec::new(),
     }];
 
-    while !level.is_empty() && out.len() < MAX_TILES {
+    while !level.is_empty() && out.len() < max_tiles {
         let mut next = Vec::new();
         for pending in &level {
             expand(
@@ -171,7 +185,7 @@ pub(super) fn build(node: &Node, request: &LayoutRequest) -> Vec<Tile> {
                 &mut next,
             );
         }
-        prioritize(&mut next, out.len());
+        prioritize(&mut next, out.len(), max_tiles);
         level = next;
     }
     out
@@ -368,8 +382,8 @@ fn expand<'a>(
 /// detail — the directory still renders as its own solid tile — so this
 /// can never open a hole in the map, which is exactly what stopping
 /// part-way through a level would do.
-fn prioritize(next: &mut Vec<Pending<'_>>, emitted: usize) {
-    let mut budget = MAX_TILES.saturating_sub(emitted);
+fn prioritize(next: &mut Vec<Pending<'_>>, emitted: usize, max_tiles: usize) {
+    let mut budget = max_tiles.saturating_sub(emitted);
     if next.iter().map(Pending::tile_cost).sum::<usize>() <= budget {
         return;
     }
@@ -480,6 +494,7 @@ mod tests {
                 use_physical: false,
                 free_space: Some(root.size / 2),
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
 
@@ -511,6 +526,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
         // A parent that was expanded must be covered by its children, so
@@ -547,6 +563,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
 
@@ -580,6 +597,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
 
@@ -617,6 +635,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
 
@@ -646,6 +665,7 @@ mod tests {
                 use_physical: false,
                 free_space: Some(8000),
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
         let free: Vec<_> = tiles.iter().filter(|t| t.is_free_space).collect();
@@ -667,6 +687,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
         for (i, tile) in tiles.iter().enumerate() {
@@ -706,6 +727,7 @@ mod tests {
                     use_physical: false,
                     free_space: Some(root.size / 3),
                     label_strip: TEST_LABEL_STRIP,
+                    max_tiles: MAX_TILES,
                 },
             );
             let panel = (12.0, 34.0, 12.0 + w, 34.0 + h);
@@ -765,6 +787,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         );
 
@@ -783,6 +806,57 @@ mod tests {
         }
     }
 
+    /// A drag must not pay for the full map on every frame.
+    ///
+    /// The layout is keyed on the panel rect, so dragging a splitter
+    /// changes that rect every frame and rebuilds the whole thing each
+    /// time. On a whole-drive scan at the full budget that is tens of
+    /// thousands of tiles per frame, which is what made resizing feel
+    /// like the window had stopped responding. The reduced budget is what
+    /// keeps a drag cheap; the full one comes back when the pointer does.
+    #[test]
+    fn a_drag_lays_out_far_less_than_a_settled_frame() {
+        let root = drive_shaped(6, 6, 4096);
+        let request = |max_tiles| LayoutRequest {
+            x: 0.0,
+            y: 0.0,
+            width: 1900.0,
+            height: 900.0,
+            use_physical: false,
+            free_space: None,
+            label_strip: TEST_LABEL_STRIP,
+            max_tiles,
+        };
+
+        let settled = build(&root, &request(MAX_TILES));
+        let dragging = build(&root, &request(MAX_TILES_INTERACTIVE));
+
+        assert!(
+            dragging.len() <= MAX_TILES_INTERACTIVE,
+            "a drag emitted {} tiles, over its own {MAX_TILES_INTERACTIVE} budget",
+            dragging.len()
+        );
+        assert!(
+            settled.len() > dragging.len() * 2,
+            "the settled layout ({} tiles) is not meaningfully more detailed than the \
+             dragging one ({} tiles), so the reduced budget is buying nothing",
+            settled.len(),
+            dragging.len()
+        );
+        // Cheaper still has to mean *correct*: a drag that left holes in
+        // the map would be worse than a slow one.
+        let covered: f32 = dragging
+            .iter()
+            .filter(|tile| tile.depth == 0)
+            .map(|tile| tile.w * tile.h)
+            .sum();
+        assert!(
+            covered / (1900.0 * 900.0) > 0.99,
+            "the reduced-detail layout covers only {:.1}% of the panel",
+            covered / (1900.0 * 900.0) * 100.0
+        );
+    }
+
     #[test]
     fn an_empty_panel_produces_no_tiles() {
         let root = dir("root", vec![leaf("a.bin", 10)]);
@@ -796,6 +870,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         )
         .is_empty());
@@ -809,6 +884,7 @@ mod tests {
                 use_physical: false,
                 free_space: None,
                 label_strip: TEST_LABEL_STRIP,
+                max_tiles: MAX_TILES,
             },
         )
         .is_empty());

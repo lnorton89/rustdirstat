@@ -11,6 +11,39 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use super::treemap_layout;
+use super::ui::{ModalPage, Palette};
+
+/// The blurred snapshot painted behind an open modal.
+///
+/// Capturing it is a round trip through the renderer — a
+/// [`egui::ViewportCommand::Screenshot`] this frame, an
+/// [`egui::Event::Screenshot`] one or two frames later — so the modal
+/// deliberately does not draw until the snapshot is in hand. Drawing it
+/// first would put the modal *in* its own backdrop.
+///
+/// `Unavailable` is the honest state for a backend that never answers:
+/// the modal still opens, over a plain scrim, which is what happens in
+/// every test since there is no renderer behind `egui::Context::default`.
+pub(super) enum Backdrop {
+    Idle,
+    /// Waiting on the reply. The counter is a deadline, not a retry — if
+    /// no screenshot arrives within a couple of frames the modal must
+    /// stop waiting and open regardless.
+    Requested {
+        frames_waited: u8,
+    },
+    Ready(egui::TextureHandle),
+    Unavailable,
+}
+
+impl Backdrop {
+    pub(super) fn texture(&self) -> Option<&egui::TextureHandle> {
+        match self {
+            Backdrop::Ready(texture) => Some(texture),
+            Backdrop::Idle | Backdrop::Requested { .. } | Backdrop::Unavailable => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PaneOrientation {
@@ -194,6 +227,10 @@ struct TreemapKey {
     /// Included because the strip comes from the font the renderer will
     /// draw with, and a font size change has to re-lay-out the tiles.
     label_strip: i32,
+    /// Included so the reduced-detail layout used during a drag is
+    /// replaced by the full one the moment the drag ends, rather than
+    /// being mistaken for an up-to-date cache entry.
+    max_tiles: usize,
 }
 
 /// Order-independent fingerprint of the expanded-directory set.
@@ -213,6 +250,18 @@ fn expanded_fingerprint(expanded: &HashSet<Vec<usize>>) -> u64 {
         sum = sum.wrapping_add(hash);
     }
     xor ^ sum.rotate_left(17) ^ (expanded.len() as u64)
+}
+
+/// One finished maintenance tool, kept for the Maintenance page.
+///
+/// The status bar shows a single line that the next scan overwrites,
+/// which is fine for "launched cleanmgr" and useless for a DISM report
+/// the user ran specifically to read.
+pub(super) struct ToolOutcome {
+    pub tool: String,
+    pub summary: String,
+    pub detail: String,
+    pub failed: bool,
 }
 
 pub(super) struct PendingDelete {
@@ -237,10 +286,16 @@ pub(super) struct GuiApp {
     pub highlighted_category: Option<Category>,
     pub pending_delete: Option<PendingDelete>,
     pub status: Option<String>,
-    pub show_properties: bool,
-    pub show_settings: bool,
-    pub show_about: bool,
-    pub show_windows_tools: bool,
+    /// The one modal page on screen, if any. Six independent `show_*`
+    /// flags used to live here; they could all be true at once, and two
+    /// of them opened the same window.
+    pub modal: Option<ModalPage>,
+    pub backdrop: Backdrop,
+    pub theme_id: String,
+    /// Resolved from `theme_id`. Cached rather than looked up per frame
+    /// so a rename of the field cannot quietly put a table lookup on a
+    /// draw path.
+    pub palette: Palette,
     pub show_toolbar: bool,
     pub show_status_bar: bool,
     pub show_extension_view: bool,
@@ -271,12 +326,16 @@ pub(super) struct GuiApp {
     pub shell_icons: super::shell_icons::ShellIcons,
     pub treemap_tiles: Vec<treemap_layout::Tile>,
     treemap_key: Option<TreemapKey>,
-    scan_rx: Option<mpsc::Receiver<Result<Tree, String>>>,
+    scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
     scan_resets_workspace: bool,
     duplicate_rx: Option<mpsc::Receiver<Vec<DupGroup>>>,
     pub pending_windows_tool: Option<usize>,
-    tool_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    tool_rx: Option<mpsc::Receiver<Result<crate::wintools::ToolOutput, String>>>,
     active_tool_name: Option<String>,
+    /// Index of the tool currently running, so its own row can show the
+    /// spinner instead of the page closing out from under it.
+    pub running_tool: Option<usize>,
+    pub tool_log: Vec<ToolOutcome>,
 }
 
 impl GuiApp {
@@ -290,6 +349,10 @@ impl GuiApp {
         let mut expanded = HashSet::new();
         expanded.insert(Vec::new());
         let config = crate::config::load();
+        let theme_id = config
+            .gui_theme
+            .clone()
+            .unwrap_or_else(|| super::ui::default_theme_id().to_string());
         let mut app = Self {
             tree: Arc::new(tree),
             zoom_path: Vec::new(),
@@ -305,10 +368,10 @@ impl GuiApp {
             highlighted_category: None,
             pending_delete: None,
             status: None,
-            show_properties: false,
-            show_settings: false,
-            show_about: false,
-            show_windows_tools: false,
+            modal: None,
+            backdrop: Backdrop::Idle,
+            theme_id: theme_id.clone(),
+            palette: super::ui::palette_for(&theme_id),
             show_toolbar: config.gui_show_toolbar.unwrap_or(true),
             show_status_bar: config.gui_show_status_bar.unwrap_or(true),
             show_extension_view: config.gui_show_extensions.unwrap_or(true),
@@ -338,6 +401,8 @@ impl GuiApp {
             pending_windows_tool: None,
             tool_rx: None,
             active_tool_name: None,
+            running_tool: None,
+            tool_log: Vec::new(),
         };
         app.refresh_extensions();
         app.refresh_largest_files();
@@ -386,18 +451,7 @@ impl GuiApp {
     }
 
     pub(super) fn refresh_extensions(&mut self) {
-        let mut by_ext: HashMap<String, (Category, u64, u64)> = HashMap::new();
-        collect_extensions(self.zoom_node(), self.use_physical, &mut by_ext);
-        let rows: Vec<_> = by_ext
-            .into_iter()
-            .map(|(extension, (category, size, count))| ExtensionRow {
-                extension,
-                category,
-                size,
-                count,
-            })
-            .collect();
-        self.extensions = rows;
+        self.extensions = collect_extension_rows(self.zoom_node(), self.use_physical);
         self.sort_extensions();
     }
 
@@ -548,9 +602,19 @@ impl GuiApp {
         let worker_progress = Arc::clone(&progress);
         let display = crate::util::display_path(&root);
         let (tx, rx) = mpsc::channel();
+        let physical = self.use_physical;
         std::thread::spawn(move || {
             let result = crate::scanner::scan(&root, Some(worker_progress.as_ref()))
-                .map_err(|error| error.to_string());
+                .map_err(|error| error.to_string())
+                .map(|tree| {
+                    let extensions = collect_extension_rows(&tree.root, physical);
+                    let largest_files = top_files::top_k(&tree.root, 200);
+                    ScanOutcome {
+                        tree,
+                        extensions,
+                        largest_files,
+                    }
+                });
             let _ = tx.send(result);
         });
         self.scan_progress = Some(progress);
@@ -586,6 +650,17 @@ impl GuiApp {
         self.duplicate_rx.is_some()
     }
 
+    /// Switches theme and resolves the new palette once, here, rather
+    /// than leaving `theme_id` and `palette` free to disagree.
+    pub(super) fn set_theme(&mut self, id: &str) {
+        self.theme_id = id.to_string();
+        self.palette = super::ui::palette_for(id);
+    }
+
+    pub(super) fn open_modal(&mut self, page: ModalPage) {
+        self.modal = Some(page);
+    }
+
     pub(super) fn request_windows_tool(&mut self, index: usize) {
         let Some(tool) = crate::wintools::TOOLS.get(index) else {
             return;
@@ -618,9 +693,12 @@ impl GuiApp {
             let _ = tx.send(crate::wintools::run(index, &root));
         });
         self.active_tool_name = Some(name.clone());
+        self.running_tool = Some(index);
         self.tool_rx = Some(rx);
         self.status = Some(format!("Running {name}…"));
-        self.show_windows_tools = false;
+        // The page stays open. A DISM run takes minutes, and closing the
+        // window that started it left a one-line status bar as the only
+        // sign anything was happening.
     }
 
     /// Swaps in a freshly scanned tree, retiring the old one off-thread.
@@ -678,6 +756,7 @@ impl GuiApp {
     }
 
     pub(super) fn poll_background(&mut self, ctx: &egui::Context) {
+        self.collect_backdrop(ctx);
         let scan_result = self.scan_rx.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -689,8 +768,13 @@ impl GuiApp {
             self.scan_rx = None;
             self.scan_progress = None;
             match result {
-                Ok(tree) => {
+                Ok(outcome) => {
                     let reset = self.scan_resets_workspace;
+                    let ScanOutcome {
+                        tree,
+                        extensions,
+                        largest_files,
+                    } = outcome;
                     self.replace_tree(tree);
                     if reset {
                         self.reset_workspace();
@@ -701,8 +785,14 @@ impl GuiApp {
                             .as_ref()
                             .map(|path| valid_prefix(self.tree.as_ref(), path));
                     }
-                    self.refresh_extensions();
-                    self.refresh_largest_files();
+                    // Already computed on the scan thread; see
+                    // `ScanOutcome`. Zooming still recomputes the
+                    // extension rows, but that is a subtree and a
+                    // deliberate act, not something that lands on the
+                    // user unbidden.
+                    self.extensions = extensions;
+                    self.sort_extensions();
+                    self.largest_files = largest_files;
                     self.search_results.clear();
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
@@ -744,11 +834,28 @@ impl GuiApp {
         });
         if let Some(result) = tool_result {
             self.tool_rx = None;
-            self.active_tool_name = None;
-            self.status = Some(match result {
-                Ok(message) => message,
-                Err(error) => format!("Tool failed: {error}"),
+            let tool = self.active_tool_name.take().unwrap_or_default();
+            self.running_tool = None;
+            let outcome = match result {
+                Ok(output) => ToolOutcome {
+                    tool,
+                    summary: output.summary,
+                    detail: output.detail,
+                    failed: false,
+                },
+                Err(error) => ToolOutcome {
+                    tool,
+                    summary: error,
+                    detail: String::new(),
+                    failed: true,
+                },
+            };
+            self.status = Some(if outcome.failed {
+                format!("Tool failed: {}", outcome.summary)
+            } else {
+                outcome.summary.clone()
             });
+            self.tool_log.push(outcome);
         }
 
         if self.is_busy() {
@@ -758,6 +865,34 @@ impl GuiApp {
             // window — moved in visible steps even when the machine had
             // capacity to spare.
             ctx.request_repaint_after(Duration::from_millis(33));
+        }
+    }
+
+    /// Picks up the reply to the screenshot the modal asked for.
+    ///
+    /// Read from the raw event list rather than from a helper because
+    /// `Event::Screenshot` is not something egui surfaces any other way;
+    /// it arrives one or two frames after the request, which is exactly
+    /// why the modal does not paint until it lands. See `ui::modal`.
+    fn collect_backdrop(&mut self, ctx: &egui::Context) {
+        if !matches!(self.backdrop, Backdrop::Requested { .. }) {
+            return;
+        }
+        let captured = ctx.input(|i| {
+            i.raw.events.iter().rev().find_map(|event| {
+                // `if let` rather than a match with a wildcard arm:
+                // `egui::Event` has fifteen other variants and none of
+                // them will ever be interesting here, so listing them
+                // to satisfy an exhaustiveness lint would be noise.
+                if let egui::Event::Screenshot { image, .. } = event {
+                    Some(Arc::clone(image))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(image) = captured {
+            self.backdrop = super::ui::install_backdrop(ctx, &image, self.palette.mode.is_dark());
         }
     }
 
@@ -776,6 +911,7 @@ impl GuiApp {
             gui_show_free_space: Some(self.show_free_space),
             gui_show_grid: Some(self.show_grid),
             gui_show_labels: Some(self.show_labels),
+            gui_theme: Some(self.theme_id.clone()),
             ..crate::config::Config::default()
         });
     }
@@ -864,7 +1000,20 @@ impl GuiApp {
     /// Rebuilds [`Self::treemap_tiles`] if the panel rect or anything the
     /// layout depends on has changed since the last frame, and otherwise
     /// leaves the existing tiles in place.
-    pub(super) fn refresh_treemap(&mut self, x: f32, y: f32, w: f32, h: f32, label_strip: f32) {
+    pub(super) fn refresh_treemap(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label_strip: f32,
+        interactive: bool,
+    ) {
+        let max_tiles = if interactive {
+            treemap_layout::MAX_TILES_INTERACTIVE
+        } else {
+            treemap_layout::MAX_TILES
+        };
         let show_free_space =
             self.show_free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
         let free_space = if show_free_space {
@@ -887,6 +1036,7 @@ impl GuiApp {
             physical: self.use_physical,
             free_space: free_space.is_some(),
             label_strip: label_strip.ceil() as i32,
+            max_tiles,
         };
         if self.treemap_key.as_ref() == Some(&key) {
             return;
@@ -902,6 +1052,7 @@ impl GuiApp {
                 use_physical: self.use_physical,
                 free_space,
                 label_strip,
+                max_tiles,
             },
         );
         for tile in &mut tiles {
@@ -1004,6 +1155,20 @@ pub(super) fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical:
     }
 }
 
+/// A finished scan, with the two whole-tree summaries already computed.
+///
+/// Both used to be derived on the UI thread the instant the tree landed.
+/// `top_k` and the extension roll-up each walk every node, so on a large
+/// drive that was seconds of frozen window at exactly the moment the scan
+/// appeared to finish — the app looked like it hung and then snapped into
+/// place. The scan thread has the tree first and nothing else to do with
+/// it, so it does this work before handing anything over.
+pub(super) struct ScanOutcome {
+    tree: Tree,
+    extensions: Vec<ExtensionRow>,
+    largest_files: Vec<top_files::TopFile>,
+}
+
 /// Hands a value off to a detached thread to be dropped there.
 ///
 /// Freeing a scanned tree is not cheap: it walks every node and returns
@@ -1048,6 +1213,24 @@ pub(super) fn extension_label(name: &str) -> String {
         .filter(|s| !s.is_empty())
         .map(|s| format!(".{}", s.to_ascii_lowercase()))
         .unwrap_or_else(|| "[no extension]".to_string())
+}
+
+/// One row per distinct extension anywhere under `node`.
+///
+/// Free of `GuiApp` so the scan thread can call it before the tree is
+/// ever handed over — see [`ScanOutcome`].
+pub(super) fn collect_extension_rows(node: &Node, physical: bool) -> Vec<ExtensionRow> {
+    let mut by_ext: HashMap<String, (Category, u64, u64)> = HashMap::new();
+    collect_extensions(node, physical, &mut by_ext);
+    by_ext
+        .into_iter()
+        .map(|(extension, (category, size, count))| ExtensionRow {
+            extension,
+            category,
+            size,
+            count,
+        })
+        .collect()
 }
 
 fn collect_extensions(
@@ -1287,10 +1470,10 @@ mod tests {
         let dir = nested_test_tree()?;
         let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
 
-        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0);
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert!(!app.treemap_tiles.is_empty());
         let stable = app.treemap_tiles.as_ptr();
-        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0);
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert_eq!(
             stable,
             app.treemap_tiles.as_ptr(),
@@ -1298,7 +1481,7 @@ mod tests {
         );
 
         // A different panel size has to produce a different layout.
-        app.refresh_treemap(0.0, 0.0, 900.0, 200.0, 16.0);
+        app.refresh_treemap(0.0, 0.0, 900.0, 200.0, 16.0, false);
         let widest = app
             .treemap_tiles
             .iter()
@@ -1312,7 +1495,7 @@ mod tests {
         app.refresh_visible_rows();
         app.select_path(row_path(&app, "alpha")?);
         app.zoom_in();
-        app.refresh_treemap(0.0, 0.0, 900.0, 200.0, 16.0);
+        app.refresh_treemap(0.0, 0.0, 900.0, 200.0, 16.0, false);
         assert!(
             app.treemap_tiles
                 .iter()
@@ -1331,7 +1514,7 @@ mod tests {
         let dir = nested_test_tree()?;
         let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.refresh_visible_rows();
-        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0);
+        app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert!(!app.visible_rows.is_empty());
         assert!(!app.treemap_tiles.is_empty());
         assert!(!app.largest_files.is_empty());

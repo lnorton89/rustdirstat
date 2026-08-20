@@ -5,7 +5,7 @@ use crate::gui::app::{DirectoryColumn, GuiApp, TreeRow};
 use crate::gui::icons::Icon;
 use crate::tui::SortMode;
 use crate::util::{format_modified, human_bytes, thousands};
-use eframe::egui::{self, Align, Color32, Layout, Sense, Stroke};
+use eframe::egui::{self, Align, Layout, Sense, Stroke};
 use egui_extras::{Column, TableBuilder};
 
 use super::actions::*;
@@ -174,22 +174,26 @@ pub(super) fn draw_directory_cell(
 ) -> bool {
     match column {
         DirectoryColumn::Name => {
-            ui.add_space(item.depth as f32 * 18.0);
+            ui.add_space(item.depth as f32 * SPACE_LG);
             let mut toggle = false;
             if item.is_dir {
-                let expanded = app.expanded.contains(&item.path);
-                let chevron = if expanded {
-                    Icon::ChevronDown
-                } else {
-                    Icon::ChevronRight
-                };
-                toggle =
-                    compact_icon_button(ui, chevron, if expanded { "Collapse" } else { "Expand" })
-                        .clicked();
+                toggle = expand_toggle(
+                    ui,
+                    egui::Id::new(("tree_toggle", &item.path)),
+                    app.expanded.contains(&item.path),
+                )
+                .clicked();
             } else {
-                ui.add_space(28.0);
+                // The toggle's width *plus* the row spacing that would
+                // follow it. `add_space` advances the cursor without
+                // becoming an item, so the next widget adds no spacing of
+                // its own after one — which means the gap a file leaves
+                // has to account for both or its icon lands short of the
+                // column every folder beside it sits in.
+                let gap = EXPAND_TOGGLE_WIDTH + ui.spacing().item_spacing.x;
+                ui.add_space(gap);
             }
-            paint_inline_icon(
+            let _icon = paint_inline_icon(
                 ui,
                 if item.is_dir {
                     Icon::Folder
@@ -198,11 +202,13 @@ pub(super) fn draw_directory_cell(
                 },
                 17.0,
                 if item.is_dir {
-                    Color32::from_rgb(238, 185, 82)
+                    palette().warning
                 } else {
                     ui.visuals().text_color()
                 },
             );
+            #[cfg(test)]
+            probe(&TEST_TREE_NAME_ICONS).push((item.path.clone(), item.is_dir, _icon));
             ui.label(&item.name);
             toggle
         }
@@ -315,7 +321,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                                 ui.painter().rect_stroke(
                                     response.rect.shrink(1.0),
                                     2.0,
-                                    Stroke::new(1.0_f32, ACCENT_COLOR),
+                                    Stroke::new(1.0_f32, palette().accent),
                                 );
                             }
                             if let Some(source) = response.dnd_release_payload::<DirectoryColumn>()
@@ -330,7 +336,12 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                         });
                     }
                 })
-                .body(|body| {
+                .body(|mut body| {
+                    // Cloned before the rows are walked: this is the
+                    // table body's own painter, so the hover edge is
+                    // clipped to the table exactly as its rows are, and
+                    // no row closure can borrow a `Ui` to get one.
+                    let painter = body.ui_mut().painter().clone();
                     body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
                         let item = &rows[row.index()];
                         row.set_selected(app.selected_path.as_ref() == Some(&item.path));
@@ -345,6 +356,16 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                             });
                         }
                         let response = row.response();
+                        // Keyed off the row's path, not its index: rows
+                        // are virtualized, so index 0 is a different file
+                        // the moment the table scrolls and the hover
+                        // animation would follow the viewport instead of
+                        // the pointer.
+                        row_hover_edge(
+                            &painter,
+                            &response,
+                            egui::Id::new(("tree_row", &item.path)),
+                        );
                         #[cfg(test)]
                         probe(&TEST_DIRECTORY_ROW_RECTS).push((item.path.clone(), response.rect));
                         response.context_menu(|ui| {
@@ -436,7 +457,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
             RowAction::Reveal => reveal_selected(app),
             RowAction::CopyPath => copy_path(app),
             RowAction::Zoom => app.zoom_in(),
-            RowAction::Properties => app.show_properties = true,
+            RowAction::Properties => app.open_modal(super::modal::ModalPage::Properties),
             RowAction::Delete => app.request_delete_selected(false),
         }
     }

@@ -74,7 +74,7 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
         return;
     }
     ui.painter()
-        .rect_filled(rect, egui::Rounding::same(4.0), APP_COLOR);
+        .rect_filled(rect, egui::Rounding::same(4.0), palette().app);
 
     let mut x = rect.left();
     for stat in stats {
@@ -89,7 +89,7 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
         }
         let mut color = to_color32(stat.category.color());
         if highlighted.is_some_and(|category| category != stat.category) {
-            color = blend(color, PANEL_COLOR, 0.72);
+            color = blend(color, palette().panel, 0.72);
         }
         ui.painter().rect_filled(segment, 0.0, color);
         x = segment.right();
@@ -100,7 +100,7 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
     ui.painter().rect_stroke(
         rect,
         egui::Rounding::same(4.0),
-        egui::Stroke::new(1.0_f32, BORDER_COLOR),
+        egui::Stroke::new(1.0_f32, palette().border),
     );
 }
 
@@ -108,18 +108,29 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
 fn category_chip(ui: &mut egui::Ui, stat: &ExtStat, total: u64, selected: bool) -> bool {
     let percent = stat.size as f64 / total as f64 * 100.0;
     let color = to_color32(stat.category.color());
+    // A chip is a `Frame`, and a frame paints its fill before its
+    // contents are laid out — so this one cannot know it is hovered until
+    // after it has already been painted. The hover state therefore comes
+    // from the previous frame; see [`remembered_hover`].
+    let id = ui.id().with(("category_chip", stat.category.label()));
+    let t = remembered_hover(ui, id);
+    let rest = if selected {
+        palette().accent_muted
+    } else {
+        palette().raised
+    };
     let response = egui::Frame::none()
-        .fill(if selected {
-            ACCENT_MUTED_COLOR
-        } else {
-            RAISED_COLOR
-        })
+        .fill(blend(rest, palette().hover, t))
         .stroke(egui::Stroke::new(
             1.0_f32,
-            if selected { ACCENT_COLOR } else { BORDER_COLOR },
+            if selected {
+                palette().accent
+            } else {
+                blend(palette().border, palette().border_strong, t)
+            },
         ))
         .rounding(egui::Rounding::same(6.0))
-        .inner_margin(egui::Margin::symmetric(9.0, 6.0))
+        .inner_margin(egui::Margin::symmetric(SPACE_SM, SPACE_XS + 2.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 paint_inline_icon(ui, Icon::for_category(stat.category), 15.0, color);
@@ -128,13 +139,14 @@ fn category_chip(ui: &mut egui::Ui, stat: &ExtStat, total: u64, selected: bool) 
                 ui.label(
                     RichText::new(format!("{}  ·  {percent:.1}%", human_bytes(stat.size)))
                         .small()
-                        .color(SECONDARY_TEXT_COLOR),
+                        .color(palette().secondary_text),
                 );
             });
         })
         .response;
 
     let response = response.interact(Sense::click());
+    remember_hover(ui, id, response.hovered());
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

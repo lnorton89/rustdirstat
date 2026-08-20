@@ -14,35 +14,41 @@
 //! `GuiApp::refresh_treemap`.
 
 use crate::gui::app::{FileView, GuiApp, PaneOrientation};
-use eframe::egui::{self, Color32, Frame, Margin, RichText, Stroke};
+use eframe::egui::{self, Frame, Margin, RichText, Stroke};
+
+pub(super) use self::modal::{install_backdrop, ModalPage};
+pub(super) use self::theme::Palette;
+pub(super) use self::themes::{default_theme_id, palette_for};
 
 mod actions;
 mod categories;
 mod chrome;
-mod dialogs;
 mod directory;
 mod extensions;
 mod lists;
+mod modal;
+mod pages;
 #[cfg(test)]
 mod probes;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod themes;
 mod treemap;
 mod widgets;
 
 use self::actions::*;
 use self::chrome::*;
-use self::dialogs::*;
 use self::directory::*;
 use self::extensions::*;
 use self::lists::*;
+use self::modal::*;
 use self::theme::*;
 use self::treemap::*;
 use self::widgets::*;
 
 pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
-    apply_style(ctx);
+    apply_style(ctx, app.palette);
     draw_menu_bar(app, ctx);
     if app.show_toolbar {
         draw_toolbar(app, ctx);
@@ -51,12 +57,7 @@ pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
         draw_status_bar(app, ctx);
     }
     draw_workspace(app, ctx);
-    draw_delete_dialog(app, ctx);
-    draw_properties_dialog(app, ctx);
-    draw_settings_dialog(app, ctx);
-    draw_windows_tools_dialog(app, ctx);
-    draw_windows_tool_confirmation(app, ctx);
-    draw_about_dialog(app, ctx);
+    draw_modal(app, ctx);
     handle_shortcuts(app, ctx);
 }
 
@@ -116,26 +117,26 @@ pub(super) fn draw_upper_workspace(
 pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
     if let Some(message) = app.busy_text() {
         Frame::none()
-            .fill(ACCENT_MUTED_COLOR)
+            .fill(palette().accent_muted)
             .rounding(egui::Rounding::same(8.0))
-            .inner_margin(Margin::symmetric(13.0, 9.0))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(67, 112, 171)))
+            .inner_margin(Margin::symmetric(PAD, SPACE_SM))
+            .stroke(Stroke::new(1.0_f32, palette().accent))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(RichText::new(message).strong());
                     ui.label(
                         RichText::new("You can keep browsing the current scan.")
-                            .color(SECONDARY_TEXT_COLOR),
+                            .color(palette().secondary_text),
                     );
                 });
             });
-        ui.add_space(8.0);
+        ui.add_space(SPACE_SM);
     }
     Frame::none()
-        .fill(APP_COLOR)
+        .fill(palette().app)
         .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::same(4.0))
+        .inner_margin(Margin::same(SPACE_XS))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for view in [
@@ -155,7 +156,7 @@ pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
                 }
             });
         });
-    ui.add_space(9.0);
+    ui.add_space(SPACE_SM);
     match app.file_view {
         FileView::AllFiles => draw_directory_tree(app, ui),
         FileView::LargestFiles => draw_largest_files(app, ui),

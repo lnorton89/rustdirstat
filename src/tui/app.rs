@@ -955,7 +955,16 @@ impl App {
             return;
         };
         match crate::wintools::run(idx, &self.tree.root_path) {
-            Ok(msg) => self.message = Some(msg),
+            // The TUI has one status line and no scrollback panel to put
+            // a report in, so a tool's `detail` is folded onto the end of
+            // its summary rather than dropped — truncated by the status
+            // line if it does not fit, which still beats discarding the
+            // one thing an analyze-only tool was run to produce.
+            Ok(output) if output.detail.is_empty() => self.message = Some(output.summary),
+            Ok(output) => {
+                let detail = output.detail.replace(char::is_whitespace, " ");
+                self.message = Some(format!("{}: {}", output.summary, detail.trim()));
+            }
             Err(e) => self.message = Some(format!("{}: {e}", tool.name)),
         }
         self.show_wintools = false;

@@ -7,8 +7,21 @@
 use crate::gui::app::{FileView, GuiApp};
 use eframe::egui::{self};
 
+use super::modal::{dismiss_top, modal_is_open};
+
 pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
     let editing_text = ctx.wants_keyboard_input();
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && modal_is_open(app) {
+        dismiss_top(app);
+        return;
+    }
+    // A modal is modal for the keyboard too. Without this, pressing Del
+    // while the "are you sure" was on screen queued a *second* delete
+    // behind the one being confirmed, and F5 could swap the tree out from
+    // under a pending deletion's index path.
+    if modal_is_open(app) {
+        return;
+    }
     let (refresh_key, delete_key, shift_delete, open_dialog, search, copy) = ctx.input(|i| {
         (
             i.key_pressed(egui::Key::F5),

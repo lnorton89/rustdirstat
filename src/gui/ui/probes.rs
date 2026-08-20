@@ -8,6 +8,7 @@
 
 use crate::gui::app::{DirectoryColumn, ExtensionColumn, FileView};
 use crate::gui::icons::Icon;
+use crate::gui::ui::modal::ModalPage;
 use eframe::egui::{self};
 use std::sync::{Mutex, MutexGuard};
 
@@ -26,6 +27,49 @@ pub(super) fn probe<T>(cell: &'static Mutex<Vec<T>>) -> MutexGuard<'static, Vec<
 
 #[cfg(test)]
 pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Corner radius of the hover background egui would paint under a
+/// top-level menu name. The app's global widget rounding is 6, and a
+/// menu bar has to override it — a rounded pill under a menu name reads
+/// as a floating button rather than as part of the bar.
+#[cfg(test)]
+pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, f32)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// `(label, x of the first glyph)` for every table column header, of
+/// either kind. Two widgets paint these and they have to agree.
+#[cfg(test)]
+pub(super) static TEST_TABLE_HEADER_TEXT: std::sync::Mutex<Vec<(String, f32)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The rule under each pane's heading. What the test wants from it is not
+/// where it is but that the air above and below it is the same in every
+/// pane, which is only visible as geometry.
+#[cfg(test)]
+pub(super) static TEST_SECTION_RULE_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// `(index path, is_dir, icon rect)` for the folder or file glyph in a
+/// tree row's name cell. A file leaves a gap where a folder's expand
+/// toggle would be, and the two have to come out the same width — which
+/// nothing but the painted geometry can show.
+#[cfg(test)]
+pub(super) static TEST_TREE_NAME_ICONS: std::sync::Mutex<Vec<(Vec<usize>, bool, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// How far the tree's expand chevron is through its quarter turn, per
+/// row. A quarter turn is what distinguishes an expanded row from a
+/// collapsed one now that both draw the same glyph.
+#[cfg(test)]
+pub(super) static TEST_CHEVRON_TURNS: std::sync::Mutex<Vec<f32>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// `(index path, rect)` of the treemap tile under the pointer. Nothing
+/// else records it: the treemap is one big painter with no widget per
+/// tile, so hover is resolved by hit-testing rather than by egui.
+#[cfg(test)]
+pub(super) static TEST_TREEMAP_HOVER: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// `(content width, visible width)` of the directory table's horizontal
@@ -109,4 +153,29 @@ pub(super) static TEST_DUPLICATE_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, eg
 
 #[cfg(test)]
 pub(super) static TEST_VIEW_TAB_RECTS: std::sync::Mutex<Vec<(FileView, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The full-window scrim behind an open modal. Its presence is what
+/// proves the modal is actually modal rather than merely on top.
+#[cfg(test)]
+pub(super) static TEST_MODAL_SCRIM_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(super) static TEST_MODAL_CARD_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(super) static TEST_MODAL_NAV_RECTS: std::sync::Mutex<Vec<(ModalPage, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(super) static TEST_THEME_ROW_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// `(tool index, destructive, row rect)` for each maintenance row, so a
+/// test can check that severity is actually painted rather than merely
+/// stored on the tool.
+#[cfg(test)]
+pub(super) static TEST_TOOL_ROW_MARKERS: std::sync::Mutex<Vec<(usize, bool, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());

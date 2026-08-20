@@ -1,0 +1,308 @@
+# The theme catalog.
+#
+# This file is compiled into the binary with `include_str!`, and any
+# `*.toml` file dropped into `<config dir>/rustdirstat/themes/` is loaded
+# on top of it at startup, so a theme can be added without rebuilding.
+#
+# Each theme states twelve colors and everything else is derived from
+# them in `Palette::from_spec` — selection, muted accent fills, the
+# danger callout background. That is deliberate: it is what stops a theme
+# from shipping a selection color that clashes with its own accent.
+#
+# The four surface layers are named for depth, not for use. `app` is
+# behind everything, `panel` sits on it, `raised` on that, and `hover` is
+# the interactive lift above `raised`. In a dark theme that ramp gets
+# lighter as it comes forward. In a light theme `hover` goes the other
+# way, because a pale surface reads as lifted by getting *darker*.
+#
+# Every theme is checked by `theme_layers_are_distinct_and_copy_is_readable`:
+# adjacent layers must differ enough to be told apart, and the two text
+# weights and the accent must clear WCAG AA against the panel they sit on
+# (7:1 for primary text, 4.5:1 for secondary and accent). A theme that
+# fails is a failing build, not a subtly unreadable window.
+#
+# `id` is persisted in the config file. Never rename one — a rename
+# silently drops everyone using it back to the default. The first entry
+# is the default theme.
+
+# ---------------------------------------------------------------- dark
+
+[[theme]]
+id = "dark-modern"
+name = "Dark Modern"
+mode = "dark"
+app = "#181818"
+panel = "#1f1f1f"
+raised = "#2a2d2e"
+hover = "#37393b"
+border = "#3c3c3c"
+accent = "#3c99e6"
+primary_text = "#e0e0e0"
+secondary_text = "#9d9d9d"
+danger = "#f14c4c"
+warning = "#cca700"
+success = "#89d185"
+
+[[theme]]
+id = "dark-plus"
+name = "Dark+ (Visual Studio Dark)"
+mode = "dark"
+app = "#1e1e1e"
+panel = "#252526"
+raised = "#333333"
+hover = "#3e4245"
+border = "#454545"
+accent = "#4ba0e2"
+primary_text = "#d4d4d4"
+secondary_text = "#a0a0a0"
+danger = "#f48771"
+warning = "#cca700"
+success = "#89d185"
+
+[[theme]]
+id = "monokai"
+name = "Monokai"
+mode = "dark"
+app = "#1e1f1c"
+panel = "#272822"
+raised = "#35362e"
+hover = "#46473c"
+border = "#59574a"
+accent = "#66d9ef"
+primary_text = "#e6e6de"
+secondary_text = "#a7a594"
+danger = "#f92672"
+warning = "#e6db74"
+success = "#a6e22e"
+
+[[theme]]
+id = "monokai-dimmed"
+name = "Monokai Dimmed"
+mode = "dark"
+app = "#1c1c1c"
+panel = "#252526"
+raised = "#303032"
+hover = "#3e3e40"
+border = "#464648"
+accent = "#7eaad6"
+primary_text = "#c8cac8"
+secondary_text = "#9a9b99"
+danger = "#c86a6a"
+warning = "#bfa86a"
+success = "#96b276"
+
+[[theme]]
+id = "solarized-dark"
+name = "Solarized Dark"
+mode = "dark"
+app = "#00212b"
+panel = "#002b36"
+raised = "#073642"
+hover = "#0f4756"
+border = "#175262"
+accent = "#38a1e8"
+primary_text = "#c8d2d2"
+secondary_text = "#93a1a1"
+danger = "#dc322f"
+warning = "#b58900"
+success = "#859900"
+
+[[theme]]
+id = "abyss"
+name = "Abyss"
+mode = "dark"
+# Abyss in VS Code puts its editor and widget backgrounds at almost the
+# same lightness, and in the opposite order to the one this app's layers
+# need. The hues are kept; the ramp is made to actually rise.
+app = "#00050f"
+panel = "#000c18"
+raised = "#082050"
+hover = "#103069"
+border = "#264680"
+accent = "#6688cc"
+primary_text = "#cedbf5"
+secondary_text = "#92a8d6"
+danger = "#ff628c"
+warning = "#ffc770"
+success = "#72d6a8"
+
+[[theme]]
+id = "kimbie-dark"
+name = "Kimbie Dark"
+mode = "dark"
+app = "#1b150c"
+panel = "#221a0f"
+raised = "#352918"
+hover = "#483720"
+border = "#5e482b"
+accent = "#f79a32"
+primary_text = "#e2caae"
+secondary_text = "#b49876"
+danger = "#dc3c3c"
+warning = "#f0c674"
+success = "#8dc274"
+
+[[theme]]
+id = "red"
+name = "Red"
+mode = "dark"
+app = "#2d0000"
+panel = "#390000"
+raised = "#540c0c"
+hover = "#6e1818"
+border = "#7e2a2a"
+accent = "#ff8a6c"
+primary_text = "#f8f8f8"
+secondary_text = "#cea0a0"
+danger = "#ff6060"
+warning = "#ffcc7a"
+success = "#96dc96"
+
+[[theme]]
+id = "tomorrow-night-blue"
+name = "Tomorrow Night Blue"
+mode = "dark"
+app = "#001b3d"
+panel = "#002451"
+raised = "#00346e"
+hover = "#00448e"
+border = "#1c5496"
+accent = "#bbdaff"
+primary_text = "#ffffff"
+secondary_text = "#a0b4dc"
+danger = "#ff8d8a"
+warning = "#ffc58f"
+success = "#d3e38f"
+
+[[theme]]
+id = "catppuccin-mocha"
+name = "Catppuccin Mocha"
+mode = "dark"
+app = "#11111b"
+panel = "#1e1e2e"
+raised = "#313244"
+hover = "#45475a"
+border = "#585b70"
+accent = "#89b4fa"
+primary_text = "#cdd6f4"
+secondary_text = "#a6adc8"
+danger = "#f38ba8"
+warning = "#f9e2af"
+success = "#a6e3a1"
+
+[[theme]]
+id = "tokyo-night"
+name = "Tokyo Night"
+mode = "dark"
+app = "#16161e"
+panel = "#1a1b26"
+raised = "#24283b"
+hover = "#2e3450"
+border = "#3b4261"
+accent = "#7aa2f7"
+primary_text = "#c0caf5"
+secondary_text = "#a9b1d6"
+danger = "#f7768e"
+warning = "#e0af68"
+success = "#9ece6a"
+
+# Authentic high contrast is black everywhere, with borders doing all the
+# separating. The layers still step, minimally, so a surface can be told
+# from the one behind it even where no border is drawn between them.
+[[theme]]
+id = "high-contrast-dark"
+name = "High Contrast Dark"
+mode = "dark"
+app = "#000000"
+panel = "#0a0a0a"
+raised = "#161616"
+hover = "#262626"
+border = "#6fc3df"
+accent = "#6fc3df"
+primary_text = "#ffffff"
+secondary_text = "#d1d1d1"
+danger = "#ff7676"
+warning = "#f38518"
+success = "#89d885"
+
+# --------------------------------------------------------------- light
+
+[[theme]]
+id = "light-modern"
+name = "Light Modern"
+mode = "light"
+app = "#f0f0f0"
+panel = "#f8f8f8"
+raised = "#ffffff"
+hover = "#e2e4e7"
+border = "#d5d5d5"
+accent = "#005fb8"
+primary_text = "#1f1f1f"
+secondary_text = "#5e5e5e"
+danger = "#b31b1b"
+warning = "#946400"
+success = "#17743c"
+
+[[theme]]
+id = "light-plus"
+name = "Light+ (Visual Studio Light)"
+mode = "light"
+app = "#ececec"
+panel = "#f3f3f3"
+raised = "#ffffff"
+hover = "#e0e0e0"
+border = "#cecece"
+accent = "#0067ac"
+primary_text = "#292929"
+secondary_text = "#5c5c5c"
+danger = "#b11e1e"
+warning = "#916100"
+success = "#18703a"
+
+[[theme]]
+id = "quiet-light"
+name = "Quiet Light"
+mode = "light"
+app = "#e9e7e7"
+panel = "#f2f1f1"
+raised = "#fafafa"
+hover = "#dedfeb"
+border = "#d3d1d1"
+accent = "#6a4198"
+primary_text = "#333333"
+secondary_text = "#666666"
+danger = "#a82020"
+warning = "#8c5e00"
+success = "#266a34"
+
+[[theme]]
+id = "solarized-light"
+name = "Solarized Light"
+mode = "light"
+app = "#eee8d5"
+panel = "#f5efdc"
+raised = "#fdf6e3"
+hover = "#e0d8c0"
+border = "#d6cdb4"
+accent = "#1c6fa8"
+primary_text = "#073642"
+secondary_text = "#586e75"
+danger = "#b42321"
+warning = "#8c6a00"
+success = "#606f00"
+
+[[theme]]
+id = "high-contrast-light"
+name = "High Contrast Light"
+mode = "light"
+app = "#f2f2f2"
+panel = "#f9f9f9"
+raised = "#ffffff"
+hover = "#dedede"
+border = "#0f4a85"
+accent = "#0f4a85"
+primary_text = "#000000"
+secondary_text = "#3b3b3b"
+danger = "#9b1414"
+warning = "#7a4e00"
+success = "#105c2e"

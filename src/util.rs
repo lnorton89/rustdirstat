@@ -21,6 +21,17 @@ pub fn display_path(path: &std::path::Path) -> String {
     text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
 }
 
+/// Just the name of the thing a path points at, for places that only
+/// need to say *which* folder rather than where it lives.
+///
+/// Falls back to the whole displayable path for roots like `C:\`, which
+/// have no file name of their own.
+pub fn display_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| display_path(path))
+}
+
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if bytes < 1024 {

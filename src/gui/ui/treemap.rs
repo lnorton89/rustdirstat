@@ -7,27 +7,28 @@
 use crate::color;
 use crate::gui::app::{extension_label, GuiApp};
 use crate::gui::icons::Icon;
+use crate::gui::treemap_layout::Tile;
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, TextStyle};
 
+#[cfg(test)]
+use super::probes::*;
 use super::theme::*;
 use super::widgets::*;
 
 pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        paint_inline_icon(ui, Icon::App, 19.0, ACCENT_COLOR);
-        ui.heading("Treemap");
-        // Truncated, not just clipped. A scanned path is arbitrarily long
-        // and `horizontal` does not wrap, so an untruncated label runs
-        // straight off the edge of the panel and takes the heading with
-        // it once the pane is narrow — which looks like the app cutting
-        // its own title in half rather than a path that does not fit.
-        ui.add(
-            egui::Label::new(
-                RichText::new(crate::util::display_path(&app.zoom_fs_path()))
-                    .color(SECONDARY_TEXT_COLOR),
+        section_title(ui, Icon::App, "Treemap");
+        // The full path lives in the toolbar; repeating it here said
+        // nothing and pushed the heading off the edge of a narrow pane.
+        // What is worth saying is when the map is *not* showing the whole
+        // scan — so the zoom target's name appears only while zoomed.
+        if !app.zoom_path.is_empty() {
+            ui.label(
+                RichText::new(crate::util::display_name(&app.zoom_fs_path()))
+                    .color(palette().secondary_text),
             )
-            .truncate(),
-        );
+            .on_hover_text(crate::util::display_path(&app.zoom_fs_path()));
+        }
         if ui.available_width() > 420.0 {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
@@ -37,14 +38,12 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                         "Logical size"
                     })
                     .small()
-                    .color(SECONDARY_TEXT_COLOR),
+                    .color(palette().secondary_text),
                 );
             });
         }
     });
-    ui.add_space(3.0);
-    ui.separator();
-    ui.add_space(5.0);
+    section_rule(ui);
     let avail = ui.available_size();
     if avail.x <= 1.0 || avail.y <= 1.0 {
         return;
@@ -59,20 +58,35 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     // Tiles are only re-laid-out when the panel rect or the tree behind
     // it changes; on a large volume the layout walk is far too expensive
     // to redo for every frame of a hover.
+    // A splitter drag holds the primary button down, and the layout is
+    // keyed on the panel rect — so every frame of that drag would
+    // otherwise re-lay-out the entire map. While the pointer is down the
+    // map is built at reduced detail; the frame after it comes up
+    // rebuilds it in full.
+    let interactive = ui.ctx().input(|input| input.pointer.any_down());
     app.refresh_treemap(
         response.rect.min.x,
         response.rect.min.y,
         avail.x,
         avail.y,
         label_strip,
+        interactive,
     );
     let mut clicked = None;
+    let mut hover_text = None;
     // Painting borrows the cached tiles out of `app`, so the click it
     // records is applied once that borrow has ended.
     {
         let app = &*app;
         let tiles = &app.treemap_tiles;
         let mut selected_rect = None;
+        // The treemap is one painter, not a widget per tile, so hover has
+        // to be hit-tested by hand. Tiles are emitted level by level, so
+        // the *last* one containing the pointer is the deepest — which is
+        // also the one painted on top, and therefore the one the pointer
+        // looks like it is over.
+        let pointer = response.hover_pos();
+        let mut hovered_rect = None;
         for tile in tiles {
             if tile.w < 1.0 || tile.h < 1.0 {
                 continue;
@@ -84,7 +98,7 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             } else if tile.is_aggregate {
                 // Not any one extension, so give the stand-in a neutral fill
                 // rather than letting it borrow a color that means something.
-                Color32::from_rgb(62, 67, 78)
+                palette().dim
             } else if tile.is_dir {
                 to_color32(color::directory_color())
             } else {
@@ -94,11 +108,11 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             if tile.is_node() {
                 if let Some(ext) = &app.highlighted_extension {
                     if tile.is_dir || extension_label(&tile.name) != *ext {
-                        base = blend(base, Color32::from_rgb(49, 52, 60), 0.78);
+                        base = blend(base, palette().dim, 0.78);
                     }
                 } else if let Some(category) = app.highlighted_category {
                     if tile.is_dir || tile.category != Some(category) {
-                        base = blend(base, Color32::from_rgb(49, 52, 60), 0.78);
+                        base = blend(base, palette().dim, 0.78);
                     }
                 }
             }
@@ -108,11 +122,7 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             // gridding the dense regions turned them into black mush and
             // cost a stroke per tile to do it.
             if app.show_grid && rect.width() >= MIN_GRID_PX && rect.height() >= MIN_GRID_PX {
-                painter.rect_stroke(
-                    rect,
-                    0.0,
-                    Stroke::new(1.0_f32, Color32::from_rgb(14, 15, 18)),
-                );
+                painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, palette().treemap_grid));
             }
             if app.selected_path.as_ref() == Some(&tile.index_path) {
                 selected_rect = treemap_selection_rect(rect);
@@ -126,6 +136,12 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                     readable_text_color(base),
                 );
             }
+            if tile.is_node() && pointer.is_some_and(|p| rect.contains(p)) {
+                hovered_rect = Some(rect);
+                hover_text = Some(tile_hover_text(app, tile));
+                #[cfg(test)]
+                probe(&TEST_TREEMAP_HOVER).push((tile.index_path.clone(), rect));
+            }
             if tile.is_node()
                 && response.clicked()
                 && response
@@ -135,27 +151,66 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                 clicked = Some(tile.index_path.clone());
             }
         }
+        // Over the tiles but under the selection frame, so hovering the
+        // selected tile does not paint over the marker that says so.
+        //
+        // An outline rather than a wash: the tile under the pointer may
+        // be three pixels wide, and it may be carrying its own label. A
+        // bright edge survives both.
+        if let Some(rect) = hovered_rect {
+            if rect.width() >= 2.0 && rect.height() >= 2.0 {
+                painter.rect_stroke(
+                    rect.shrink(0.5),
+                    0.0,
+                    Stroke::new(1.5_f32, palette().treemap_hover),
+                );
+            }
+        }
         // Paint selection last. Otherwise tiles rendered later overwrite the
         // shared right and bottom edges of the selected tile.
         if let Some(rect) = selected_rect {
+            // Two strokes: a wide backing one in the opposite polarity to
+            // the marker, so the marker stays visible over a tile that
+            // happens to share its color. Which of the two is the backing
+            // therefore has to follow the theme, not be fixed at black.
+            let marker = palette().treemap_selection;
+            let backing = if palette().mode.is_dark() {
+                Color32::from_black_alpha(190)
+            } else {
+                Color32::from_white_alpha(200)
+            };
             painter.rect_stroke(
                 rect,
                 0.0,
-                Stroke::new(
-                    TREEMAP_SELECTION_WIDTH + 2.0,
-                    Color32::from_black_alpha(190),
-                ),
+                Stroke::new(TREEMAP_SELECTION_WIDTH + 2.0, backing),
             );
-            painter.rect_stroke(
-                rect,
-                0.0,
-                Stroke::new(TREEMAP_SELECTION_WIDTH, Color32::WHITE),
-            );
+            painter.rect_stroke(rect, 0.0, Stroke::new(TREEMAP_SELECTION_WIDTH, marker));
         }
+    }
+    if let Some(text) = hover_text {
+        response.on_hover_text(text);
     }
     if let Some(path) = clicked {
         app.navigate_to_absolute(path);
     }
+}
+
+/// What the tooltip says about the tile under the pointer.
+///
+/// A treemap tile is a rectangle of colour with, at best, a truncated
+/// name on it — so until the pointer stops there is no way to find out
+/// what any of it is short of clicking and watching the tree jump. The
+/// size comes from the node rather than from the tile because a tile
+/// carries only its geometry.
+fn tile_hover_text(app: &GuiApp, tile: &Tile) -> String {
+    let Some(node) = app.tree.try_node_for(&tile.index_path) else {
+        return tile.name.clone();
+    };
+    format!(
+        "{}\n{}",
+        crate::util::display_path(&app.tree.path_for(&tile.index_path)),
+        crate::util::human_bytes(node.effective_size(app.use_physical)),
+    )
 }
 
 pub(super) fn treemap_selection_rect(tile: egui::Rect) -> Option<egui::Rect> {
