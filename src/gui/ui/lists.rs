@@ -60,10 +60,7 @@ pub(super) fn draw_largest_files(app: &mut GuiApp, ui: &mut egui::Ui) {
                 });
                 let response = row.response();
                 #[cfg(test)]
-                TEST_LARGEST_ROW_RECTS
-                    .lock()
-                    .unwrap()
-                    .push((row.index(), response.rect));
+                probe(&TEST_LARGEST_ROW_RECTS).push((row.index(), response.rect));
                 if response.clicked() {
                     selected = Some(path);
                 }
@@ -164,10 +161,7 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
                 });
                 let response = row.response();
                 #[cfg(test)]
-                TEST_SEARCH_ROW_RECTS
-                    .lock()
-                    .unwrap()
-                    .push((path.clone(), response.rect));
+                probe(&TEST_SEARCH_ROW_RECTS).push((path.clone(), response.rect));
                 if response.clicked() {
                     selected = Some(path);
                 }
@@ -220,10 +214,7 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
                         app.tree.path_for(&file.index_path).display().to_string(),
                     );
                     #[cfg(test)]
-                    TEST_DUPLICATE_ROW_RECTS
-                        .lock()
-                        .unwrap()
-                        .push((file.index_path.clone(), response.rect));
+                    probe(&TEST_DUPLICATE_ROW_RECTS).push((file.index_path.clone(), response.rect));
                     if response.clicked() {
                         selected = Some(file.index_path.clone());
                     }

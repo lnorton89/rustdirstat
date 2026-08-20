@@ -23,10 +23,20 @@ use crate::gui::app::{
 use crate::gui::icons::Icon;
 use crate::model::{Node, Tree};
 use crate::tui::SortMode;
+use anyhow::Context;
 use eframe::egui::{self, Color32};
 use std::path::PathBuf;
 
 static TEST_UI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Which `ext_totals` slot a file of this name is counted under.
+///
+/// Derived from the name the same way `file` below derives the node's
+/// category, so the two cannot disagree — and so the fixtures do not have
+/// to unwrap an `Option` they themselves just filled in.
+fn category_index(name: &str) -> usize {
+    crate::model::category_for_name(name).index()
+}
 
 fn file(name: &str, size: u64) -> Node {
     let category = crate::model::category_for_name(name);
@@ -50,7 +60,7 @@ fn file(name: &str, size: u64) -> Node {
 fn app_with_one_file() -> GuiApp {
     let child = file("click-me.txt", 128);
     let mut totals = vec![(0, 0, 0); Category::COUNT];
-    let index = child.category.unwrap().index();
+    let index = category_index(&child.name);
     totals[index] = (128, 128, 1);
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\test-root"),
@@ -75,15 +85,16 @@ fn app_with_one_file() -> GuiApp {
 }
 
 #[test]
-fn treemap_selection_frame_is_fully_inside_the_tile() {
+fn treemap_selection_frame_is_fully_inside_the_tile() -> anyhow::Result<()> {
     let tile = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 80.0));
-    let frame = treemap_selection_rect(tile).expect("a normal tile should have a frame");
+    let frame = treemap_selection_rect(tile).context("a normal tile should have a frame")?;
     let half_outer_stroke = (TREEMAP_SELECTION_WIDTH + 2.0) * 0.5;
 
     assert!(frame.left() - half_outer_stroke > tile.left());
     assert!(frame.top() - half_outer_stroke > tile.top());
     assert!(frame.right() + half_outer_stroke < tile.right());
     assert!(frame.bottom() + half_outer_stroke < tile.bottom());
+    Ok(())
 }
 
 #[test]
@@ -129,7 +140,7 @@ fn app_with_sortable_files() -> GuiApp {
     let children = vec![largest, smallest, middle];
     let mut totals = vec![(0, 0, 0); Category::COUNT];
     for child in &children {
-        let index = child.category.unwrap().index();
+        let index = category_index(&child.name);
         totals[index].0 += child.size;
         totals[index].1 += child.physical_size;
         totals[index].2 += 1;
@@ -260,21 +271,23 @@ fn pointer_move(pos: egui::Pos2) -> Vec<egui::Event> {
 }
 
 fn latest_header_position(
-    headers: &std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
+    headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
     label: &str,
 ) -> egui::Pos2 {
-    headers
-        .lock()
-        .unwrap()
+    let position = probe(headers)
         .iter()
         .rev()
         .find(|(header, _)| *header == label)
-        .map(|(_, rect)| rect.center())
-        .unwrap_or_else(|| panic!("the rendered {label} header should expose a drag target"))
+        .map(|(_, rect)| rect.center());
+    assert!(
+        position.is_some(),
+        "the rendered {label} header should expose a drag target"
+    );
+    position.unwrap_or_default()
 }
 
 fn drag_directory_header(ctx: &egui::Context, app: &mut GuiApp, source: &str, target: &str) {
-    TEST_DIRECTORY_HEADER_RECTS.lock().unwrap().clear();
+    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
     for _ in 0..4 {
         render_directory(ctx, app, raw_input(Vec::new()));
     }
@@ -291,7 +304,7 @@ fn drag_directory_header(ctx: &egui::Context, app: &mut GuiApp, source: &str, ta
 }
 
 fn drag_extension_header(ctx: &egui::Context, app: &mut GuiApp, source: &str, target: &str) {
-    TEST_EXTENSION_HEADER_RECTS.lock().unwrap().clear();
+    probe(&TEST_EXTENSION_HEADER_RECTS).clear();
     for _ in 0..4 {
         render_extensions(ctx, app, raw_input(Vec::new()));
     }
@@ -307,38 +320,37 @@ fn drag_extension_header(ctx: &egui::Context, app: &mut GuiApp, source: &str, ta
     render_extensions(ctx, app, raw_input(pointer_button(target_pos, false)));
 }
 
-fn click_directory_header(ctx: &egui::Context, app: &mut GuiApp, label: &str) {
-    TEST_DIRECTORY_HEADER_RECTS.lock().unwrap().clear();
+fn click_directory_header(
+    ctx: &egui::Context,
+    app: &mut GuiApp,
+    label: &str,
+) -> anyhow::Result<()> {
+    probe(&TEST_DIRECTORY_HEADER_RECTS).clear();
     for _ in 0..4 {
         render_directory(ctx, app, raw_input(Vec::new()));
     }
-    let position = TEST_DIRECTORY_HEADER_RECTS
-        .lock()
-        .unwrap()
+    let position = probe(&TEST_DIRECTORY_HEADER_RECTS)
         .iter()
         .rev()
         .find(|(header, _)| *header == label)
         .map(|(_, rect)| rect.center())
-        .unwrap_or_else(|| panic!("the rendered {label} header should expose a click target"));
+        .with_context(|| format!("the rendered {label} header should expose a click target"))?;
     render_directory(ctx, app, raw_input(pointer_button(position, true)));
     render_directory(ctx, app, raw_input(pointer_button(position, false)));
+    Ok(())
 }
 
 fn rendered_child_order(ctx: &egui::Context, app: &mut GuiApp) -> Vec<usize> {
-    TEST_DIRECTORY_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
     render_directory(ctx, app, raw_input(Vec::new()));
-    TEST_DIRECTORY_ROW_RECTS
-        .lock()
-        .unwrap()
+    probe(&TEST_DIRECTORY_ROW_RECTS)
         .iter()
         .filter_map(|(path, _)| path.first().copied())
         .collect()
 }
 
 fn latest_header_icon(label: &str) -> Option<Icon> {
-    TEST_DIRECTORY_HEADER_ICONS
-        .lock()
-        .unwrap()
+    probe(&TEST_DIRECTORY_HEADER_ICONS)
         .iter()
         .rev()
         .find(|(header, _)| *header == label)
@@ -346,7 +358,7 @@ fn latest_header_icon(label: &str) -> Option<Icon> {
 }
 
 fn latest_directory_header_labels() -> Vec<&'static str> {
-    let headers = TEST_DIRECTORY_HEADER_RECTS.lock().unwrap();
+    let headers = probe(&TEST_DIRECTORY_HEADER_RECTS);
     let mut labels: Vec<_> = headers
         .iter()
         .rev()
@@ -357,38 +369,37 @@ fn latest_directory_header_labels() -> Vec<&'static str> {
     labels
 }
 
-fn click_extension_header(ctx: &egui::Context, app: &mut GuiApp, label: &str) {
-    TEST_EXTENSION_HEADER_RECTS.lock().unwrap().clear();
+fn click_extension_header(
+    ctx: &egui::Context,
+    app: &mut GuiApp,
+    label: &str,
+) -> anyhow::Result<()> {
+    probe(&TEST_EXTENSION_HEADER_RECTS).clear();
     for _ in 0..4 {
         render_extensions(ctx, app, raw_input(Vec::new()));
     }
-    let position = TEST_EXTENSION_HEADER_RECTS
-        .lock()
-        .unwrap()
+    let position = probe(&TEST_EXTENSION_HEADER_RECTS)
         .iter()
         .rev()
         .find(|(header, _)| *header == label)
         .map(|(_, rect)| rect.center())
-        .unwrap_or_else(|| panic!("the rendered {label} header should expose a click target"));
+        .with_context(|| format!("the rendered {label} header should expose a click target"))?;
     render_extensions(ctx, app, raw_input(pointer_button(position, true)));
     render_extensions(ctx, app, raw_input(pointer_button(position, false)));
+    Ok(())
 }
 
 fn rendered_extension_order(ctx: &egui::Context, app: &mut GuiApp) -> Vec<String> {
-    TEST_EXTENSION_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_EXTENSION_ROW_RECTS).clear();
     render_extensions(ctx, app, raw_input(Vec::new()));
-    TEST_EXTENSION_ROW_RECTS
-        .lock()
-        .unwrap()
+    probe(&TEST_EXTENSION_ROW_RECTS)
         .iter()
         .map(|(extension, _)| extension.clone())
         .collect()
 }
 
 fn latest_extension_header_icon(label: &str) -> Option<Icon> {
-    TEST_EXTENSION_HEADER_ICONS
-        .lock()
-        .unwrap()
+    probe(&TEST_EXTENSION_HEADER_ICONS)
         .iter()
         .rev()
         .find(|(header, _)| *header == label)
@@ -396,7 +407,7 @@ fn latest_extension_header_icon(label: &str) -> Option<Icon> {
 }
 
 fn latest_extension_header_labels() -> Vec<&'static str> {
-    let headers = TEST_EXTENSION_HEADER_RECTS.lock().unwrap();
+    let headers = probe(&TEST_EXTENSION_HEADER_RECTS);
     let mut labels: Vec<_> = headers
         .iter()
         .rev()
@@ -414,15 +425,16 @@ fn assert_extension_header_click(
     expected_mode: ExtensionSortMode,
     expected_order: &[&str],
     expected_icon: Icon,
-) {
-    click_extension_header(ctx, app, label);
+) -> anyhow::Result<()> {
+    click_extension_header(ctx, app, label)?;
     assert_eq!(app.extension_sort, expected_mode);
     assert_eq!(rendered_extension_order(ctx, app), expected_order);
     assert_eq!(latest_extension_header_icon(label), Some(expected_icon));
+    Ok(())
 }
 
 #[test]
-fn clicking_directory_headers_changes_and_toggles_sort_order() {
+fn clicking_directory_headers_changes_and_toggles_sort_order() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_sortable_files();
@@ -432,35 +444,36 @@ fn clicking_directory_headers_changes_and_toggles_sort_order() {
     assert_eq!(latest_header_icon("Name"), None);
     assert_eq!(latest_header_icon("Last change"), None);
 
-    click_directory_header(&ctx, &mut app, "Name");
+    click_directory_header(&ctx, &mut app, "Name")?;
     assert!(matches!(app.sort, SortMode::NameAsc));
     assert_eq!(rendered_child_order(&ctx, &mut app), vec![1, 2, 0]);
     assert_eq!(latest_header_icon("Name"), Some(Icon::ChevronUp));
     assert_eq!(latest_header_icon("Size"), None);
-    click_directory_header(&ctx, &mut app, "Name");
+    click_directory_header(&ctx, &mut app, "Name")?;
     assert!(matches!(app.sort, SortMode::NameDesc));
     assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
     assert_eq!(latest_header_icon("Name"), Some(Icon::ChevronDown));
 
-    click_directory_header(&ctx, &mut app, "Size");
+    click_directory_header(&ctx, &mut app, "Size")?;
     assert!(matches!(app.sort, SortMode::SizeDesc));
     assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
     assert_eq!(latest_header_icon("Size"), Some(Icon::ChevronDown));
     assert_eq!(latest_header_icon("Name"), None);
-    click_directory_header(&ctx, &mut app, "Size");
+    click_directory_header(&ctx, &mut app, "Size")?;
     assert!(matches!(app.sort, SortMode::SizeAsc));
     assert_eq!(rendered_child_order(&ctx, &mut app), vec![1, 2, 0]);
     assert_eq!(latest_header_icon("Size"), Some(Icon::ChevronUp));
 
-    click_directory_header(&ctx, &mut app, "Last change");
+    click_directory_header(&ctx, &mut app, "Last change")?;
     assert!(matches!(app.sort, SortMode::ModifiedDesc));
     assert_eq!(rendered_child_order(&ctx, &mut app), vec![1, 2, 0]);
     assert_eq!(latest_header_icon("Last change"), Some(Icon::ChevronDown));
     assert_eq!(latest_header_icon("Size"), None);
-    click_directory_header(&ctx, &mut app, "Last change");
+    click_directory_header(&ctx, &mut app, "Last change")?;
     assert!(matches!(app.sort, SortMode::ModifiedAsc));
     assert_eq!(rendered_child_order(&ctx, &mut app), vec![0, 2, 1]);
     assert_eq!(latest_header_icon("Last change"), Some(Icon::ChevronUp));
+    Ok(())
 }
 
 #[test]
@@ -483,7 +496,7 @@ fn dragging_directory_header_reorders_headers_and_row_columns() {
             DirectoryColumn::Attributes,
         ]
     );
-    TEST_DIRECTORY_CELL_COLUMNS.lock().unwrap().clear();
+    probe(&TEST_DIRECTORY_CELL_COLUMNS).clear();
     render_directory(&ctx, &mut app, raw_input(Vec::new()));
     assert_eq!(
         latest_directory_header_labels(),
@@ -498,9 +511,7 @@ fn dragging_directory_header_reorders_headers_and_row_columns() {
             "Attributes",
         ]
     );
-    let child_columns: Vec<_> = TEST_DIRECTORY_CELL_COLUMNS
-        .lock()
-        .unwrap()
+    let child_columns: Vec<_> = probe(&TEST_DIRECTORY_CELL_COLUMNS)
         .iter()
         .filter(|(path, _)| path == &[0])
         .map(|(_, column)| *column)
@@ -509,7 +520,7 @@ fn dragging_directory_header_reorders_headers_and_row_columns() {
 }
 
 #[test]
-fn extension_headers_sort_rendered_rows_and_show_direction() {
+fn extension_headers_sort_rendered_rows_and_show_direction() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_sortable_extensions();
@@ -541,7 +552,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::ExtensionAsc,
         &[".aaa", ".mmm", ".zzz"],
         Icon::ChevronUp,
-    );
+    )?;
     assert_eq!(latest_extension_header_icon("Bytes"), None);
     assert_extension_header_click(
         &ctx,
@@ -550,7 +561,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::ExtensionDesc,
         &[".zzz", ".mmm", ".aaa"],
         Icon::ChevronDown,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -558,7 +569,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::ColorAsc,
         &[".mmm", ".zzz", ".aaa"],
         Icon::ChevronUp,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -566,7 +577,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::ColorDesc,
         &[".aaa", ".zzz", ".mmm"],
         Icon::ChevronDown,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -574,7 +585,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::DescriptionAsc,
         &[".mmm", ".aaa", ".zzz"],
         Icon::ChevronUp,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -582,7 +593,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::DescriptionDesc,
         &[".zzz", ".aaa", ".mmm"],
         Icon::ChevronDown,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -590,7 +601,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::BytesDesc,
         &[".zzz", ".mmm", ".aaa"],
         Icon::ChevronDown,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -598,7 +609,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::BytesAsc,
         &[".aaa", ".mmm", ".zzz"],
         Icon::ChevronUp,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -606,7 +617,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::PercentDesc,
         &[".zzz", ".mmm", ".aaa"],
         Icon::ChevronDown,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -614,7 +625,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::PercentAsc,
         &[".aaa", ".mmm", ".zzz"],
         Icon::ChevronUp,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -622,7 +633,7 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::FilesDesc,
         &[".aaa", ".mmm", ".zzz"],
         Icon::ChevronDown,
-    );
+    )?;
     assert_extension_header_click(
         &ctx,
         &mut app,
@@ -630,7 +641,8 @@ fn extension_headers_sort_rendered_rows_and_show_direction() {
         ExtensionSortMode::FilesAsc,
         &[".zzz", ".mmm", ".aaa"],
         Icon::ChevronUp,
-    );
+    )?;
+    Ok(())
 }
 
 #[test]
@@ -651,7 +663,7 @@ fn dragging_extension_header_reorders_headers_and_row_columns() {
             ExtensionColumn::Files,
         ]
     );
-    TEST_EXTENSION_CELL_COLUMNS.lock().unwrap().clear();
+    probe(&TEST_EXTENSION_CELL_COLUMNS).clear();
     render_extensions(&ctx, &mut app, raw_input(Vec::new()));
     assert_eq!(
         latest_extension_header_labels(),
@@ -664,9 +676,7 @@ fn dragging_extension_header_reorders_headers_and_row_columns() {
             "Files"
         ]
     );
-    let first_row_columns: Vec<_> = TEST_EXTENSION_CELL_COLUMNS
-        .lock()
-        .unwrap()
+    let first_row_columns: Vec<_> = probe(&TEST_EXTENSION_CELL_COLUMNS)
         .iter()
         .filter(|(extension, _)| extension == ".zzz")
         .map(|(_, column)| *column)
@@ -697,34 +707,33 @@ fn professional_theme_has_distinct_layers_and_accessible_copy() {
 }
 
 #[test]
-fn clicking_a_view_tab_switches_the_file_view() {
+fn clicking_a_view_tab_switches_the_file_view() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
-    TEST_VIEW_TAB_RECTS.lock().unwrap().clear();
+    probe(&TEST_VIEW_TAB_RECTS).clear();
     for _ in 0..3 {
         render_file_area(&ctx, &mut app, raw_input(Vec::new()));
     }
-    let search = TEST_VIEW_TAB_RECTS
-        .lock()
-        .unwrap()
+    let search = probe(&TEST_VIEW_TAB_RECTS)
         .iter()
         .rev()
         .find(|(view, _)| *view == FileView::SearchResults)
         .map(|(_, rect)| rect.center())
-        .expect("the Search Results tab should render a click target");
+        .context("the Search Results tab should render a click target")?;
 
     render_file_area(&ctx, &mut app, raw_input(pointer_button(search, true)));
     render_file_area(&ctx, &mut app, raw_input(pointer_button(search, false)));
 
     assert_eq!(app.file_view, FileView::SearchResults);
+    Ok(())
 }
 
 #[test]
 fn menu_icons_never_overlap_their_labels() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
-    TEST_ICON_MENU_LAYOUTS.lock().unwrap().clear();
+    probe(&TEST_ICON_MENU_LAYOUTS).clear();
     let _ = ctx.run(raw_input(Vec::new()), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             icon_selectable_label(ui, true, Icon::Tree, "All files");
@@ -733,7 +742,7 @@ fn menu_icons_never_overlap_their_labels() {
         });
     });
 
-    let layouts = TEST_ICON_MENU_LAYOUTS.lock().unwrap();
+    let layouts = probe(&TEST_ICON_MENU_LAYOUTS);
     assert_eq!(layouts.len(), 3);
     for (label, item, icon, text) in layouts.iter() {
         assert!(
@@ -754,7 +763,7 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
     // actually lined up and long labels ran into their shortcuts.
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
-    TEST_MENU_ITEM_LAYOUTS.lock().unwrap().clear();
+    probe(&TEST_MENU_ITEM_LAYOUTS).clear();
     let _ = ctx.run(raw_input(Vec::new()), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             menu_action(ui, true, Icon::FolderOpen, "Select folder…", "Ctrl+O");
@@ -766,7 +775,7 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
         });
     });
 
-    let layouts = TEST_MENU_ITEM_LAYOUTS.lock().unwrap();
+    let layouts = probe(&TEST_MENU_ITEM_LAYOUTS);
     assert_eq!(layouts.len(), 6);
 
     let width = layouts[0].row.width();
@@ -819,25 +828,23 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
 }
 
 #[test]
-fn clicking_a_rendered_directory_row_changes_selection() {
+fn clicking_a_rendered_directory_row_changes_selection() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
-    TEST_DIRECTORY_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
     // Table column widths settle over the first few immediate-mode
     // frames, just as they do while the native window is opening.
     for _ in 0..4 {
         render_directory(&ctx, &mut app, raw_input(Vec::new()));
     }
 
-    let child_row = TEST_DIRECTORY_ROW_RECTS
-        .lock()
-        .unwrap()
+    let child_row = probe(&TEST_DIRECTORY_ROW_RECTS)
         .iter()
         .rev()
         .find(|(path, _)| path == &[0])
         .map(|(_, rect)| egui::pos2(rect.center().x, rect.max.y - 3.0))
-        .expect("the rendered child row should expose a response rectangle");
+        .context("the rendered child row should expose a response rectangle")?;
     render_directory(&ctx, &mut app, raw_input(pointer_button(child_row, true)));
     render_directory(&ctx, &mut app, raw_input(pointer_button(child_row, false)));
 
@@ -845,35 +852,32 @@ fn clicking_a_rendered_directory_row_changes_selection() {
         app.selected_path,
         Some(vec![0]),
         "row states: {:?}",
-        *TEST_DIRECTORY_ROW_RECTS.lock().unwrap()
+        *probe(&TEST_DIRECTORY_ROW_RECTS)
     );
+    Ok(())
 }
 
 #[test]
-fn directory_table_expands_to_fill_a_wider_pane() {
+fn directory_table_expands_to_fill_a_wider_pane() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
-    TEST_DIRECTORY_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
     for _ in 0..4 {
         render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 900.0));
     }
-    let narrow_width = TEST_DIRECTORY_ROW_RECTS
-        .lock()
-        .unwrap()
+    let narrow_width = probe(&TEST_DIRECTORY_ROW_RECTS)
         .last()
-        .expect("directory row should render")
+        .context("directory row should render")?
         .1
         .width();
 
     for _ in 0..4 {
         render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 1500.0));
     }
-    let wide_width = TEST_DIRECTORY_ROW_RECTS
-        .lock()
-        .unwrap()
+    let wide_width = probe(&TEST_DIRECTORY_ROW_RECTS)
         .last()
-        .expect("directory row should render after resize")
+        .context("directory row should render after resize")?
         .1
         .width();
 
@@ -882,79 +886,77 @@ fn directory_table_expands_to_fill_a_wider_pane() {
         "table should absorb pane growth: narrow={narrow_width}, wide={wide_width}, screen={}",
         ctx.screen_rect().width()
     );
+    Ok(())
 }
 
 #[test]
-fn clicking_a_rendered_extension_row_changes_highlight() {
+fn clicking_a_rendered_extension_row_changes_highlight() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
-    TEST_EXTENSION_ROW_RECTS.lock().unwrap().clear();
-    TEST_EXTENSION_TEXT_RECTS.lock().unwrap().clear();
+    probe(&TEST_EXTENSION_ROW_RECTS).clear();
+    probe(&TEST_EXTENSION_TEXT_RECTS).clear();
     for _ in 0..4 {
         render_extensions(&ctx, &mut app, raw_input(Vec::new()));
     }
-    let row_pos = TEST_EXTENSION_TEXT_RECTS
-        .lock()
-        .unwrap()
+    let row_pos = probe(&TEST_EXTENSION_TEXT_RECTS)
         .iter()
         .rev()
         .find(|(extension, _)| extension == ".txt")
         .map(|(_, rect)| rect.center())
-        .expect("the extension text should expose its rendered rectangle");
+        .context("the extension text should expose its rendered rectangle")?;
     render_extensions(&ctx, &mut app, raw_input(pointer_button(row_pos, true)));
     render_extensions(&ctx, &mut app, raw_input(pointer_button(row_pos, false)));
     assert_eq!(app.highlighted_extension.as_deref(), Some(".txt"));
+    Ok(())
 }
 
 #[test]
-fn clicking_a_rendered_largest_file_row_changes_selection() {
+fn clicking_a_rendered_largest_file_row_changes_selection() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
-    TEST_LARGEST_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_LARGEST_ROW_RECTS).clear();
     for _ in 0..4 {
         render_largest(&ctx, &mut app, raw_input(Vec::new()));
     }
-    let row_pos = TEST_LARGEST_ROW_RECTS
-        .lock()
-        .unwrap()
+    let row_pos = probe(&TEST_LARGEST_ROW_RECTS)
         .iter()
         .rev()
         .find(|(index, _)| *index == 0)
         .map(|(_, rect)| egui::pos2(rect.left() + 45.0, rect.center().y))
-        .expect("the largest-file row should render");
+        .context("the largest-file row should render")?;
     render_largest(&ctx, &mut app, raw_input(pointer_button(row_pos, true)));
     render_largest(&ctx, &mut app, raw_input(pointer_button(row_pos, false)));
     assert_eq!(app.selected_path, Some(vec![0]));
+    Ok(())
 }
 
 #[test]
-fn clicking_a_rendered_search_result_changes_selection() {
+fn clicking_a_rendered_search_result_changes_selection() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
     app.search_query = "*".to_string();
     app.run_search();
-    TEST_SEARCH_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_SEARCH_ROW_RECTS).clear();
     for _ in 0..4 {
         render_search(&ctx, &mut app, raw_input(Vec::new()));
     }
-    let row_pos = TEST_SEARCH_ROW_RECTS
-        .lock()
-        .unwrap()
+    let row_pos = probe(&TEST_SEARCH_ROW_RECTS)
         .iter()
         .rev()
         .find(|(path, _)| path == &[0])
         .map(|(_, rect)| rect.center())
-        .expect("the search result should render");
+        .context("the search result should render")?;
     render_search(&ctx, &mut app, raw_input(pointer_button(row_pos, true)));
     render_search(&ctx, &mut app, raw_input(pointer_button(row_pos, false)));
     assert_eq!(app.selected_path, Some(vec![0]));
+    Ok(())
 }
 
 #[test]
-fn clicking_a_rendered_duplicate_member_changes_selection() {
+fn clicking_a_rendered_duplicate_member_changes_selection() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
@@ -964,19 +966,18 @@ fn clicking_a_rendered_duplicate_member_changes_selection() {
             index_path: vec![0],
         }],
     }];
-    TEST_DUPLICATE_ROW_RECTS.lock().unwrap().clear();
+    probe(&TEST_DUPLICATE_ROW_RECTS).clear();
     for _ in 0..4 {
         render_duplicates(&ctx, &mut app, raw_input(Vec::new()));
     }
-    let row_pos = TEST_DUPLICATE_ROW_RECTS
-        .lock()
-        .unwrap()
+    let row_pos = probe(&TEST_DUPLICATE_ROW_RECTS)
         .iter()
         .rev()
         .find(|(path, _)| path == &[0])
         .map(|(_, rect)| rect.center())
-        .expect("the duplicate member should render");
+        .context("the duplicate member should render")?;
     render_duplicates(&ctx, &mut app, raw_input(pointer_button(row_pos, true)));
     render_duplicates(&ctx, &mut app, raw_input(pointer_button(row_pos, false)));
     assert_eq!(app.selected_path, Some(vec![0]));
+    Ok(())
 }

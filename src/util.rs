@@ -264,31 +264,32 @@ mod tests {
     // way `move_path` itself reaches this code) isn't something a test
     // environment can depend on having two filesystems for.
     #[test]
-    fn move_fallback_preserves_symlinks_instead_of_copying_target() {
+    fn move_fallback_preserves_symlinks_instead_of_copying_target() -> anyhow::Result<()> {
         let dir = std::env::temp_dir().join(format!(
             "rustdirstat_test_{}_{}",
             std::process::id(),
             "move_fallback_preserves_symlinks"
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir)?;
 
         let target = dir.join("target.txt");
-        std::fs::write(&target, b"hello").unwrap();
+        std::fs::write(&target, b"hello")?;
         let link = dir.join("link");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
+        std::os::unix::fs::symlink(&target, &link)?;
 
         let dest = dir.join("link_moved");
-        recreate_symlink(&link, &dest).unwrap();
+        recreate_symlink(&link, &dest)?;
 
-        let meta = std::fs::symlink_metadata(&dest).unwrap();
+        let meta = std::fs::symlink_metadata(&dest)?;
         assert!(
             meta.file_type().is_symlink(),
             "moving a symlink across the fallback path should recreate a \
              symlink at the destination, not copy the bytes it points to"
         );
-        assert_eq!(std::fs::read_link(&dest).unwrap(), target);
+        assert_eq!(std::fs::read_link(&dest)?, target);
 
-        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 }

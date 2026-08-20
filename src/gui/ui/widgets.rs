@@ -73,7 +73,7 @@ pub(super) fn view_tab(ui: &mut egui::Ui, selected: bool, view: FileView) -> egu
         );
     }
     #[cfg(test)]
-    TEST_VIEW_TAB_RECTS.lock().unwrap().push((view, rect));
+    probe(&TEST_VIEW_TAB_RECTS).push((view, rect));
     response.on_hover_text(format!("Show {}", view.label()))
 }
 
@@ -291,13 +291,8 @@ pub(super) fn menu_item(
 
         #[cfg(test)]
         {
-            TEST_ICON_MENU_LAYOUTS.lock().unwrap().push((
-                label.to_owned(),
-                rect,
-                icon_rect,
-                text_rect,
-            ));
-            TEST_MENU_ITEM_LAYOUTS.lock().unwrap().push(MenuItemLayout {
+            probe(&TEST_ICON_MENU_LAYOUTS).push((label.to_owned(), rect, icon_rect, text_rect));
+            probe(&TEST_MENU_ITEM_LAYOUTS).push(MenuItemLayout {
                 label: label.to_owned(),
                 row: rect,
                 icon: icon_rect,
@@ -402,10 +397,7 @@ pub(super) fn sortable_header(
         }
     }
     #[cfg(test)]
-    TEST_DIRECTORY_HEADER_ICONS
-        .lock()
-        .unwrap()
-        .push((label, direction));
+    probe(&TEST_DIRECTORY_HEADER_ICONS).push((label, direction));
     let cursor = if response.dragged() {
         egui::CursorIcon::Grabbing
     } else {

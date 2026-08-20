@@ -1,4 +1,4 @@
-//! Test-only geometry probes and the interaction test suite.
+//! Test-only geometry probes.
 //!
 //! An immediate-mode UI has no retained widget tree to query after
 //! the fact, so the drawing code records where it actually put
@@ -9,6 +9,20 @@
 use crate::gui::app::{DirectoryColumn, ExtensionColumn, FileView};
 use crate::gui::icons::Icon;
 use eframe::egui::{self};
+use std::sync::{Mutex, MutexGuard};
+
+/// Takes a probe lock, recovering from poisoning rather than propagating
+/// it.
+///
+/// These statics are written from inside the drawing code, so a test that
+/// fails part-way through a frame leaves its probe poisoned. Propagating
+/// that would turn one real failure into a cascade of unrelated ones in
+/// every later test that touches the same probe, which buries the actual
+/// result. Recorded geometry from an aborted frame is stale, not unsound
+/// — every test clears the probe before rendering anyway.
+pub(super) fn probe<T>(cell: &'static Mutex<Vec<T>>) -> MutexGuard<'static, Vec<T>> {
+    cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[cfg(test)]
 pub(super) static TEST_DIRECTORY_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =

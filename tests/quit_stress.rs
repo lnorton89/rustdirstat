@@ -29,20 +29,12 @@
 //! Windows console session from a test, so this doesn't attempt one.
 
 #![cfg(unix)]
-// See the note in src/lib.rs for why test code is exempt from the
-// crate-wide deny on unwrap/expect. `clippy::panic` is deliberately not
-// listed: nothing here calls `panic!` directly, and `expect` fails when
-// the lint it names never fires.
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test code is exempt; see src/lib.rs"
-)]
 
 use std::io::{Read, Write};
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// How many synthetic drag-mouse events to inject before the quit key.
@@ -68,25 +60,22 @@ const QUIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// — a completely empty directory would make a "redraw per queued event"
 /// regression too cheap to ever time out on, defeating the point of the
 /// flood.
-fn make_test_tree() -> std::path::PathBuf {
+fn make_test_tree() -> anyhow::Result<std::path::PathBuf> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut dir = std::env::temp_dir();
     dir.push(format!(
         "rustdirstat-quit-stress-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     for sub in 0..20 {
         let subdir = dir.join(format!("sub_{sub:03}"));
-        std::fs::create_dir_all(&subdir).expect("create subdir");
+        std::fs::create_dir_all(&subdir)?;
         for f in 0..150 {
-            std::fs::write(subdir.join(format!("file_{f:03}.txt")), b"x".repeat(64))
-                .expect("write file");
+            std::fs::write(subdir.join(format!("file_{f:03}.txt")), b"x".repeat(64))?;
         }
     }
-    dir
+    Ok(dir)
 }
 
 // ---------------------------------------------------------------------
@@ -191,7 +180,7 @@ fn adopt_controlling_terminal(cmd: &mut Command) {
 /// its controlling terminal (matching how a real interactive terminal
 /// session attaches to a program), and returns the child plus the pty
 /// master fd for writing synthetic input / draining output.
-fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
+fn spawn_in_pty(target: &std::path::Path) -> anyhow::Result<(Child, RawFd)> {
     let (master, slave) = open_pty(50, 200);
 
     let bin = env!("CARGO_BIN_EXE_rustdirstat");
@@ -203,11 +192,11 @@ fn spawn_in_pty(target: &std::path::Path) -> (Child, RawFd) {
         .stderr(Stdio::from(owned_dup(slave)));
     adopt_controlling_terminal(&mut cmd);
 
-    let child = cmd.spawn().expect("spawn rustdirstat");
+    let child = cmd.spawn()?;
     // The child holds its own duplicates now; keeping this open would
     // stop the master from ever seeing EOF.
     close_fd(slave);
-    (child, master)
+    Ok((child, master))
 }
 
 /// Continuously drains the pty master in the background so the child
@@ -281,9 +270,9 @@ fn cleanup(dir: &std::path::Path) {
 }
 
 #[test]
-fn quit_key_works_after_large_event_backlog() {
-    let dir = make_test_tree();
-    let (mut child, master) = spawn_in_pty(&dir);
+fn quit_key_works_after_large_event_backlog() -> anyhow::Result<()> {
+    let dir = make_test_tree()?;
+    let (mut child, master) = spawn_in_pty(&dir)?;
     let _drain = spawn_output_drain(master);
 
     // Give the app a moment to finish its initial scan and reach the
@@ -311,17 +300,18 @@ fn quit_key_works_after_large_event_backlog() {
     // works," not "the app doesn't crash." A clean quit returns Ok(())
     // from main, so it should exit 0; a Rust panic exits 101 instead.
     assert!(
-        status.unwrap().success(),
+        status.is_some_and(|status| status.success()),
         "rustdirstat exited with a failure status after 'q' — it died \
          (e.g. panicked) rather than quitting cleanly: {:?}",
         status
     );
+    Ok(())
 }
 
 #[test]
-fn ctrl_c_works_after_large_event_backlog_and_overrides_help_popup() {
-    let dir = make_test_tree();
-    let (mut child, master) = spawn_in_pty(&dir);
+fn ctrl_c_works_after_large_event_backlog_and_overrides_help_popup() -> anyhow::Result<()> {
+    let dir = make_test_tree()?;
+    let (mut child, master) = spawn_in_pty(&dir)?;
     let _drain = spawn_output_drain(master);
 
     std::thread::sleep(Duration::from_millis(500));
@@ -331,7 +321,7 @@ fn ctrl_c_works_after_large_event_backlog_and_overrides_help_popup() {
     // was never bound to any action at all).
     {
         let mut file = owned_dup(master);
-        file.write_all(b"?").expect("send '?' to open help");
+        file.write_all(b"?")?;
     }
     std::thread::sleep(Duration::from_millis(100));
 
@@ -354,9 +344,10 @@ fn ctrl_c_works_after_large_event_backlog_and_overrides_help_popup() {
     // See the matching assertion in quit_key_works_after_large_event_backlog
     // for why process death alone isn't sufficient.
     assert!(
-        status.unwrap().success(),
+        status.is_some_and(|status| status.success()),
         "rustdirstat exited with a failure status after Ctrl+C — it died \
          (e.g. panicked) rather than quitting cleanly: {:?}",
         status
     );
+    Ok(())
 }

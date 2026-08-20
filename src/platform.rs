@@ -57,6 +57,20 @@ mod imp {
         Some(unsafe { stat.assume_init() })
     }
 
+    /// Widens one of `statvfs`'s integer fields to `u64`.
+    ///
+    /// These fields have no fixed width across Unix targets: `fsblkcnt_t`
+    /// is 32-bit on macOS and on 32-bit Linux but 64-bit on 64-bit Linux,
+    /// and `f_frsize` differs again. That makes every *literal* spelling
+    /// of the conversion wrong somewhere -- `as u64` trips
+    /// `unnecessary_cast` where the field is already 64-bit, and
+    /// `u64::from` trips `useless_conversion` in the same place. Going
+    /// through a generic bound states the actual requirement ("whatever
+    /// this is, it fits in a u64") once, and is a no-op at runtime.
+    fn widen<T: Into<u64>>(value: T) -> u64 {
+        value.into()
+    }
+
     pub(super) fn volume_space(path: &Path) -> (Option<u64>, Option<u64>) {
         // A path containing an interior NUL cannot name a real file, so
         // there is nothing to report.
@@ -66,15 +80,9 @@ mod imp {
         let Some(stat) = statvfs_for(&c_path) else {
             return (None, None);
         };
-        // These fields are not a fixed width across Unix targets --
-        // `fsblkcnt_t` is 32-bit on macOS and on 32-bit Linux, 64-bit on
-        // 64-bit Linux. `u64::from` widens on the narrow platforms and is
-        // an identity conversion on the wide ones, which an `as` cast
-        // cannot express without tripping `unnecessary_cast` on exactly
-        // the platforms where the cast is redundant.
-        let block_size = u64::from(stat.f_frsize);
-        let free = u64::from(stat.f_bavail).saturating_mul(block_size);
-        let total = u64::from(stat.f_blocks).saturating_mul(block_size);
+        let block_size = widen(stat.f_frsize);
+        let free = widen(stat.f_bavail).saturating_mul(block_size);
+        let total = widen(stat.f_blocks).saturating_mul(block_size);
         (Some(free), Some(total))
     }
 }

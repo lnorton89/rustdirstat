@@ -118,10 +118,7 @@ pub(super) fn draw_extension_cell(
         ExtensionColumn::Extension => {
             let _response = ui.label(&ext.extension);
             #[cfg(test)]
-            TEST_EXTENSION_TEXT_RECTS
-                .lock()
-                .unwrap()
-                .push((ext.extension.clone(), _response.rect));
+            probe(&TEST_EXTENSION_TEXT_RECTS).push((ext.extension.clone(), _response.rect));
         }
         ExtensionColumn::Color => {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
@@ -171,14 +168,8 @@ pub(super) fn draw_extension_header(
         .map(|source| (*source, column));
     #[cfg(test)]
     {
-        TEST_EXTENSION_HEADER_RECTS
-            .lock()
-            .unwrap()
-            .push((label, response.rect));
-        TEST_EXTENSION_HEADER_ICONS
-            .lock()
-            .unwrap()
-            .push((label, direction));
+        probe(&TEST_EXTENSION_HEADER_RECTS).push((label, response.rect));
+        probe(&TEST_EXTENSION_HEADER_ICONS).push((label, direction));
     }
     let sort = response
         .clicked()
@@ -241,18 +232,12 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
                 for column in &columns {
                     let column = *column;
                     #[cfg(test)]
-                    TEST_EXTENSION_CELL_COLUMNS
-                        .lock()
-                        .unwrap()
-                        .push((ext.extension.clone(), column));
+                    probe(&TEST_EXTENSION_CELL_COLUMNS).push((ext.extension.clone(), column));
                     row.col(|ui| draw_extension_cell(ui, ext, column, total));
                 }
                 let response = row.response();
                 #[cfg(test)]
-                TEST_EXTENSION_ROW_RECTS
-                    .lock()
-                    .unwrap()
-                    .push((ext.extension.clone(), response.rect));
+                probe(&TEST_EXTENSION_ROW_RECTS).push((ext.extension.clone(), response.rect));
                 if response.clicked() {
                     selected = Some((ext.extension.clone(), ext.category));
                 }

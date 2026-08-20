@@ -241,10 +241,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                             reorder = Some((*source, column));
                         }
                         #[cfg(test)]
-                        TEST_DIRECTORY_HEADER_RECTS
-                            .lock()
-                            .unwrap()
-                            .push((label, response.rect));
+                        probe(&TEST_DIRECTORY_HEADER_RECTS).push((label, response.rect));
                         if response.clicked() {
                             sort = directory_sort_after_click(app.sort, column);
                         }
@@ -258,10 +255,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                     for column in &columns {
                         let column = *column;
                         #[cfg(test)]
-                        TEST_DIRECTORY_CELL_COLUMNS
-                            .lock()
-                            .unwrap()
-                            .push((item.path.clone(), column));
+                        probe(&TEST_DIRECTORY_CELL_COLUMNS).push((item.path.clone(), column));
                         row.col(|ui| {
                             if draw_directory_cell(ui, app, item, column, total) {
                                 toggle = Some(item.path.clone());
@@ -270,10 +264,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                     }
                     let response = row.response();
                     #[cfg(test)]
-                    TEST_DIRECTORY_ROW_RECTS
-                        .lock()
-                        .unwrap()
-                        .push((item.path.clone(), response.rect));
+                    probe(&TEST_DIRECTORY_ROW_RECTS).push((item.path.clone(), response.rect));
                     response.context_menu(|ui| {
                         if icon_button(ui, true, Icon::ExternalLink, "Open").clicked() {
                             row_action = Some((RowAction::Open, item.path.clone()));

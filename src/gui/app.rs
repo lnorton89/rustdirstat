@@ -1075,31 +1075,45 @@ mod tests {
         assert!(!app.is_busy(), "background operation timed out");
     }
 
+    /// The index path of a visible row, by name.
+    ///
+    /// Returns an error rather than unwrapping so a test that names a row
+    /// which is not there says which row, instead of reporting a bare
+    /// `None`.
+    fn row_path(app: &GuiApp, name: &str) -> anyhow::Result<Vec<usize>> {
+        app.visible_rows
+            .iter()
+            .find(|row| row.name == name)
+            .map(|row| row.path.clone())
+            .ok_or_else(|| anyhow::anyhow!("{name} should be a visible row"))
+    }
+
     #[test]
-    fn folder_changes_scan_without_blocking_the_caller() {
+    fn folder_changes_scan_without_blocking_the_caller() -> anyhow::Result<()> {
         let first = test_dir("first");
         let second = test_dir("second");
-        std::fs::create_dir_all(&first).unwrap();
-        std::fs::create_dir_all(&second).unwrap();
-        std::fs::write(first.join("old.txt"), b"old").unwrap();
-        std::fs::write(second.join("new.txt"), b"new").unwrap();
+        std::fs::create_dir_all(&first)?;
+        std::fs::create_dir_all(&second)?;
+        std::fs::write(first.join("old.txt"), b"old")?;
+        std::fs::write(second.join("new.txt"), b"new")?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&first, None).unwrap());
-        app.open_folder(&second).unwrap();
+        let mut app = GuiApp::new(crate::scanner::scan(&first, None)?);
+        app.open_folder(&second)?;
         assert!(app.is_busy());
         assert_eq!(app.tree.root_path, first);
         wait_for_background(&mut app);
         assert_eq!(app.tree.root_path, second);
 
-        std::fs::remove_dir_all(first).unwrap();
-        std::fs::remove_dir_all(second).unwrap();
+        std::fs::remove_dir_all(first)?;
+        std::fs::remove_dir_all(second)?;
+        Ok(())
     }
 
     #[test]
-    fn initial_gui_shell_opens_before_scan_finishes() {
+    fn initial_gui_shell_opens_before_scan_finishes() -> anyhow::Result<()> {
         let dir = test_dir("initial");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("payload.dat"), vec![7_u8; 4096]).unwrap();
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("payload.dat"), vec![7_u8; 4096])?;
 
         let mut app = GuiApp::loading(dir.clone());
         assert!(app.is_busy());
@@ -1107,33 +1121,35 @@ mod tests {
         wait_for_background(&mut app);
         assert_eq!(app.tree.root.size, 4096);
 
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[test]
-    fn duplicate_hashing_runs_in_background() {
+    fn duplicate_hashing_runs_in_background() -> anyhow::Result<()> {
         let dir = test_dir("duplicates");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("one.bin"), b"same bytes").unwrap();
-        std::fs::write(dir.join("two.bin"), b"same bytes").unwrap();
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("one.bin"), b"same bytes")?;
+        std::fs::write(dir.join("two.bin"), b"same bytes")?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.find_duplicates();
         assert!(app.is_busy());
         wait_for_background(&mut app);
         assert_eq!(app.duplicate_groups.len(), 1);
 
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
-    fn nested_test_tree() -> std::path::PathBuf {
+    fn nested_test_tree() -> anyhow::Result<std::path::PathBuf> {
         let dir = test_dir("cache");
-        std::fs::create_dir_all(dir.join("alpha")).unwrap();
-        std::fs::create_dir_all(dir.join("beta")).unwrap();
-        std::fs::write(dir.join("alpha/small.bin"), vec![1_u8; 16]).unwrap();
-        std::fs::write(dir.join("alpha/large.bin"), vec![2_u8; 4096]).unwrap();
-        std::fs::write(dir.join("beta/only.bin"), vec![3_u8; 512]).unwrap();
-        dir
+        std::fs::create_dir_all(dir.join("alpha"))?;
+        std::fs::create_dir_all(dir.join("beta"))?;
+        std::fs::write(dir.join("alpha/small.bin"), vec![1_u8; 16])?;
+        std::fs::write(dir.join("alpha/large.bin"), vec![2_u8; 4096])?;
+        std::fs::write(dir.join("beta/only.bin"), vec![3_u8; 512])?;
+        Ok(dir)
     }
 
     /// The row cache is keyed off observed state rather than invalidated
@@ -1141,20 +1157,15 @@ mod tests {
     /// reaches the key — a missed one would leave the table painting a
     /// stale tree while the app looked like it was ignoring input.
     #[test]
-    fn cached_rows_refresh_whenever_an_input_changes() {
-        let dir = nested_test_tree();
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+    fn cached_rows_refresh_whenever_an_input_changes() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
 
         app.refresh_visible_rows();
         let collapsed = app.visible_rows.len();
 
         // Expanding a directory reveals its children.
-        let alpha = app
-            .visible_rows
-            .iter()
-            .find(|row| row.name == "alpha")
-            .map(|row| row.path.clone())
-            .expect("alpha should be a visible row");
+        let alpha = row_path(&app, "alpha")?;
         app.toggle_expanded(&alpha);
         app.refresh_visible_rows();
         assert!(
@@ -1180,13 +1191,14 @@ mod tests {
         app.refresh_visible_rows();
         assert_eq!(app.visible_rows.len(), collapsed);
 
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[test]
-    fn cached_rows_are_not_rebuilt_when_nothing_changed() {
-        let dir = nested_test_tree();
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+    fn cached_rows_are_not_rebuilt_when_nothing_changed() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
 
         app.refresh_visible_rows();
         let first = app.visible_rows.as_ptr();
@@ -1200,13 +1212,14 @@ mod tests {
              being rebuilt every frame"
         );
 
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[test]
-    fn cached_treemap_follows_the_panel_rect_and_the_zoom() {
-        let dir = nested_test_tree();
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+    fn cached_treemap_follows_the_panel_rect_and_the_zoom() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
 
         app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
         assert!(!app.treemap_tiles.is_empty());
@@ -1231,13 +1244,7 @@ mod tests {
 
         // So does zooming into a subdirectory.
         app.refresh_visible_rows();
-        let alpha = app
-            .visible_rows
-            .iter()
-            .find(|row| row.name == "alpha")
-            .map(|row| row.path.clone())
-            .expect("alpha should be a visible row");
-        app.select_path(alpha);
+        app.select_path(row_path(&app, "alpha")?);
         app.zoom_in();
         app.refresh_treemap(0.0, 0.0, 900.0, 200.0);
         assert!(
@@ -1247,15 +1254,16 @@ mod tests {
             "zooming in did not re-lay-out the treemap for the new root"
         );
 
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     /// Closing the window must not depend on walking the scanned tree, so
     /// the exit path hands it off rather than freeing it in place.
     #[test]
-    fn releasing_the_tree_drops_everything_derived_from_it() {
-        let dir = nested_test_tree();
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+    fn releasing_the_tree_drops_everything_derived_from_it() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.refresh_visible_rows();
         app.refresh_treemap(0.0, 0.0, 400.0, 300.0);
         assert!(!app.visible_rows.is_empty());
@@ -1273,18 +1281,20 @@ mod tests {
         // while the window tears down around it.
         assert_eq!(app.zoom_node().size, 0);
 
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[test]
-    fn scan_root_cannot_be_queued_for_deletion() {
+    fn scan_root_cannot_be_queued_for_deletion() -> anyhow::Result<()> {
         let dir = test_dir("root_delete");
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None).unwrap());
+        std::fs::create_dir_all(&dir)?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.select_path(Vec::new());
         app.request_delete_selected(false);
         assert!(app.pending_delete.is_none());
         assert!(dir.exists());
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
     }
 }

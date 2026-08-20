@@ -69,7 +69,7 @@ mod tests {
     use super::Config;
 
     #[test]
-    fn gui_preferences_round_trip_through_toml() {
+    fn gui_preferences_round_trip_through_toml() -> anyhow::Result<()> {
         let config = Config {
             gui_orientation: Some("vertical".to_string()),
             gui_show_extensions: Some(false),
@@ -80,11 +80,12 @@ mod tests {
             gui_show_labels: Some(true),
             ..Config::default()
         };
-        let encoded = toml::to_string(&config).unwrap();
-        let decoded: Config = toml::from_str(&encoded).unwrap();
+        let encoded = toml::to_string(&config)?;
+        let decoded: Config = toml::from_str(&encoded)?;
         assert_eq!(decoded.gui_orientation.as_deref(), Some("vertical"));
         assert_eq!(decoded.gui_show_extensions, Some(false));
         assert_eq!(decoded.gui_show_grid, Some(false));
         assert_eq!(decoded.gui_show_labels, Some(true));
+        Ok(())
     }
 }
