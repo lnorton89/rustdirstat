@@ -16,8 +16,16 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         paint_inline_icon(ui, Icon::App, 19.0, ACCENT_COLOR);
         ui.heading("Treemap");
-        ui.label(
-            RichText::new(app.zoom_fs_path().display().to_string()).color(SECONDARY_TEXT_COLOR),
+        // Truncated, not just clipped. A scanned path is arbitrarily long
+        // and `horizontal` does not wrap, so an untruncated label runs
+        // straight off the edge of the panel and takes the heading with
+        // it once the pane is narrow — which looks like the app cutting
+        // its own title in half rather than a path that does not fit.
+        ui.add(
+            egui::Label::new(
+                RichText::new(app.zoom_fs_path().display().to_string()).color(SECONDARY_TEXT_COLOR),
+            )
+            .truncate(),
         );
         if ui.available_width() > 420.0 {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

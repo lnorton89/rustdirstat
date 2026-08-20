@@ -25,6 +25,19 @@ pub(super) fn probe<T>(cell: &'static Mutex<Vec<T>>) -> MutexGuard<'static, Vec<
 }
 
 #[cfg(test)]
+pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// `(content width, visible width)` of the directory table's horizontal
+/// scroll area. Content wider than the viewport is precisely the
+/// condition that puts a scrollbar there, and it is not something the
+/// painted row rects reveal — they sit at the table's minimum width
+/// whether that width is reachable or merely clipped off the edge.
+#[cfg(test)]
+pub(super) static TEST_DIRECTORY_SCROLL: std::sync::Mutex<Vec<(f32, f32)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
 pub(super) static TEST_DIRECTORY_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 

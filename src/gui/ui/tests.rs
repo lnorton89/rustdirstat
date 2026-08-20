@@ -7,6 +7,7 @@
 //! control out from under its own click target fails here instead of
 //! in the user's hands.
 
+use super::chrome::*;
 use super::directory::*;
 use super::draw_file_area;
 use super::extensions::*;
@@ -757,6 +758,80 @@ fn menu_icons_never_overlap_their_labels() {
 }
 
 #[test]
+fn menu_bar_names_are_clearly_separated() {
+    // Regression test for the menu bar coming out cramped no matter what
+    // spacing the code asked for. `egui::menu::bar` runs its own
+    // `set_menu_style` on the child Ui as its first act, which resets
+    // button_padding to (2, 0) — so spacing configured before the call
+    // was silently thrown away, and nothing said so. Measuring the gaps
+    // the bar actually produced is the only way to catch that; asserting
+    // on the constants would have passed the whole time.
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    probe(&TEST_MENU_BAR_RECTS).clear();
+    let _ = ctx.run(raw_input_at_width(Vec::new(), 1280.0), |ctx| {
+        apply_style(ctx);
+        draw_menu_bar(&mut app, ctx);
+    });
+
+    let names = probe(&TEST_MENU_BAR_RECTS);
+    assert_eq!(
+        names.len(),
+        7,
+        "expected every top-level menu to be recorded, got {names:?}"
+    );
+
+    // Measure the padding rather than assuming it. Deriving the gap from
+    // the configured constant is what made the first version of this test
+    // useless: it passed with the padding line deleted, because the
+    // formula supplied the very number it was supposed to be checking.
+    // The text width has to come from the same font the bar laid out
+    // with, so ask the context.
+    let font = egui::FontId::new(14.0, egui::FontFamily::Proportional);
+    let text_width = |label: &str| {
+        ctx.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+
+    for (label, rect) in names.iter() {
+        let side_padding = (rect.width() - text_width(label)) / 2.0;
+        assert!(
+            side_padding >= MENU_BAR_MIN_SIDE_PADDING,
+            "{label} has only {side_padding:.1}px of padding beside its text \
+             (target {:.1}px wide, text {:.1}px); egui's menu style resets this \
+             to 2px unless the bar sets it from inside",
+            rect.width(),
+            text_width(label)
+        );
+        assert!(
+            rect.height() >= 24.0,
+            "{label} is only {:.1}px tall, so the hover highlight sits flush against the text",
+            rect.height()
+        );
+    }
+
+    for pair in names.windows(2) {
+        let (left_label, left) = &pair[0];
+        let (right_label, right) = &pair[1];
+        assert!(
+            left.right() <= right.left() + 0.5,
+            "{left_label} and {right_label} overlap"
+        );
+        let gap = right.left() - left.right();
+        assert!(
+            gap >= MENU_BAR_MIN_GAP,
+            "only {gap:.1}px between the {left_label} and {right_label} targets, \
+             which reads as one run of words"
+        );
+    }
+}
+
+#[test]
 fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
     // The menus used to fake these columns by padding one string with
     // leading and interior spaces. Spaces are proportional, so nothing
@@ -855,6 +930,53 @@ fn clicking_a_rendered_directory_row_changes_selection() -> anyhow::Result<()> {
         *probe(&TEST_DIRECTORY_ROW_RECTS)
     );
     Ok(())
+}
+
+#[test]
+fn a_squeezed_directory_pane_scrolls_instead_of_clipping() {
+    // Dragging the treemap splitter left far enough squeezes this pane
+    // below even the compact column set. The table used to just get
+    // clipped, with no scrollbar and no way to reach the columns, which
+    // reads as the pane being broken rather than small. Keeping the
+    // content at its minimum width is what puts a scrollbar there.
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
+    for _ in 0..4 {
+        render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 260.0));
+    }
+
+    let squeezed = probe(&TEST_DIRECTORY_SCROLL).last().copied();
+    assert!(
+        squeezed.is_some(),
+        "the directory table should have reported its scroll extents"
+    );
+    let (content, visible) = squeezed.unwrap_or_default();
+    assert!(
+        content > visible + 1.0,
+        "in a 260px pane the table reported {content:.0}px of content in {visible:.0}px \
+         of viewport, so there is nothing to scroll and the columns past the edge \
+         are simply unreachable"
+    );
+
+    // And a pane with room to spare must not grow a scrollbar it does
+    // not need.
+    probe(&TEST_DIRECTORY_SCROLL).clear();
+    for _ in 0..4 {
+        render_directory(&ctx, &mut app, raw_input_at_width(Vec::new(), 1400.0));
+    }
+    let roomy = probe(&TEST_DIRECTORY_SCROLL).last().copied();
+    assert!(
+        roomy.is_some(),
+        "the directory table should have reported its scroll extents"
+    );
+    let (content, visible) = roomy.unwrap_or_default();
+    assert!(
+        content <= visible + 1.0,
+        "a 1400px pane still reported {content:.0}px of content in {visible:.0}px of \
+         viewport, so it scrolls when it has no reason to"
+    );
 }
 
 #[test]

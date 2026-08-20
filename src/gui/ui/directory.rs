@@ -37,20 +37,49 @@ pub(super) fn visible_directory_columns(app: &GuiApp, compact: bool) -> Vec<Dire
         .collect()
 }
 
+/// The narrowest a column may be squeezed before its contents stop being
+/// readable.
+///
+/// Shared between the column spec and the width the table claims inside
+/// its horizontal scroll area. If those two disagreed the scrollbar would
+/// either never appear when it was needed or never go away when it was
+/// not.
+pub(super) fn directory_column_min_width(column: DirectoryColumn) -> f32 {
+    match column {
+        DirectoryColumn::Name => 160.0,
+        DirectoryColumn::Size => 75.0,
+        DirectoryColumn::SubtreePercentage => 110.0,
+        DirectoryColumn::PercentTotal => 60.0,
+        DirectoryColumn::Files | DirectoryColumn::Subdirs => 45.0,
+        DirectoryColumn::LastChange => 95.0,
+        DirectoryColumn::Attributes => 55.0,
+    }
+}
+
+/// Total width the visible columns need before anything has to scroll.
+pub(super) fn directory_table_min_width(columns: &[DirectoryColumn], item_spacing: f32) -> f32 {
+    let widths: f32 = columns
+        .iter()
+        .map(|column| directory_column_min_width(*column))
+        .sum();
+    widths + item_spacing * columns.len().saturating_sub(1) as f32
+}
+
 pub(super) fn directory_column_spec(column: DirectoryColumn) -> Column {
+    let minimum = directory_column_min_width(column);
     match column {
         DirectoryColumn::Name => Column::remainder()
-            .at_least(160.0)
+            .at_least(minimum)
             .clip(true)
             .resizable(false),
-        DirectoryColumn::Size => Column::auto().range(75.0..=110.0).clip(true),
-        DirectoryColumn::SubtreePercentage => Column::auto().range(110.0..=180.0).clip(true),
-        DirectoryColumn::PercentTotal => Column::auto().range(60.0..=90.0).clip(true),
+        DirectoryColumn::Size => Column::auto().range(minimum..=110.0).clip(true),
+        DirectoryColumn::SubtreePercentage => Column::auto().range(minimum..=180.0).clip(true),
+        DirectoryColumn::PercentTotal => Column::auto().range(minimum..=90.0).clip(true),
         DirectoryColumn::Files | DirectoryColumn::Subdirs => {
-            Column::auto().range(45.0..=75.0).clip(true)
+            Column::auto().range(minimum..=75.0).clip(true)
         }
-        DirectoryColumn::LastChange => Column::auto().range(95.0..=150.0).clip(true),
-        DirectoryColumn::Attributes => Column::auto().range(55.0..=90.0).clip(true),
+        DirectoryColumn::LastChange => Column::auto().range(minimum..=150.0).clip(true),
+        DirectoryColumn::Attributes => Column::auto().range(minimum..=90.0).clip(true),
     }
 }
 
@@ -212,100 +241,133 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
         let total = app.tree.root.effective_size(app.use_physical).max(1);
         let compact = ui.available_width() < 760.0;
         let columns = visible_directory_columns(app, compact);
-        let mut table = TableBuilder::new(ui)
-            .striped(true)
-            .resizable(true)
-            .vscroll(true)
-            .sense(Sense::click())
-            .cell_layout(Layout::left_to_right(Align::Center));
-        for column in &columns {
-            table = table.column(directory_column_spec(*column));
-        }
-        table
-            .header(TABLE_HEADER_HEIGHT, |mut h| {
+        let minimum_width = directory_table_min_width(&columns, ui.spacing().item_spacing.x);
+        // Dragging the treemap splitter left can squeeze this pane below
+        // even the compact column set. The table already refuses to go
+        // narrower than its columns need, so what was missing was not the
+        // width but any way to reach it: the overflow was simply clipped
+        // at the pane edge, which reads as the pane being broken rather
+        // than small. The scroll area is what turns that into a
+        // scrollbar. It costs nothing at ordinary widths, since it only
+        // scrolls when the content genuinely does not fit.
+        //
+        // `set_min_width` restates the floor independently of how the
+        // column specs happen to be written, so the guarantee does not
+        // quietly depend on `Name` keeping its `at_least`.
+        let scroll = egui::ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(minimum_width);
+                let mut table = TableBuilder::new(ui)
+                    .striped(true)
+                    .resizable(true)
+                    .vscroll(true)
+                    .sense(Sense::click())
+                    .cell_layout(Layout::left_to_right(Align::Center));
                 for column in &columns {
-                    let column = *column;
-                    h.col(|ui| {
-                        let label = directory_column_label(column);
-                        let response =
-                            sortable_header(ui, label, directory_sort_icon(app.sort, column));
-                        response.dnd_set_drag_payload(column);
-                        if response.dnd_hover_payload::<DirectoryColumn>().is_some() {
-                            ui.painter().rect_stroke(
-                                response.rect.shrink(1.0),
-                                2.0,
-                                Stroke::new(1.0_f32, ACCENT_COLOR),
-                            );
-                        }
-                        if let Some(source) = response.dnd_release_payload::<DirectoryColumn>() {
-                            reorder = Some((*source, column));
-                        }
-                        #[cfg(test)]
-                        probe(&TEST_DIRECTORY_HEADER_RECTS).push((label, response.rect));
-                        if response.clicked() {
-                            sort = directory_sort_after_click(app.sort, column);
-                        }
-                    });
+                    table = table.column(directory_column_spec(*column));
                 }
-            })
-            .body(|body| {
-                body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
-                    let item = &rows[row.index()];
-                    row.set_selected(app.selected_path.as_ref() == Some(&item.path));
-                    for column in &columns {
-                        let column = *column;
-                        #[cfg(test)]
-                        probe(&TEST_DIRECTORY_CELL_COLUMNS).push((item.path.clone(), column));
-                        row.col(|ui| {
-                            if draw_directory_cell(ui, app, item, column, total) {
-                                toggle = Some(item.path.clone());
+                table
+                    .header(TABLE_HEADER_HEIGHT, |mut h| {
+                        for column in &columns {
+                            let column = *column;
+                            h.col(|ui| {
+                                let label = directory_column_label(column);
+                                let response = sortable_header(
+                                    ui,
+                                    label,
+                                    directory_sort_icon(app.sort, column),
+                                );
+                                response.dnd_set_drag_payload(column);
+                                if response.dnd_hover_payload::<DirectoryColumn>().is_some() {
+                                    ui.painter().rect_stroke(
+                                        response.rect.shrink(1.0),
+                                        2.0,
+                                        Stroke::new(1.0_f32, ACCENT_COLOR),
+                                    );
+                                }
+                                if let Some(source) =
+                                    response.dnd_release_payload::<DirectoryColumn>()
+                                {
+                                    reorder = Some((*source, column));
+                                }
+                                #[cfg(test)]
+                                probe(&TEST_DIRECTORY_HEADER_RECTS).push((label, response.rect));
+                                if response.clicked() {
+                                    sort = directory_sort_after_click(app.sort, column);
+                                }
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(TABLE_ROW_HEIGHT, rows.len(), |mut row| {
+                            let item = &rows[row.index()];
+                            row.set_selected(app.selected_path.as_ref() == Some(&item.path));
+                            for column in &columns {
+                                let column = *column;
+                                #[cfg(test)]
+                                probe(&TEST_DIRECTORY_CELL_COLUMNS)
+                                    .push((item.path.clone(), column));
+                                row.col(|ui| {
+                                    if draw_directory_cell(ui, app, item, column, total) {
+                                        toggle = Some(item.path.clone());
+                                    }
+                                });
                             }
-                        });
-                    }
-                    let response = row.response();
-                    #[cfg(test)]
-                    probe(&TEST_DIRECTORY_ROW_RECTS).push((item.path.clone(), response.rect));
-                    response.context_menu(|ui| {
-                        if icon_button(ui, true, Icon::ExternalLink, "Open").clicked() {
-                            row_action = Some((RowAction::Open, item.path.clone()));
-                            ui.close_menu();
-                        }
-                        if icon_button(ui, true, Icon::Folder, "Show in Explorer").clicked() {
-                            row_action = Some((RowAction::Reveal, item.path.clone()));
-                            ui.close_menu();
-                        }
-                        if icon_button(ui, true, Icon::Copy, "Copy path").clicked() {
-                            row_action = Some((RowAction::CopyPath, item.path.clone()));
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if icon_button(ui, true, Icon::ZoomIn, "Zoom treemap here").clicked() {
-                            row_action = Some((RowAction::Zoom, item.path.clone()));
-                            ui.close_menu();
-                        }
-                        if icon_button(ui, true, Icon::Info, "Properties").clicked() {
-                            row_action = Some((RowAction::Properties, item.path.clone()));
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if icon_button(ui, !item.path.is_empty(), Icon::Trash, "Delete…").clicked()
-                        {
-                            row_action = Some((RowAction::Delete, item.path.clone()));
-                            ui.close_menu();
-                        }
+                            let response = row.response();
+                            #[cfg(test)]
+                            probe(&TEST_DIRECTORY_ROW_RECTS)
+                                .push((item.path.clone(), response.rect));
+                            response.context_menu(|ui| {
+                                if icon_button(ui, true, Icon::ExternalLink, "Open").clicked() {
+                                    row_action = Some((RowAction::Open, item.path.clone()));
+                                    ui.close_menu();
+                                }
+                                if icon_button(ui, true, Icon::Folder, "Show in Explorer").clicked()
+                                {
+                                    row_action = Some((RowAction::Reveal, item.path.clone()));
+                                    ui.close_menu();
+                                }
+                                if icon_button(ui, true, Icon::Copy, "Copy path").clicked() {
+                                    row_action = Some((RowAction::CopyPath, item.path.clone()));
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if icon_button(ui, true, Icon::ZoomIn, "Zoom treemap here")
+                                    .clicked()
+                                {
+                                    row_action = Some((RowAction::Zoom, item.path.clone()));
+                                    ui.close_menu();
+                                }
+                                if icon_button(ui, true, Icon::Info, "Properties").clicked() {
+                                    row_action = Some((RowAction::Properties, item.path.clone()));
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if icon_button(ui, !item.path.is_empty(), Icon::Trash, "Delete…")
+                                    .clicked()
+                                {
+                                    row_action = Some((RowAction::Delete, item.path.clone()));
+                                    ui.close_menu();
+                                }
+                            });
+                            if response.clicked() {
+                                select = Some(item.path.clone());
+                            }
+                            if response.double_clicked() {
+                                if item.is_dir {
+                                    toggle = Some(item.path.clone());
+                                } else {
+                                    open = Some(item.path.clone());
+                                }
+                            }
+                        })
                     });
-                    if response.clicked() {
-                        select = Some(item.path.clone());
-                    }
-                    if response.double_clicked() {
-                        if item.is_dir {
-                            toggle = Some(item.path.clone());
-                        } else {
-                            open = Some(item.path.clone());
-                        }
-                    }
-                })
             });
+        #[cfg(test)]
+        probe(&TEST_DIRECTORY_SCROLL).push((scroll.content_size.x, scroll.inner_rect.width()));
+        #[cfg(not(test))]
+        let _ = scroll;
     }
     if let Some((source, target)) = reorder {
         app.reorder_directory_column(source, target);

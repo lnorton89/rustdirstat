@@ -65,6 +65,14 @@ const MAX_DEPTH: u32 = 32;
 /// above the ~14px a single line of UI text needs, so a reserved row is
 /// never narrower than what will actually render into it.
 const MIN_LABEL_PX: f32 = 18.0;
+/// Height of the strip a tile reserves at its top for its own name.
+///
+/// A whole number of pixels on purpose. This used to be `MIN_LABEL_PX *
+/// 0.8`, i.e. 14.4, which put every nested tile on a fractional origin;
+/// combined with rounding the pixel dimensions *up*, children could end
+/// up extending past the bottom of the parent they were subdivided out
+/// of, and the error accumulated with depth.
+const LABEL_STRIP_PX: f32 = 14.0;
 /// Expansion stops once a tile's pixel area drops below this — a tile
 /// smaller than a handful of pixels on a side can't show anything a user
 /// could distinguish anyway, and without a floor a deeply-fanned-out
@@ -227,8 +235,16 @@ fn expand<'a>(
     // `treemap::layout` actually apply — that fix guarantees adjacent
     // *integer* cell boundaries never disagree, which only matters if
     // this is the resolution being rounded to in the first place.
-    let px_w = w.round().clamp(0.0, u16::MAX as f32) as u16;
-    let px_h = h.round().clamp(0.0, u16::MAX as f32) as u16;
+    //
+    // Rounded *down*, not to nearest. Rounding up lets the laid-out area
+    // come out fractionally larger than the rect it was given, so a child
+    // can extend past the bottom or right edge of the parent it was
+    // subdivided from — painting over a sibling and crediting that
+    // sibling's pixels to the wrong directory. Down leaves at most a
+    // hairline of the parent uncovered instead, which is invisible and
+    // cannot compound with depth the way the overflow did.
+    let px_w = w.floor().clamp(0.0, u16::MAX as f32) as u16;
+    let px_h = h.floor().clamp(0.0, u16::MAX as f32) as u16;
     let rects = treemap::layout(&sizes, px_w, px_h);
 
     let overflow_index = children.len();
@@ -307,7 +323,7 @@ fn expand<'a>(
 
         if expands {
             let (iy, ih) = if reserve_label {
-                (ry + MIN_LABEL_PX * 0.8, rh - MIN_LABEL_PX * 0.8)
+                (ry + LABEL_STRIP_PX, rh - LABEL_STRIP_PX)
             } else {
                 (ry, rh)
             };
@@ -560,6 +576,83 @@ mod tests {
                 assert!(
                     parent_index < i,
                     "child at {i} painted before its parent at {parent_index}"
+                );
+            }
+        }
+    }
+
+    /// Sweep a drive-shaped tree at a range of panel sizes and check the
+    /// things that have to hold for every tile at every size.
+    #[test]
+    fn no_tile_ever_escapes_the_panel_or_its_parent() {
+        let root = drive_shaped(5, 6, 4096);
+        for (w, h) in [
+            (1900.0_f32, 420.0_f32),
+            (640.0, 900.0),
+            (300.0, 120.0),
+            (77.0, 51.0),
+            (1024.0, 1024.0),
+        ] {
+            let tiles = build(&root, 12.0, 34.0, w, h, false, Some(root.size / 3));
+            let panel = (12.0, 34.0, 12.0 + w, 34.0 + h);
+            for tile in &tiles {
+                assert!(
+                    tile.x >= panel.0 - 0.51
+                        && tile.y >= panel.1 - 0.51
+                        && tile.x + tile.w <= panel.2 + 0.51
+                        && tile.y + tile.h <= panel.3 + 0.51,
+                    "at {w}x{h}, tile {:?} at ({}, {}) {}x{} escapes the panel",
+                    tile.name,
+                    tile.x,
+                    tile.y,
+                    tile.w,
+                    tile.h
+                );
+                assert!(
+                    tile.w >= 0.0 && tile.h >= 0.0,
+                    "at {w}x{h}, tile {:?} has a negative dimension",
+                    tile.name
+                );
+            }
+
+            // A child must sit inside the tile of the parent it was
+            // subdivided out of. If it did not, it would paint over a
+            // sibling and attribute that sibling's pixels to the wrong
+            // directory — the treemap would be quietly lying about where
+            // the bytes are.
+            for tile in tiles.iter().filter(|t| t.index_path.len() >= 2) {
+                let parent_path = &tile.index_path[..tile.index_path.len() - 1];
+                let Some(parent) = tiles.iter().find(|t| t.index_path == parent_path) else {
+                    continue;
+                };
+                assert!(
+                    tile.x >= parent.x - 0.51
+                        && tile.x + tile.w <= parent.x + parent.w + 0.51
+                        && tile.y + tile.h <= parent.y + parent.h + 0.51,
+                    "at {w}x{h}, {:?} escapes its parent {:?}",
+                    tile.name,
+                    parent.name
+                );
+            }
+        }
+    }
+
+    /// Siblings partition their parent: no overlaps, no holes.
+    #[test]
+    fn tiles_at_one_level_do_not_overlap_each_other() {
+        let root = drive_shaped(4, 5, 4096);
+        let tiles = build(&root, 0.0, 0.0, 900.0, 600.0, false, None);
+
+        let top: Vec<_> = tiles.iter().filter(|t| t.depth == 0).collect();
+        for (i, a) in top.iter().enumerate() {
+            for b in top.iter().skip(i + 1) {
+                let overlap_w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
+                let overlap_h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
+                assert!(
+                    overlap_w <= 0.51 || overlap_h <= 0.51,
+                    "{:?} and {:?} overlap by {overlap_w}x{overlap_h}",
+                    a.name,
+                    b.name
                 );
             }
         }

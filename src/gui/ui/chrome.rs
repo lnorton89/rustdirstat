@@ -9,6 +9,38 @@ use super::actions::*;
 use super::theme::*;
 use super::widgets::*;
 
+/// Padding inside each top-level menu name, and the gap between them.
+///
+/// The bar is the tightest strip in the window, and egui's own menu style
+/// is built for a compact look that leaves the names running into each
+/// other. `menu_bar_names_are_clearly_separated` pins the resulting
+/// on-screen gap so this cannot silently regress again.
+pub(super) const MENU_BAR_BUTTON_PADDING: Vec2 = Vec2::new(12.0, 6.0);
+pub(super) const MENU_BAR_ITEM_GAP: f32 = 10.0;
+/// Floors the test measures against. Deliberately below what is
+/// configured above, so ordinary tuning does not trip them, but far above
+/// what egui's `set_menu_style` leaves behind (2px padding, 0 gap) — the
+/// state this whole arrangement exists to prevent.
+#[cfg(test)]
+pub(super) const MENU_BAR_MIN_SIDE_PADDING: f32 = 8.0;
+#[cfg(test)]
+pub(super) const MENU_BAR_MIN_GAP: f32 = 6.0;
+
+/// A top-level menu name, recording where it landed so the layout test
+/// can measure the real gaps rather than trusting the spacing settings to
+/// have survived egui's own menu styling.
+fn menu_bar_button<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let response = ui.menu_button(label, add_contents);
+    #[cfg(test)]
+    super::probes::probe(&super::probes::TEST_MENU_BAR_RECTS)
+        .push((label.to_owned(), response.response.rect));
+    response
+}
+
 pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("menu_bar")
         .frame(
@@ -18,16 +50,16 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                 .stroke(Stroke::new(1.0_f32, BORDER_COLOR)),
         )
         .show(ctx, |ui| {
-            // The top-level menu names sit in the tightest strip in the
-            // window, so give them their own roomier padding rather than
-            // inheriting the compact one the toolbar buttons want. The
-            // gap between names matters as much as the padding inside
-            // them: with too little, "Cleanup Treemap View" reads as one
-            // run of words rather than three separate targets.
-            ui.spacing_mut().button_padding = Vec2::new(14.0, 6.0);
-            ui.spacing_mut().item_spacing.x = 6.0;
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
+                // These have to be set *inside* the bar, not before it.
+                // `menu::bar` runs egui's `set_menu_style` on the child
+                // Ui as its first act, which hard-codes button_padding to
+                // (2, 0) — so anything configured on the way in is
+                // discarded, and the names come out jammed together with
+                // no indication why.
+                ui.spacing_mut().button_padding = MENU_BAR_BUTTON_PADDING;
+                ui.spacing_mut().item_spacing.x = MENU_BAR_ITEM_GAP;
+                menu_bar_button(ui, "File", |ui| {
                     if menu_action(
                         ui,
                         !app.is_busy(),
@@ -54,7 +86,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                ui.menu_button("Edit", |ui| {
+                menu_bar_button(ui, "Edit", |ui| {
                     if menu_action(
                         ui,
                         app.selected_path.is_some(),
@@ -72,7 +104,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Cleanup", |ui| {
+                menu_bar_button(ui, "Cleanup", |ui| {
                     let selected = app.selected_path.is_some();
                     if icon_button(ui, selected, Icon::ExternalLink, "Open").clicked() {
                         open_selected(app);
@@ -100,7 +132,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Treemap", |ui| {
+                menu_bar_button(ui, "Treemap", |ui| {
                     if menu_choice(
                         ui,
                         app.orientation == PaneOrientation::Horizontal,
@@ -148,7 +180,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("View", |ui| {
+                menu_bar_button(ui, "View", |ui| {
                     view_menu_item(app, ui, FileView::AllFiles);
                     view_menu_item(app, ui, FileView::LargestFiles);
                     if icon_button(ui, !app.is_busy(), Icon::Duplicate, "Duplicate Files").clicked()
@@ -168,7 +200,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Tools", |ui| {
+                menu_bar_button(ui, "Tools", |ui| {
                     if icon_button(ui, true, Icon::Tools, "Windows maintenance…").clicked() {
                         app.show_windows_tools = true;
                         ui.close_menu();
@@ -179,7 +211,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Help", |ui| {
+                menu_bar_button(ui, "Help", |ui| {
                     if icon_button(ui, true, Icon::Help, "WinDirStat view guide").clicked() {
                         app.show_about = true;
                         ui.close_menu();
