@@ -13,7 +13,8 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
     let show_details = app.detailed;
 
     let items: Vec<ListItem> = app
-        .search_results
+        .search
+        .results
         .iter()
         .map(|hit| {
             let shown_size = if phys { hit.physical_size } else { hit.size };
@@ -55,9 +56,9 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let count = app.search_results.len();
-    let mut title = format!(" Search: \"{}\" — {} matches", app.search_query, count);
-    if app.search_truncated {
+    let count = app.search.results.len();
+    let mut title = format!(" Search: \"{}\" — {} matches", app.search.query, count);
+    if app.search.truncated {
         title.push_str(" (truncated)");
     }
     title.push_str(" — S to close ");
@@ -90,7 +91,7 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
         action: Action::StartSubtreeSearch,
     });
 
-    if let Some(err) = &app.search_error {
+    if let Some(err) = &app.search.error {
         let msg_area = Rect {
             x: area.x + 2,
             y: area.y + area.height.saturating_sub(2),
@@ -126,7 +127,8 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
     let mut group_num = 0usize;
 
     let items: Vec<ListItem> = app
-        .duplicate_rows
+        .duplicates
+        .rows
         .iter()
         .map(|row| match row {
             DupRow::Header { size, count } => {
@@ -154,23 +156,23 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let count = app.duplicate_rows.len();
-    let mut title = if app.duplicate_group_count == 0 {
+    let count = app.duplicates.rows.len();
+    let mut title = if app.duplicates.group_count == 0 {
         " No duplicate files found".to_string()
     } else {
         format!(
             " Duplicates: {} groups, {} wasted",
-            thousands(app.duplicate_group_count as u64),
-            human_bytes(app.duplicate_total_wasted)
+            thousands(app.duplicates.group_count as u64),
+            human_bytes(app.duplicates.total_wasted)
         )
     };
-    if app.duplicate_truncated {
+    if app.duplicates.truncated {
         title.push_str(" (showing largest groups)");
     }
-    if app.duplicate_skipped > 0 {
+    if app.duplicates.skipped > 0 {
         title.push_str(&format!(
             " ({} files not checked — limit reached)",
-            thousands(app.duplicate_skipped as u64)
+            thousands(app.duplicates.skipped as u64)
         ));
     }
     title.push_str(" — u to close ");

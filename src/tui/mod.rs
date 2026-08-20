@@ -243,7 +243,7 @@ fn browse<B: ratatui::backend::Backend>(
             if app.refresh_requested {
                 return Ok(BrowseOutcome::Refresh);
             }
-            if app.duplicate_scan_requested {
+            if app.duplicates.scan_requested {
                 // Needs its own blocking progress-screen loop below, which
                 // can't run mid-drain — stop draining and handle it once
                 // the current backlog processing yields control back.
@@ -254,8 +254,8 @@ fn browse<B: ratatui::backend::Backend>(
             }
         }
 
-        if app.duplicate_scan_requested {
-            app.duplicate_scan_requested = false;
+        if app.duplicates.scan_requested {
+            app.duplicates.scan_requested = false;
             if let Some(scan) = run_duplicate_scan(terminal, &app.tree)? {
                 app.set_duplicate_results(scan);
             }

@@ -135,9 +135,9 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, app, chunks[0]);
 
-    if app.show_duplicates {
+    if app.duplicates.visible {
         draw_duplicates(f, app, chunks[1]);
-    } else if app.show_search {
+    } else if app.search.visible {
         draw_search_results(f, app, chunks[1]);
     } else if app.show_top_files {
         draw_top_files(f, app, chunks[1]);
@@ -182,11 +182,11 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
         draw_confirm_popup(f, app, &name, permanent, is_dir);
     }
 
-    if app.search_mode {
+    if app.search.entry_mode {
         draw_search_prompt(f, app);
     }
 
-    if app.move_mode {
+    if app.move_to.entry_mode {
         draw_move_prompt(f, app);
     }
 
@@ -194,11 +194,11 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
         draw_properties_popup(f, app);
     }
 
-    if app.show_wintools {
+    if app.wintools.visible {
         draw_wintools_popup(f, app);
     }
 
-    if let Some(idx) = app.pending_wintool {
+    if let Some(idx) = app.wintools.pending {
         draw_wintool_confirm_popup(f, app, idx);
     }
 

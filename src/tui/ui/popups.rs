@@ -29,7 +29,7 @@ pub(super) fn draw_search_prompt(f: &mut Frame, app: &mut App) {
     let mut text = vec![
         Line::from(vec![
             Span::raw("> "),
-            Span::raw(&app.search_query),
+            Span::raw(&app.search.query),
             Span::raw("▌"),
         ]),
         Line::from(""),
@@ -72,7 +72,7 @@ pub(super) fn draw_move_prompt(f: &mut Frame, app: &mut App) {
     let mut text = vec![
         Line::from(vec![
             Span::raw("> "),
-            Span::raw(&app.move_destination),
+            Span::raw(&app.move_to.destination),
             Span::raw("▌"),
         ]),
         Line::from(""),
@@ -204,7 +204,7 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
     // "exactly one," which every selected entry's description does.
     let mut row = 0u16;
     for (i, tool) in crate::wintools::TOOLS.iter().enumerate() {
-        let selected = i == app.wintools_selected;
+        let selected = i == app.wintools.selected;
         let name_style = if !available {
             Style::default().fg(theme::MUTED)
         } else if selected {

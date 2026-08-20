@@ -123,6 +123,57 @@ pub(super) struct PendingDelete {
     pub is_dir: bool,
 }
 
+/// Text-entry state for "Move to" (`M`) — the destination folder,
+/// entered the same way the search and filter prompts are.
+#[derive(Default)]
+pub(super) struct MoveState {
+    pub entry_mode: bool,
+    pub destination: String,
+}
+
+/// The Windows system-maintenance tools menu (`T`) — present on every
+/// platform (see `wintools`'s module doc for why), just reporting every
+/// entry as unavailable off Windows rather than not existing.
+#[derive(Default)]
+pub(super) struct WinToolsState {
+    pub visible: bool,
+    pub selected: usize,
+    /// Set while a destructive tool waits on a yes/no confirmation,
+    /// before `wintools::run` is actually called.
+    pub pending: Option<usize>,
+}
+
+/// The recursive name search: the query being typed, and the results.
+///
+/// Distinct from the quick `/` filter, which only narrows the current
+/// directory's direct children. `entry_mode` is the query text-entry
+/// state, `visible` is the results view.
+#[derive(Default)]
+pub(super) struct SearchState {
+    pub query: String,
+    pub entry_mode: bool,
+    pub visible: bool,
+    pub results: Vec<SearchHit>,
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
+/// The duplicate-files view and the last scan's results.
+#[derive(Default)]
+pub(super) struct DuplicatesState {
+    pub scan_requested: bool,
+    pub visible: bool,
+    pub rows: Vec<DupRow>,
+    pub group_count: usize,
+    pub total_wasted: u64,
+    /// Set when there were more groups than the view will list.
+    pub truncated: bool,
+    /// Files the scan never hashed, because it hit its candidate limit.
+    /// Shown, so "no more duplicates" is not confused with "we stopped
+    /// looking".
+    pub skipped: usize,
+}
+
 pub(super) struct App {
     pub tree: Tree,
     /// Indices (into each level's original, unsorted `children` vec) from
@@ -146,12 +197,7 @@ pub(super) struct App {
     /// Recursive subtree search (distinct from `filter`, which only
     /// narrows the current directory's direct children): `search_mode` is
     /// the query text-entry state, `show_search` is the results view.
-    pub search_query: String,
-    pub search_mode: bool,
-    pub show_search: bool,
-    pub search_results: Vec<SearchHit>,
-    pub search_truncated: bool,
-    pub search_error: Option<String>,
+    pub search: SearchState,
     pub show_help: bool,
     pub refresh_requested: bool,
     /// Show file/dir counts and modified dates in the list — off by
@@ -173,29 +219,10 @@ pub(super) struct App {
     /// its own progress screen — hashing file content can take a while on
     /// a large tree, which doesn't fit the instant request/dispatch model
     /// every other action uses.
-    pub duplicate_scan_requested: bool,
-    pub show_duplicates: bool,
-    pub duplicate_rows: Vec<DupRow>,
-    pub duplicate_group_count: usize,
-    pub duplicate_total_wasted: u64,
-    pub duplicate_truncated: bool,
-    /// Files the duplicate scan never hashed, because it hit its
-    /// candidate limit. Shown, so "no more duplicates" is not confused
-    /// with "we stopped looking".
-    pub duplicate_skipped: usize,
-    /// Text-entry state for "Move to" (`M`) — the destination folder,
-    /// entered the same way the search/filter prompts work.
-    pub move_mode: bool,
-    pub move_destination: String,
+    pub duplicates: DuplicatesState,
+    pub move_to: MoveState,
     pub show_properties: bool,
-    /// The Windows system-maintenance tools menu (`T`) — present on every
-    /// platform (see `wintools`'s module doc for why), just reporting
-    /// every entry as unavailable off Windows rather than not existing.
-    pub show_wintools: bool,
-    pub wintools_selected: usize,
-    /// Set while a destructive tool is waiting on a yes/no confirmation
-    /// before `wintools::run` is actually called.
-    pub pending_wintool: Option<usize>,
+    pub wintools: WinToolsState,
 }
 
 const TREEMAP_SPLIT_MIN: u16 = 20;
@@ -223,12 +250,7 @@ impl App {
             filter_mode: false,
             show_top_files: false,
             top_files_cache: vec![],
-            search_query: String::new(),
-            search_mode: false,
-            show_search: false,
-            search_results: vec![],
-            search_truncated: false,
-            search_error: None,
+            search: SearchState::default(),
             show_help: false,
             refresh_requested: false,
             detailed: false,
@@ -237,19 +259,10 @@ impl App {
             resizing_treemap: false,
             body_x: 0,
             body_width: 0,
-            duplicate_scan_requested: false,
-            show_duplicates: false,
-            duplicate_rows: vec![],
-            duplicate_group_count: 0,
-            duplicate_total_wasted: 0,
-            duplicate_truncated: false,
-            duplicate_skipped: 0,
-            move_mode: false,
-            move_destination: String::new(),
+            duplicates: DuplicatesState::default(),
+            move_to: MoveState::default(),
             show_properties: false,
-            show_wintools: false,
-            wintools_selected: 0,
-            pending_wintool: None,
+            wintools: WinToolsState::default(),
         };
         app.refresh_ext_stats();
         app
@@ -394,26 +407,26 @@ impl App {
                 self.navigate_to(idx_path);
             }
             self.show_top_files = false;
-        } else if self.show_search {
-            if let Some(hit) = self.search_results.get(self.selected) {
+        } else if self.search.visible {
+            if let Some(hit) = self.search.results.get(self.selected) {
                 let idx_path = hit.index_path.clone();
                 self.navigate_to(idx_path);
             }
-            self.show_search = false;
-        } else if self.show_duplicates {
+            self.search.visible = false;
+        } else if self.duplicates.visible {
             // Unlike the top-files/search rows above, not every row here is
             // a navigable item — group headers are rows too. Landing on one
             // and leaving `selected` unchanged would carry a duplicates-list
             // row index into the browse view's unrelated child list, so any
             // non-member row resets it instead of leaving it stale.
-            match self.duplicate_rows.get(self.selected) {
+            match self.duplicates.rows.get(self.selected) {
                 Some(DupRow::Member { index_path }) => {
                     let idx_path = index_path.clone();
                     self.navigate_to_absolute(idx_path);
                 }
                 _ => self.selected = 0,
             }
-            self.show_duplicates = false;
+            self.duplicates.visible = false;
         }
     }
 
@@ -426,10 +439,10 @@ impl App {
 
     pub(super) fn set_duplicate_results(&mut self, scan: crate::duplicates::DupScan) {
         let groups = scan.groups;
-        self.duplicate_skipped = scan.skipped;
-        self.duplicate_group_count = groups.len();
-        self.duplicate_truncated = groups.len() > Self::MAX_DUPLICATE_DISPLAY_GROUPS;
-        self.duplicate_total_wasted = groups
+        self.duplicates.skipped = scan.skipped;
+        self.duplicates.group_count = groups.len();
+        self.duplicates.truncated = groups.len() > Self::MAX_DUPLICATE_DISPLAY_GROUPS;
+        self.duplicates.total_wasted = groups
             .iter()
             .map(|g| g.size * (g.files.len() as u64 - 1))
             .sum();
@@ -446,20 +459,20 @@ impl App {
                 });
             }
         }
-        self.duplicate_rows = rows;
-        self.show_duplicates = true;
-        self.show_search = false;
+        self.duplicates.rows = rows;
+        self.duplicates.visible = true;
+        self.search.visible = false;
         self.show_top_files = false;
         self.selected = 0;
     }
 
     fn run_subtree_search(&mut self) {
-        let outcome = search::search(self.current_node(), &self.search_query);
-        self.search_error = outcome.error;
-        self.search_truncated = outcome.truncated;
-        self.search_results = outcome.hits;
-        self.show_search = true;
-        self.search_mode = false;
+        let outcome = search::search(self.current_node(), &self.search.query);
+        self.search.error = outcome.error;
+        self.search.truncated = outcome.truncated;
+        self.search.results = outcome.hits;
+        self.search.visible = true;
+        self.search.entry_mode = false;
         self.selected = 0;
     }
 
@@ -480,7 +493,7 @@ impl App {
             self.show_properties = false;
             return Ok(());
         }
-        if self.pending_wintool.is_some() {
+        if self.wintools.pending.is_some() {
             // Same rule as the delete confirmation below: this dialog
             // offers `[Y]es` and `[N]o`, and a key it does not offer
             // leaves it alone rather than dismissing it.
@@ -496,19 +509,19 @@ impl App {
             };
             return self.dispatch(action);
         }
-        if self.show_wintools {
+        if self.wintools.visible {
             match code {
-                KeyCode::Esc | KeyCode::Char('T') => self.show_wintools = false,
+                KeyCode::Esc | KeyCode::Char('T') => self.wintools.visible = false,
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.wintools_selected = self.wintools_selected.saturating_sub(1);
+                    self.wintools.selected = self.wintools.selected.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if self.wintools_selected + 1 < crate::wintools::TOOLS.len() {
-                        self.wintools_selected += 1;
+                    if self.wintools.selected + 1 < crate::wintools::TOOLS.len() {
+                        self.wintools.selected += 1;
                     }
                 }
                 KeyCode::Enter => {
-                    return self.dispatch(Action::SelectWinTool(self.wintools_selected))
+                    return self.dispatch(Action::SelectWinTool(self.wintools.selected))
                 }
                 _ => {}
             }
@@ -554,26 +567,26 @@ impl App {
             }
             return Ok(());
         }
-        if self.search_mode {
+        if self.search.entry_mode {
             match code {
-                KeyCode::Esc => self.search_mode = false,
+                KeyCode::Esc => self.search.entry_mode = false,
                 KeyCode::Enter => self.run_subtree_search(),
                 KeyCode::Backspace => {
-                    self.search_query.pop();
+                    self.search.query.pop();
                 }
-                KeyCode::Char(c) => self.search_query.push(c),
+                KeyCode::Char(c) => self.search.query.push(c),
                 _ => {}
             }
             return Ok(());
         }
-        if self.move_mode {
+        if self.move_to.entry_mode {
             match code {
-                KeyCode::Esc => self.move_mode = false,
+                KeyCode::Esc => self.move_to.entry_mode = false,
                 KeyCode::Enter => self.perform_move(),
                 KeyCode::Backspace => {
-                    self.move_destination.pop();
+                    self.move_to.destination.pop();
                 }
-                KeyCode::Char(c) => self.move_destination.push(c),
+                KeyCode::Char(c) => self.move_to.destination.push(c),
                 _ => {}
             }
             return Ok(());
@@ -704,10 +717,10 @@ impl App {
             Action::Down => {
                 let len = if self.show_top_files {
                     self.top_files_cache.len()
-                } else if self.show_search {
-                    self.search_results.len()
-                } else if self.show_duplicates {
-                    self.duplicate_rows.len()
+                } else if self.search.visible {
+                    self.search.results.len()
+                } else if self.duplicates.visible {
+                    self.duplicates.rows.len()
                 } else {
                     self.display_children().len()
                 };
@@ -791,8 +804,8 @@ impl App {
             Action::StartMove => {
                 self.exit_flat_view_if_needed();
                 if self.display_children().get(self.selected).is_some() {
-                    self.move_mode = true;
-                    self.move_destination.clear();
+                    self.move_to.entry_mode = true;
+                    self.move_to.destination.clear();
                 }
             }
             Action::ToggleProperties => {
@@ -800,24 +813,24 @@ impl App {
                 self.show_properties = !self.show_properties;
             }
             Action::ToggleWinTools => {
-                self.show_wintools = !self.show_wintools;
-                self.wintools_selected = 0;
+                self.wintools.visible = !self.wintools.visible;
+                self.wintools.selected = 0;
             }
             Action::SelectWinTool(idx) => {
                 if let Some(tool) = crate::wintools::TOOLS.get(idx) {
                     if tool.destructive {
-                        self.pending_wintool = Some(idx);
+                        self.wintools.pending = Some(idx);
                     } else {
                         self.run_wintool(idx);
                     }
                 }
             }
             Action::ConfirmWinTool => {
-                if let Some(idx) = self.pending_wintool.take() {
+                if let Some(idx) = self.wintools.pending.take() {
                     self.run_wintool(idx);
                 }
             }
-            Action::CancelWinTool => self.pending_wintool = None,
+            Action::CancelWinTool => self.wintools.pending = None,
             Action::Quit => self.should_quit = true,
             Action::ToggleHighlight(cat) => {
                 self.highlighted_category = if self.highlighted_category == Some(cat) {
@@ -836,20 +849,20 @@ impl App {
                     self.show_top_files = false;
                     return Ok(());
                 }
-                if self.show_search {
-                    if let Some(hit) = self.search_results.get(idx) {
+                if self.search.visible {
+                    if let Some(hit) = self.search.results.get(idx) {
                         let idx_path = hit.index_path.clone();
                         self.navigate_to(idx_path);
                     }
-                    self.show_search = false;
+                    self.search.visible = false;
                     return Ok(());
                 }
-                if self.show_duplicates {
-                    match self.duplicate_rows.get(idx) {
+                if self.duplicates.visible {
+                    match self.duplicates.rows.get(idx) {
                         Some(DupRow::Member { index_path }) => {
                             let idx_path = index_path.clone();
                             self.navigate_to_absolute(idx_path);
-                            self.show_duplicates = false;
+                            self.duplicates.visible = false;
                         }
                         Some(DupRow::Header { .. }) => self.selected = idx,
                         None => {}
@@ -875,8 +888,8 @@ impl App {
             Action::NavigateTo(path) => self.navigate_to(path),
             Action::Refresh => self.refresh_requested = true,
             Action::ToggleTopFiles => {
-                self.show_search = false;
-                self.show_duplicates = false;
+                self.search.visible = false;
+                self.duplicates.visible = false;
                 self.show_top_files = !self.show_top_files;
                 self.selected = 0;
                 if self.show_top_files {
@@ -901,21 +914,21 @@ impl App {
                 // a filter isn't "act on the selected row", so it
                 // shouldn't move the browse location the way
                 // exit_flat_view_if_needed's callers do.
-                self.show_search = false;
+                self.search.visible = false;
                 self.show_top_files = false;
-                self.show_duplicates = false;
+                self.duplicates.visible = false;
                 self.filter_mode = true;
                 self.filter.clear();
                 self.selected = 0;
             }
             Action::StartSubtreeSearch => {
-                if self.show_search {
-                    self.show_search = false;
+                if self.search.visible {
+                    self.search.visible = false;
                 } else {
                     self.show_top_files = false;
-                    self.show_duplicates = false;
-                    self.search_mode = true;
-                    self.search_query.clear();
+                    self.duplicates.visible = false;
+                    self.search.entry_mode = true;
+                    self.search.query.clear();
                     self.selected = 0;
                 }
             }
@@ -925,12 +938,12 @@ impl App {
                 self.refresh_ext_stats();
             }
             Action::ToggleDuplicates => {
-                if self.show_duplicates {
-                    self.show_duplicates = false;
+                if self.duplicates.visible {
+                    self.duplicates.visible = false;
                 } else {
-                    self.show_search = false;
+                    self.search.visible = false;
                     self.show_top_files = false;
-                    self.duplicate_scan_requested = true;
+                    self.duplicates.scan_requested = true;
                 }
             }
             Action::ConfirmDelete | Action::ConfirmEmpty | Action::CancelDelete => {}
@@ -991,7 +1004,7 @@ impl App {
             }
             Err(e) => self.message = Some(format!("{}: {e}", tool.name)),
         }
-        self.show_wintools = false;
+        self.wintools.visible = false;
     }
 
     /// Moves the selected item to the folder (or exact path) typed into
@@ -1002,8 +1015,8 @@ impl App {
     /// either case without a real re-scan isn't worth the complexity for
     /// an action this infrequent.
     fn perform_move(&mut self) {
-        self.move_mode = false;
-        let dest_input = self.move_destination.trim().to_string();
+        self.move_to.entry_mode = false;
+        let dest_input = self.move_to.destination.trim().to_string();
         if dest_input.is_empty() {
             return;
         }
@@ -1312,19 +1325,19 @@ mod tests {
             KeyCode::Char('x'),
         ] {
             let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
-            app.pending_wintool = Some(0);
+            app.wintools.pending = Some(0);
             app.handle_key(code)?;
             assert!(
-                app.pending_wintool.is_some(),
+                app.wintools.pending.is_some(),
                 "{code:?} dismissed the tool confirmation, but the dialog does not offer it"
             );
         }
         for code in [KeyCode::Char('n'), KeyCode::Esc] {
             let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
-            app.pending_wintool = Some(0);
+            app.wintools.pending = Some(0);
             app.handle_key(code)?;
             assert!(
-                app.pending_wintool.is_none(),
+                app.wintools.pending.is_none(),
                 "{code:?} should cancel the tool confirmation"
             );
         }
