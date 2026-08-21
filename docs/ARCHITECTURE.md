@@ -2,6 +2,9 @@
 
 Two front ends over one scanning core. Nothing UI-shaped lives below
 `src/tui/` or `src/gui/`, and neither front end knows the other exists.
+The [README](../README.md) has the user-facing overview; see
+[`PERFORMANCE.md`](PERFORMANCE.md) for the scale constraints that shape
+this design.
 
 ```
                     ┌──────────────┐

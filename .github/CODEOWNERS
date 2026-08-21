@@ -1,0 +1,8 @@
+# Code owners for pull-request review requests.
+#
+# The project is maintained by one person, so the default owner is the
+# maintainer for everything. If a path ever needs a different reviewer,
+# add a more specific pattern above this line — CODEOWNERS matches the
+# most specific pattern, not the last one.
+*
+@lnorton89

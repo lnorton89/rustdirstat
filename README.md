@@ -342,6 +342,14 @@ map.
   feel like the app isn't responding, even though it was always going to
   get there eventually.
 
+## Contributing
+
+Contributions are welcome — bug reports, feature requests, and pull
+requests alike. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to build
+and test the project, the rules the codebase enforces, and what a pull
+request needs before it can land. Security issues are handled privately —
+see [`SECURITY.md`](SECURITY.md).
+
 ## License
 
 MIT

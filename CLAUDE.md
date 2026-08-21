@@ -9,6 +9,10 @@ Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and
 per-frame path. Those two are where the non-obvious constraints live; this
 file is the short version.
 
+For the human-facing contribution guide — how to build and test, the rules
+CI enforces, and what a pull request needs — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Commands
 
 ```bash

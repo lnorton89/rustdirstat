@@ -8,7 +8,9 @@ over 2 GB resident.
 
 Everything below exists because that scale breaks assumptions that hold
 fine on a project folder. If you are changing the GUI, this is the file to
-read first.
+read first. For the module map, see
+[`ARCHITECTURE.md`](ARCHITECTURE.md); the [README](../README.md) has the
+user-facing overview.
 
 ## 1. The GUI is immediate mode: every frame rebuilds the window
 

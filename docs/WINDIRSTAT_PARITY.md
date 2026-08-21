@@ -3,7 +3,8 @@
 The reference installed on the development machine is **WinDirStat
 1.1.2.80 (Unicode)**. This document deliberately compares rustdirstat with
 that installed version. WinDirStat 2.x is a different, actively evolving
-product surface with additional analytics visualizations.
+product surface with additional analytics visualizations. It backs the
+view-by-view comparison summarized in the [README](../README.md).
 
 ## The three WinDirStat views
 
