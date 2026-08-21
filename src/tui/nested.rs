@@ -252,6 +252,7 @@ mod tests {
             category: Some(Category::NoExtension),
             ext_totals: Vec::new(),
             unreadable_count: 0,
+            file_id: None,
         }
     }
 
@@ -271,6 +272,7 @@ mod tests {
             category: None,
             ext_totals: vec![(0, 0, 0); Category::COUNT],
             unreadable_count: 0,
+            file_id: None,
         }
     }
 

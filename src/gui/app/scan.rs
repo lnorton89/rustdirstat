@@ -254,6 +254,7 @@ impl GuiApp {
         self.largest_files = Vec::new();
         self.duplicate_groups = Vec::new();
         self.search.results = Vec::new();
+        self.search_rx = None;
         let root_path = self.tree.root_path.clone();
         drop_in_background(std::mem::replace(
             &mut self.tree,
@@ -309,6 +310,9 @@ impl GuiApp {
                     self.extensions = extensions;
                     self.sort_extensions();
                     self.largest_files = largest_files;
+                    // A search in flight answered about the tree that was
+                    // just retired; its result is stale by construction.
+                    self.search_rx = None;
                     self.search.results.clear();
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
@@ -318,6 +322,26 @@ impl GuiApp {
                     self.status = Some(format!("Scan failed: {error}"));
                 }
             }
+        }
+
+        let search_result = self.search_rx.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(outcome) => Some(outcome),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(crate::search::SearchOutcome {
+                hits: vec![],
+                truncated: false,
+                error: Some("The search worker stopped unexpectedly".to_string()),
+            }),
+        });
+        if let Some(outcome) = search_result {
+            self.search_rx = None;
+            self.search.results = outcome.hits;
+            self.search.error = outcome.error;
+            self.status = Some(if outcome.truncated {
+                "Search capped at 2,000 results".to_string()
+            } else {
+                format!("{} search result(s)", self.search.results.len())
+            });
         }
 
         let duplicate_result = self

@@ -128,25 +128,33 @@ pub(in crate::gui) fn collect_extension_rows(node: &Node, physical: bool) -> Vec
         })
         .collect()
 }
-
+/// Aggregates every file in `node`'s subtree into the extension table.
+///
+/// Iterative for the reason every walk here is: this runs when the zoom
+/// changes, and a zoomed subtree is as deep as the user's filesystem, so
+/// a recursion would put a user-chosen depth on the call stack.
 pub(in crate::gui) fn collect_extensions(
     node: &Node,
     physical: bool,
     out: &mut HashMap<String, (Category, u64, u64)>,
 ) {
-    for child in &node.children {
-        if child.is_dir {
-            collect_extensions(child, physical, out);
-        } else {
-            // Display-only territory: the legend's labels. The raw bytes
-            // stay on the node; `category_for_name` takes them as-is.
-            let extension = extension_label(&child.name.to_string_lossy());
-            let category = child
-                .category
-                .unwrap_or_else(|| category_for_name(&child.name));
-            let entry = out.entry(extension).or_insert((category, 0, 0));
-            entry.1 = entry.1.saturating_add(child.effective_size(physical));
-            entry.2 = entry.2.saturating_add(1);
+    let mut pending = vec![node];
+    while let Some(current) = pending.pop() {
+        for child in &current.children {
+            if child.is_dir {
+                pending.push(child);
+            } else {
+                // Display-only territory: the legend's labels. The raw
+                // bytes stay on the node; `category_for_name` takes them
+                // as-is.
+                let extension = extension_label(&child.name.to_string_lossy());
+                let category = child
+                    .category
+                    .unwrap_or_else(|| category_for_name(&child.name));
+                let entry = out.entry(extension).or_insert((category, 0, 0));
+                entry.1 = entry.1.saturating_add(child.effective_size(physical));
+                entry.2 = entry.2.saturating_add(1);
+            }
         }
     }
 }
@@ -235,15 +243,37 @@ impl GuiApp {
         self.largest_files = top_files::top_k(&self.tree.root, 200);
     }
 
+    /// Whether a search is still running — used by tests to wait for the
+    /// worker instead of reading results before they exist.
+    #[cfg(test)]
+    pub(in crate::gui) fn search_running(&self) -> bool {
+        self.search_rx.is_some()
+    }
+
     pub(in crate::gui) fn run_search(&mut self) {
-        let outcome = search::search(&self.tree.root, &self.search.query);
-        self.search.results = outcome.hits;
-        self.search.error = outcome.error;
-        self.file_view = FileView::SearchResults;
-        self.status = Some(if outcome.truncated {
-            "Search capped at 2,000 results".to_string()
-        } else {
-            format!("{} search result(s)", self.search.results.len())
+        let query = self.search.query.clone();
+        if query.is_empty() {
+            self.search.results.clear();
+            self.search.error = None;
+            self.search_rx = None;
+            self.file_view = FileView::SearchResults;
+            return;
+        }
+        // Off the frame thread, like the scan and duplicate workers: a
+        // search walks every node in the tree, and on a whole-drive scan
+        // that is ~10M regex matches — a synchronous call froze the
+        // window for as long as the search took. The worker holds its own
+        // `Arc` to the tree, so it is safe to run alongside a rescan; if
+        // a new tree lands first its result is dropped with the receiver.
+        let tree = Arc::clone(&self.tree);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(search::search(&tree.root, &query));
         });
+        self.search_rx = Some(rx);
+        self.search.results.clear();
+        self.search.error = None;
+        self.file_view = FileView::SearchResults;
+        self.status = Some("Searching…".to_string());
     }
 }

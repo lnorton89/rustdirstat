@@ -102,6 +102,14 @@ pub struct Node {
     /// tell "this subtree is 40 KB" from "this subtree is 40 KB *and we
     /// couldn't read some of it*" — the two look identical otherwise.
     pub unreadable_count: u64,
+    /// The file's filesystem identity — (device, inode) on Unix, where it
+    /// comes free out of the scan's `stat()`. Every hard link to the
+    /// same file shares one, which is what lets duplicate detection
+    /// distinguish "two copies" from "two names for one file" (deleting
+    /// an alias frees nothing until the last one goes). `None` on
+    /// platforms that would need an extra per-file syscall, and for
+    /// directories.
+    pub file_id: Option<crate::platform::FileId>,
 }
 
 /// A scanned tree plus the absolute path its root corresponds to.
@@ -260,6 +268,7 @@ impl Tree {
                     Vec::new()
                 },
                 unreadable_count: 0,
+                file_id: None,
             },
             root_path,
             volume_free: None,
@@ -378,6 +387,7 @@ pub mod fixtures {
             category: None,
             ext_totals: Vec::new(),
             unreadable_count: 0,
+            file_id: None,
         }
     }
 
@@ -400,6 +410,7 @@ pub mod fixtures {
             category: None,
             ext_totals: vec![(0, 0, 0); Category::COUNT],
             unreadable_count: 0,
+            file_id: None,
         }
     }
 

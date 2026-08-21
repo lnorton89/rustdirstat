@@ -94,8 +94,16 @@ pub(in crate::tui) enum Action {
 /// (not itself navigable — just a size/count label) or a member file
 /// (navigable, like a search hit).
 pub(in crate::tui) enum DupRow {
-    Header { size: u64, count: usize },
-    Member { index_path: Vec<usize> },
+    /// A group header: size, number of copies, and the bytes actually
+    /// reclaimable (hard-link aliases are not copies).
+    Header {
+        size: u64,
+        count: usize,
+        wasted: u64,
+    },
+    Member {
+        index_path: Vec<usize>,
+    },
 }
 
 pub(in crate::tui) struct PendingDelete {

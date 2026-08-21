@@ -19,6 +19,38 @@
 //! it deliberately isn't paid by default. Windows physical size falls back
 //! to the logical size instead of guessing.
 
+/// The filesystem identity of a file — every hard link to the same
+/// object shares one.
+///
+/// Used to keep hard links from being reported as duplicate *copies*
+/// (deleting an alias frees nothing until the last link disappears) and,
+/// eventually, from being double-counted in on-disk accounting.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FileId {
+    pub device: u64,
+    pub inode: u64,
+}
+
+/// The identity of the file `meta` describes, if the platform captures
+/// one for free. Unix gets `(st_dev, st_ino)` out of the `stat()` the
+/// scanner already makes; Windows would need a separate handle-based
+/// syscall per file, so it is `None` there and hard-link detection is
+/// simply unavailable — each pathname counts as its own file, as it
+/// always has.
+#[cfg(unix)]
+pub fn file_id(meta: &std::fs::Metadata) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    Some(FileId {
+        device: meta.dev(),
+        inode: meta.ino(),
+    })
+}
+
+#[cfg(not(unix))]
+pub fn file_id(_meta: &std::fs::Metadata) -> Option<FileId> {
+    None
+}
+
 #[cfg(unix)]
 pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;

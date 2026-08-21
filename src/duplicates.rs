@@ -15,8 +15,9 @@
 //! files before any file content is actually read from disk.
 
 use crate::model::{Node, Tree};
+use crate::platform::FileId;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -35,11 +36,31 @@ pub struct DupProgress {
 
 pub struct DupFile {
     pub index_path: Vec<usize>,
+    /// The file's identity — (device, inode) on Unix. Hard links to the
+    /// same file share one, which is what lets a group of same-content
+    /// files be told apart from one file with many names.
+    pub file_id: Option<FileId>,
 }
 
 pub struct DupGroup {
     pub size: u64,
     pub files: Vec<DupFile>,
+    /// How many distinct filesystem objects the group holds. Hard links
+    /// to one inode count once, not once per pathname; on platforms
+    /// without file identity this falls back to `files.len()`. This is
+    /// the number reclaimable space is computed from — deleting all but
+    /// one hard link frees nothing until the last link goes, so aliases
+    /// are not spare copies.
+    pub distinct_inodes: usize,
+}
+
+impl DupGroup {
+    /// The bytes actually reclaimable by deleting copies: size times the
+    /// copies beyond the first, where hard-link aliases are not copies.
+    pub fn reclaimable(&self) -> u64 {
+        self.size
+            .saturating_mul(self.distinct_inodes.saturating_sub(1) as u64)
+    }
 }
 
 /// The result of a duplicate scan, and what it had to leave out.
@@ -60,8 +81,9 @@ pub struct DupScan {
 /// only bites on trees with an implausible number of same-size files.
 const MAX_CANDIDATES: usize = 200_000;
 
-/// (index path from the tree root, absolute filesystem path) for one file.
-type SizeCandidate = (Vec<usize>, PathBuf);
+/// (index path from the tree root, absolute filesystem path, identity) for
+/// one file.
+type SizeCandidate = (Vec<usize>, PathBuf, Option<FileId>);
 
 pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> DupScan {
     find_duplicates_capped(tree, progress, MAX_CANDIDATES)
@@ -97,15 +119,15 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
     // identical files and the view reports a group of three, so someone
     // clearing duplicates is told there are two spare copies when there
     // are four. An absent group at least says nothing.
-    let mut candidates: Vec<(Vec<usize>, PathBuf, u64)> = Vec::new();
+    let mut candidates: Vec<(Vec<usize>, PathBuf, u64, Option<FileId>)> = Vec::new();
     let mut skipped = 0_usize;
     for (size, files) in size_groups {
         if candidates.len().saturating_add(files.len()) > cap {
             skipped = skipped.saturating_add(files.len());
             continue;
         }
-        for (idx, p) in files {
-            candidates.push((idx, p, size));
+        for (idx, p, file_id) in files {
+            candidates.push((idx, p, size, file_id));
         }
     }
     if let Some(p) = progress {
@@ -113,15 +135,15 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
             .store(candidates.len() as u64, Ordering::Relaxed);
     }
 
-    let hashed: Vec<(blake3::Hash, Vec<usize>, u64)> = candidates
+    let hashed: Vec<(blake3::Hash, Vec<usize>, u64, Option<FileId>)> = candidates
         .into_par_iter()
-        .filter_map(|(idx, path, size)| {
+        .filter_map(|(idx, path, size, file_id)| {
             if let Some(p) = progress {
                 if p.cancelled.load(Ordering::Relaxed) {
                     return None;
                 }
             }
-            let result = hash_file(&path).ok().map(|h| (h, idx, size));
+            let result = hash_file(&path).ok().map(|h| (h, idx, size, file_id));
             if let Some(p) = progress {
                 p.hashed.fetch_add(1, Ordering::Relaxed);
             }
@@ -129,19 +151,57 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
         })
         .collect();
 
-    let mut by_hash: HashMap<blake3::Hash, DupGroup> = HashMap::new();
-    for (hash, index_path, size) in hashed {
-        let group = by_hash.entry(hash).or_insert_with(|| DupGroup {
+    // Built through a side struct so the distinct-inode count can be
+    // computed while files are still arriving, then folded into the
+    // finished `DupGroup`.
+    struct Builder {
+        size: u64,
+        files: Vec<DupFile>,
+        ids: Vec<FileId>,
+        missing_id: bool,
+    }
+    let mut by_hash: HashMap<blake3::Hash, Builder> = HashMap::new();
+    for (hash, index_path, size, file_id) in hashed {
+        let builder = by_hash.entry(hash).or_insert_with(|| Builder {
             size,
             files: vec![],
+            ids: vec![],
+            missing_id: false,
         });
-        group.files.push(DupFile { index_path });
+        match file_id {
+            Some(id) => builder.ids.push(id),
+            None => builder.missing_id = true,
+        }
+        builder.files.push(DupFile {
+            index_path,
+            file_id,
+        });
     }
 
-    let mut groups: Vec<DupGroup> = by_hash
-        .into_values()
-        .filter(|g| g.files.len() > 1)
-        .collect();
+    let mut groups: Vec<DupGroup> = Vec::new();
+    for builder in by_hash.into_values() {
+        if builder.files.len() < 2 {
+            continue;
+        }
+        let distinct_inodes = if builder.missing_id {
+            // Identity unavailable (Windows): each pathname counts as its
+            // own file, as duplicate detection always has.
+            builder.files.len()
+        } else {
+            builder.ids.iter().collect::<HashSet<_>>().len()
+        };
+        // Same content, one inode — hard links, not copies. Deleting
+        // every path but one frees nothing, so claiming these as
+        // reclaimable duplicates would be a lie.
+        if distinct_inodes <= 1 {
+            continue;
+        }
+        groups.push(DupGroup {
+            size: builder.size,
+            files: builder.files,
+            distinct_inodes,
+        });
+    }
     // Same determinism concern as the size_groups sort above — `by_hash`
     // is also a `HashMap`, so ties on wasted space need an explicit,
     // deterministic tiebreaker rather than inheriting random iteration
@@ -149,8 +209,8 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
     // displayed stat; the first file's index path (unique per file)
     // resolves the rest, so the final order never depends on hashing.
     groups.sort_by(|a, b| {
-        let wasted_a = a.size * (a.files.len() as u64 - 1);
-        let wasted_b = b.size * (b.files.len() as u64 - 1);
+        let wasted_a = a.reclaimable();
+        let wasted_b = b.reclaimable();
         wasted_b
             .cmp(&wasted_a)
             .then_with(|| b.size.cmp(&a.size))
@@ -212,9 +272,11 @@ fn collect_by_size(
             continue;
         }
         if !child.is_symlink && child.size > 0 {
-            out.entry(child.size)
-                .or_default()
-                .push((index_path.clone(), path.clone()));
+            out.entry(child.size).or_default().push((
+                index_path.clone(),
+                path.clone(),
+                child.file_id,
+            ));
         }
         path.pop();
         index_path.pop();
@@ -294,6 +356,53 @@ mod tests {
             );
         }
         fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    /// Two hard links to one file are not reported as duplicates: their
+    /// content is identical, but deleting one frees nothing until the
+    /// last link goes, so calling the pair "reclaimable copies" would be
+    /// a lie. The same-content group must be dropped, while a genuine
+    /// duplicate pair beside it still reports its real reclaimable bytes.
+    #[cfg(unix)]
+    #[test]
+    fn hard_links_are_not_reported_as_reclaimable_duplicates() -> anyhow::Result<()> {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "rustdirstat_hardlink_{}_{unique}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root)?;
+
+        // One file with two names, and a real pair of copies.
+        fs::write(root.join("one.bin"), b"same bytes")?;
+        fs::hard_link(root.join("one.bin"), root.join("two.bin"))?;
+        fs::write(root.join("a.dat"), b"real duplicate")?;
+        fs::write(root.join("b.dat"), b"real duplicate")?;
+
+        let tree = crate::scanner::scan(&root, None)?;
+        let scan = find_duplicates(&tree, None);
+        assert_eq!(
+            scan.groups.len(),
+            1,
+            "only the genuine duplicate pair may form a group"
+        );
+        let Some(group) = scan.groups.first() else {
+            return Ok(());
+        };
+        assert_eq!(
+            group.distinct_inodes, 2,
+            "the group holds two distinct files, not two names for one"
+        );
+        assert_eq!(
+            group.reclaimable(),
+            group.size,
+            "one spare copy of the duplicated file is reclaimable"
+        );
+
+        fs::remove_dir_all(&root)?;
         Ok(())
     }
 }

@@ -89,6 +89,7 @@ mod tests {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
         }
     }
 

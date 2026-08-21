@@ -150,6 +150,7 @@ mod tests {
             category: Some(Category::NoExtension),
             ext_totals: Vec::new(),
             unreadable_count: 0,
+            file_id: None,
         }
     }
 
@@ -175,6 +176,7 @@ mod tests {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
         }
     }
 

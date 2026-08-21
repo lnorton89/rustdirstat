@@ -241,13 +241,11 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (group_idx, group) in app.duplicate_groups.iter().enumerate() {
-                let wasted = group
-                    .size
-                    .saturating_mul(group.files.len().saturating_sub(1) as u64);
+                let wasted = group.reclaimable();
                 egui::CollapsingHeader::new(format!(
                     "Group {} · {} copies · {} each · {} reclaimable",
                     group_idx + 1,
-                    group.files.len(),
+                    group.distinct_inodes,
                     human_bytes(group.size),
                     human_bytes(wasted)
                 ))

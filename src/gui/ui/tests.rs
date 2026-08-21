@@ -64,6 +64,7 @@ fn file(name: &str, size: u64) -> Node {
         category: Some(category),
         ext_totals: Vec::new(),
         unreadable_count: 0,
+        file_id: None,
     }
 }
 
@@ -88,6 +89,7 @@ fn app_with_one_file() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
         },
         volume_free: None,
         volume_total: None,
@@ -113,6 +115,7 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
         category: None,
         ext_totals: Vec::new(),
         unreadable_count: 0,
+        file_id: None,
     };
     let sibling = file("beside.txt", 128);
     let mut totals = vec![(0, 0, 0); Category::COUNT];
@@ -134,6 +137,7 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
         },
         volume_free: None,
         volume_total: None,
@@ -214,6 +218,7 @@ fn app_with_sortable_files() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
         },
         volume_free: None,
         volume_total: None,
@@ -1724,6 +1729,14 @@ fn clicking_a_rendered_search_result_changes_selection() -> anyhow::Result<()> {
     let mut app = app_with_one_file();
     app.search.query = "*".to_string();
     app.run_search();
+    // The search runs on a worker now; wait for it rather than reading
+    // results before they exist.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.search_running() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!app.search_running(), "the search should finish");
     probe(&TEST_SEARCH_ROW_RECTS).clear();
     for _ in 0..4 {
         render_search(&ctx, &mut app, raw_input(Vec::new()));
@@ -1747,8 +1760,10 @@ fn clicking_a_rendered_duplicate_member_changes_selection() -> anyhow::Result<()
     let mut app = app_with_one_file();
     app.duplicate_groups = vec![crate::duplicates::DupGroup {
         size: 128,
+        distinct_inodes: 1,
         files: vec![crate::duplicates::DupFile {
             index_path: vec![0],
+            file_id: None,
         }],
     }];
     probe(&TEST_DUPLICATE_ROW_RECTS).clear();
@@ -2797,6 +2812,7 @@ fn app_with_many_extensions() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
         },
     })
 }

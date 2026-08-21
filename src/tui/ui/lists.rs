@@ -106,14 +106,17 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         .rows
         .iter()
         .map(|row| match row {
-            DupRow::Header { size, count } => {
+            DupRow::Header {
+                size,
+                count,
+                wasted,
+            } => {
                 group_num += 1;
-                let wasted = *size * (*count as u64 - 1);
                 ListItem::new(Line::from(Span::styled(
                     format!(
                         "Group {group_num} — {count} × {}  ({} wasted)",
                         human_bytes(*size),
-                        human_bytes(wasted)
+                        human_bytes(*wasted)
                     ),
                     Style::default()
                         .fg(theme::ACCENT)

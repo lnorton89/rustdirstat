@@ -264,6 +264,11 @@ pub(in crate::gui) struct GuiApp {
     /// the workspace anyway.
     restore: Option<scan::RestoreState>,
     duplicate_rx: Option<mpsc::Receiver<crate::duplicates::DupScan>>,
+    /// A search in flight. Search is the one whole-tree walk that used
+    /// to run on the frame thread — ten million nodes of regex matching
+    /// froze the window — so it runs on a worker like scanning and
+    /// duplicates do, and `poll_background` applies the result.
+    search_rx: Option<mpsc::Receiver<crate::search::SearchOutcome>>,
     pub tools: ToolsState,
 }
 
@@ -310,6 +315,7 @@ impl GuiApp {
             scan_resets_workspace: false,
             restore: None,
             duplicate_rx: None,
+            search_rx: None,
             tools: ToolsState::default(),
         };
         app.refresh_extensions();
@@ -417,6 +423,7 @@ mod tests {
                 category: Some(Category::NoExtension),
                 ext_totals: Vec::new(),
                 unreadable_count: 0,
+                file_id: None,
             }
         }
         let mut totals = vec![(0, 0, 0); Category::COUNT];
@@ -439,6 +446,7 @@ mod tests {
                 category: None,
                 ext_totals: totals,
                 unreadable_count: 0,
+                file_id: None,
             },
         })
     }
