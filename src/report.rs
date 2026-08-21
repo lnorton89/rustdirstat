@@ -118,7 +118,7 @@ fn write_children(out: &mut String, node: &Node, depth: usize, top: usize, max_d
             indent,
             human_bytes(child.size),
             pct,
-            child.name,
+            child.name.to_string_lossy(),
             suffix,
             err,
             warn
@@ -137,7 +137,7 @@ mod tests {
 
     fn file(name: &str, size: u64) -> Node {
         Node {
-            name: name.to_owned(),
+            name: std::ffi::OsString::from(name),
             is_dir: false,
             is_symlink: false,
             size,
@@ -162,7 +162,7 @@ mod tests {
             slot.2 = children.iter().map(|c| c.file_count).sum();
         }
         Node {
-            name: name.to_owned(),
+            name: std::ffi::OsString::from(name),
             is_dir: true,
             is_symlink: false,
             size,

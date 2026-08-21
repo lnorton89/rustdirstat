@@ -76,7 +76,7 @@ mod tests {
             }
         }
         Node {
-            name: "dir".to_owned(),
+            name: std::ffi::OsString::from("dir"),
             is_dir: true,
             is_symlink: false,
             size: pairs.iter().map(|p| p.1).sum(),

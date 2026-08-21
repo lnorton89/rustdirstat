@@ -148,7 +148,8 @@ pub(in crate::gui) fn push_tree_rows(
             child_path,
             depth + 1,
             node_size,
-            child.name.clone(),
+            // The row's display name; identity stays on the node.
+            child.name.to_string_lossy().to_string(),
             app,
             out,
         );
@@ -174,7 +175,7 @@ impl GuiApp {
         self.selected_path = Some(path.clone());
         let selected = self.tree.node_for(&path);
         if !selected.is_dir {
-            self.highlighted_extension = Some(extension_label(&selected.name));
+            self.highlighted_extension = Some(extension_label(&selected.name.to_string_lossy()));
             self.highlighted_category = selected.category;
         } else {
             self.highlighted_extension = None;

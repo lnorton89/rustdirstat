@@ -100,7 +100,9 @@ pub(in crate::tui) enum DupRow {
 
 pub(in crate::tui) struct PendingDelete {
     pub orig_idx: usize,
-    pub name: String,
+    /// The raw filesystem name, kept `OsString` so a stale-name check
+    /// compares identity rather than the lossy display of it.
+    pub name: std::ffi::OsString,
     pub permanent: bool,
     /// Whether the target is a directory — the delete-confirm popup only
     /// offers an "Empty" (keep the folder, delete its contents) option
@@ -623,26 +625,26 @@ mod tests {
         app.sort = SortMode::SizeDesc;
 
         app.use_physical = false;
-        let logical: Vec<&str> = app
+        let logical: Vec<String> = app
             .display_children()
             .iter()
-            .map(|(_, n)| n.name.as_str())
+            .map(|(_, n)| n.name.to_string_lossy().to_string())
             .collect();
         assert_eq!(
             logical,
-            ["sparse.img", "packed.bin"],
+            ["sparse.img".to_string(), "packed.bin".to_string()],
             "by logical size the sparse file leads"
         );
 
         app.use_physical = true;
-        let physical: Vec<&str> = app
+        let physical: Vec<String> = app
             .display_children()
             .iter()
-            .map(|(_, n)| n.name.as_str())
+            .map(|(_, n)| n.name.to_string_lossy().to_string())
             .collect();
         assert_eq!(
             physical,
-            ["packed.bin", "sparse.img"],
+            ["packed.bin".to_string(), "sparse.img".to_string()],
             "the list should be ordered by the size it is showing"
         );
     }
@@ -651,7 +653,7 @@ mod tests {
         let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
         app.pending_delete = Some(PendingDelete {
             orig_idx: 0,
-            name: "doomed".to_owned(),
+            name: std::ffi::OsString::from("doomed"),
             permanent: false,
             is_dir,
         });
@@ -711,7 +713,7 @@ mod tests {
         // already past the end.
         app.pending_delete = Some(PendingDelete {
             orig_idx: 0,
-            name: "gone".to_owned(),
+            name: std::ffi::OsString::from("gone"),
             permanent: true,
             is_dir: false,
         });

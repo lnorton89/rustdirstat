@@ -275,7 +275,7 @@ fn draw_properties(app: &mut GuiApp, ui: &mut egui::Ui) {
         );
         return;
     };
-    let (name, is_dir) = (node.name.clone(), node.is_dir);
+    let (name, is_dir) = (node.name.to_string_lossy().to_string(), node.is_dir);
     let rows = [
         ("Name", name),
         ("Path", crate::util::display_path(&path)),
@@ -619,7 +619,11 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
     let Some(pending) = &app.pending_delete else {
         return;
     };
-    let (name, permanent, is_dir) = (pending.name.clone(), pending.permanent, pending.is_dir);
+    let (name, permanent, is_dir) = (
+        pending.name.to_string_lossy().to_string(),
+        pending.permanent,
+        pending.is_dir,
+    );
     let palette = palette();
     let mut confirm = false;
     let mut empty = false;

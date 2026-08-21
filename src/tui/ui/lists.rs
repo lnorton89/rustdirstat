@@ -214,7 +214,10 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw(format!(" {:>5.1}%  ", pct)),
                 Span::styled(icon, Style::default().fg(name_color)),
-                Span::styled(format!("{}{}", node.name, suffix), name_style),
+                Span::styled(
+                    format!("{}{}", node.name.to_string_lossy(), suffix),
+                    name_style,
+                ),
                 Span::styled(err, Style::default().fg(theme::DANGER)),
                 Span::styled(warn, Style::default().fg(theme::WARNING)),
             ]);

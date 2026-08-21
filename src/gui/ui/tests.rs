@@ -44,14 +44,14 @@ static TEST_UI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Derived from the name the same way `file` below derives the node's
 /// category, so the two cannot disagree — and so the fixtures do not have
 /// to unwrap an `Option` they themselves just filled in.
-fn category_index(name: &str) -> usize {
+fn category_index(name: &std::ffi::OsStr) -> usize {
     crate::model::category_for_name(name).index()
 }
 
 fn file(name: &str, size: u64) -> Node {
-    let category = crate::model::category_for_name(name);
+    let category = crate::model::category_for_name(std::ffi::OsStr::new(name));
     Node {
-        name: name.to_string(),
+        name: std::ffi::OsString::from(name),
         is_dir: false,
         is_symlink: false,
         size,
@@ -75,7 +75,7 @@ fn app_with_one_file() -> GuiApp {
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\test-root"),
         root: Node {
-            name: "test-root".to_string(),
+            name: std::ffi::OsString::from("test-root"),
             is_dir: true,
             is_symlink: false,
             size: 128,
@@ -100,7 +100,7 @@ fn app_with_one_file() -> GuiApp {
 fn app_with_a_folder_beside_a_file() -> GuiApp {
     let leaf = file("inside.bin", 64);
     let folder = Node {
-        name: "sub".to_string(),
+        name: std::ffi::OsString::from("sub"),
         is_dir: true,
         is_symlink: false,
         size: 64,
@@ -116,12 +116,12 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
     };
     let sibling = file("beside.txt", 128);
     let mut totals = vec![(0, 0, 0); Category::COUNT];
-    totals[category_index("inside.bin")] = (64, 64, 1);
-    totals[category_index("beside.txt")] = (128, 128, 1);
+    totals[category_index(std::ffi::OsStr::new("inside.bin"))] = (64, 64, 1);
+    totals[category_index(std::ffi::OsStr::new("beside.txt"))] = (128, 128, 1);
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\test-root"),
         root: Node {
-            name: "test-root".to_string(),
+            name: std::ffi::OsString::from("test-root"),
             is_dir: true,
             is_symlink: false,
             size: 192,
@@ -201,7 +201,7 @@ fn app_with_sortable_files() -> GuiApp {
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\sortable-root"),
         root: Node {
-            name: "sortable-root".to_string(),
+            name: std::ffi::OsString::from("sortable-root"),
             is_dir: true,
             is_symlink: false,
             size: 410,
@@ -2772,7 +2772,7 @@ fn app_with_many_extensions() -> GuiApp {
     let mut children = Vec::new();
     for (n, name) in names.iter().enumerate() {
         let size = ((n as u64) + 1) * 1_000_000;
-        let index = category_index(name);
+        let index = category_index(std::ffi::OsStr::new(name));
         totals[index].0 += size;
         totals[index].1 += size;
         totals[index].2 += 1;
@@ -2784,7 +2784,7 @@ fn app_with_many_extensions() -> GuiApp {
         volume_free: None,
         volume_total: None,
         root: Node {
-            name: "test-root".to_string(),
+            name: std::ffi::OsString::from("test-root"),
             is_dir: true,
             is_symlink: false,
             size: total,

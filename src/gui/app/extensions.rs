@@ -138,7 +138,9 @@ pub(in crate::gui) fn collect_extensions(
         if child.is_dir {
             collect_extensions(child, physical, out);
         } else {
-            let extension = extension_label(&child.name);
+            // Display-only territory: the legend's labels. The raw bytes
+            // stay on the node; `category_for_name` takes them as-is.
+            let extension = extension_label(&child.name.to_string_lossy());
             let category = child
                 .category
                 .unwrap_or_else(|| category_for_name(&child.name));

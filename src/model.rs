@@ -29,6 +29,7 @@
 //! recursion puts it on the call stack.
 
 use crate::color::Category;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -42,6 +43,17 @@ use std::time::SystemTime;
 /// from the root, which is needed only for the handful of operations that
 /// actually touch the filesystem (open, delete), not for every node.
 ///
+/// `name` is an `OsString`, not a `String`, and that is load-bearing:
+/// Unix filenames are byte strings, not necessarily UTF-8, and the lossy
+/// conversion (`to_string_lossy`) that would turn `OsString` into
+/// `String` replaces invalid byte sequences with U+FFFD. Two distinct
+/// real names can collapse onto the same replacement character, so a
+/// `String` name cannot reliably reconstruct a path that reaches the
+/// filesystem — and this is an application that deletes and moves what
+/// it scans. The tree keeps the exact bytes; lossy conversion happens
+/// only at display boundaries (labels, sort keys, search matching), never
+/// on a path handed to the OS.
+///
 /// For directories, `size`, `file_count`, `dir_count`, and `ext_totals` are
 /// aggregates of every descendant, computed bottom-up during scanning and
 /// kept up to date as entries are removed (see `App::confirm_delete`) — so
@@ -49,7 +61,10 @@ use std::time::SystemTime;
 /// what's in it", which is what makes browsing a huge tree stay responsive.
 #[derive(Debug, Clone)]
 pub struct Node {
-    pub name: String,
+    /// The entry's exact filesystem name, as bytes. Display boundaries
+    /// convert with `to_string_lossy()`; anything that touches the
+    /// filesystem uses this `OsString` unchanged.
+    pub name: OsString,
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size: u64,
@@ -171,8 +186,14 @@ pub fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) 
             a.1.effective_size(physical)
                 .cmp(&b.1.effective_size(physical))
         }),
-        SortMode::NameAsc => nodes.sort_by_key(|a| a.1.name.to_lowercase()),
-        SortMode::NameDesc => nodes.sort_by_key(|b| std::cmp::Reverse(b.1.name.to_lowercase())),
+        // Sort keys are presentation, not identity: names are compared
+        // through the same lossy view a person sees, preserving the
+        // Unicode case-folding for valid UTF-8 while keeping the two
+        // name orders defined over the same `OsString` the nodes hold.
+        SortMode::NameAsc => nodes.sort_by_key(|a| a.1.name.to_string_lossy().to_lowercase()),
+        SortMode::NameDesc => {
+            nodes.sort_by_key(|b| std::cmp::Reverse(b.1.name.to_string_lossy().to_lowercase()))
+        }
         SortMode::ModifiedDesc => nodes.sort_by_key(|b| std::cmp::Reverse(b.1.modified)),
         SortMode::ModifiedAsc => nodes.sort_by_key(|a| a.1.modified),
     }
@@ -217,8 +238,8 @@ impl Tree {
     pub fn placeholder(root_path: PathBuf) -> Self {
         let name = root_path
             .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| root_path.display().to_string());
+            .map(OsString::from)
+            .unwrap_or_else(|| OsString::from(root_path.display().to_string()));
         let is_dir = root_path.is_dir();
         Self {
             root: Node {
@@ -311,7 +332,13 @@ impl Tree {
     }
 }
 
-pub fn category_for_name(name: &str) -> Category {
+/// The category a file's name falls into, computed once at scan time.
+///
+/// Takes the raw `OsStr` rather than a lossy string so classification does
+/// not depend on the same U+FFFD collision that would be unsafe for path
+/// reconstruction — a non-UTF-8 extension simply has no `to_str`, so it
+/// yields `NoExtension`/`Other` instead of a guess.
+pub fn category_for_name(name: &OsStr) -> Category {
     let ext = Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
@@ -338,7 +365,7 @@ pub mod fixtures {
     /// compressed files are the reason `physical_size` exists.
     pub fn file_sized(name: &str, size: u64, physical_size: u64) -> Node {
         Node {
-            name: name.to_string(),
+            name: OsString::from(name),
             is_dir: false,
             is_symlink: false,
             size,
@@ -360,7 +387,7 @@ pub mod fixtures {
     /// from a file here.
     pub fn dir(name: &str, children: Vec<Node>) -> Node {
         Node {
-            name: name.to_string(),
+            name: OsString::from(name),
             is_dir: true,
             is_symlink: false,
             size: children.iter().map(|c| c.size).sum(),
@@ -422,16 +449,20 @@ mod sort_tests {
         let mut logical = nodes.to_vec();
         sort_nodes(&mut logical, SortMode::SizeDesc, false);
         assert_eq!(
-            logical.first().map(|n| n.1.name.as_str()),
-            Some("sparse.img"),
+            logical
+                .first()
+                .map(|n| n.1.name.to_string_lossy().to_string()),
+            Some("sparse.img".to_string()),
             "by logical size the sparse file is the bigger one"
         );
 
         let mut physical = nodes.to_vec();
         sort_nodes(&mut physical, SortMode::SizeDesc, true);
         assert_eq!(
-            physical.first().map(|n| n.1.name.as_str()),
-            Some("packed.bin"),
+            physical
+                .first()
+                .map(|n| n.1.name.to_string_lossy().to_string()),
+            Some("packed.bin".to_string()),
             "by on-disk size the order reverses — this is what the terminal \
              front end used to get wrong"
         );
@@ -448,8 +479,18 @@ mod sort_tests {
         let mut nodes = vec![(0, &a), (1, &b), (2, &c)];
 
         sort_nodes(&mut nodes, SortMode::NameAsc, false);
-        let pairs: Vec<(usize, &str)> = nodes.iter().map(|(i, n)| (*i, n.name.as_str())).collect();
-        assert_eq!(pairs, [(1, "a.bin"), (2, "b.bin"), (0, "c.bin")]);
+        let pairs: Vec<(usize, String)> = nodes
+            .iter()
+            .map(|(i, n)| (*i, n.name.to_string_lossy().to_string()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                (1, "a.bin".to_string()),
+                (2, "b.bin".to_string()),
+                (0, "c.bin".to_string())
+            ]
+        );
     }
 }
 

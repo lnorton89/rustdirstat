@@ -199,7 +199,9 @@ fn recurse(
             h: r.h,
             is_dir: child.is_dir,
             depth,
-            name: child.name.clone(),
+            // Display only — the tile's label; navigation follows
+            // `index_path`, and the raw bytes stay on the node.
+            name: child.name.to_string_lossy().to_string(),
             category: child.category,
             index_path: index_path.clone(),
             is_free_space: false,
@@ -237,7 +239,7 @@ mod tests {
 
     fn file(name: &str, size: u64) -> Node {
         Node {
-            name: name.to_owned(),
+            name: std::ffi::OsString::from(name),
             is_dir: false,
             is_symlink: false,
             size,
@@ -256,7 +258,7 @@ mod tests {
     fn dir(name: &str, children: Vec<Node>) -> Node {
         let size = children.iter().map(|c| c.size).sum();
         Node {
-            name: name.to_owned(),
+            name: std::ffi::OsString::from(name),
             is_dir: true,
             is_symlink: false,
             size,
@@ -412,9 +414,11 @@ mod tests {
                 item.name
             );
             assert_eq!(
-                node.name, item.name,
+                node.name.to_string_lossy().as_ref(),
+                item.name.as_str(),
                 "the path for tile {:?} leads to {:?} instead",
-                item.name, node.name
+                item.name,
+                node.name.to_string_lossy()
             );
         }
     }

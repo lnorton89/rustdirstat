@@ -29,7 +29,10 @@ pub(in crate::gui) struct ToolOutcome {
 
 pub(in crate::gui) struct PendingDelete {
     pub index_path: Vec<usize>,
-    pub name: String,
+    /// The raw filesystem name, kept `OsString` so the stale-name check
+    /// in `confirm_delete` compares identity rather than the lossy
+    /// display of it.
+    pub name: std::ffi::OsString,
     pub is_dir: bool,
     pub permanent: bool,
 }
@@ -139,14 +142,14 @@ impl GuiApp {
         let Some(node) = self.tree.try_node_for(&pending.index_path) else {
             self.status = Some(format!(
                 "{} is no longer where it was; nothing was deleted",
-                pending.name
+                pending.name.to_string_lossy()
             ));
             return Ok(());
         };
         if node.name != pending.name || node.is_dir != pending.is_dir {
             self.status = Some(format!(
                 "{} moved since it was selected; nothing was deleted",
-                pending.name
+                pending.name.to_string_lossy()
             ));
             return Ok(());
         }

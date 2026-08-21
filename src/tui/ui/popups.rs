@@ -29,7 +29,7 @@ pub(super) fn draw_move_prompt(f: &mut Frame, app: &mut App) {
     let name = app
         .display_children()
         .get(app.selected)
-        .map(|(_, n)| n.name.clone())
+        .map(|(_, n)| n.name.to_string_lossy().to_string())
         .unwrap_or_default();
     text_prompt(
         f,
@@ -527,7 +527,7 @@ mod tests {
         let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
         app.pending_delete = Some(PendingDelete {
             orig_idx: 0,
-            name: "doomed.txt".to_owned(),
+            name: std::ffi::OsString::from("doomed.txt"),
             permanent: false,
             is_dir,
         });

@@ -69,7 +69,7 @@ impl App {
         let mut v: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
         if !self.filter.is_empty() {
             let f = self.filter.to_lowercase();
-            v.retain(|(_, n)| n.name.to_lowercase().contains(&f));
+            v.retain(|(_, n)| n.name.to_string_lossy().to_lowercase().contains(&f));
         }
         // `use_physical`, not always-logical: this used to sort by
         // `size` whatever the view was showing, so pressing `p` swapped

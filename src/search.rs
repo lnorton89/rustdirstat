@@ -132,8 +132,10 @@ fn visit(
 
         path.push(index);
         // Pre-order, as the recursive form was: a directory that matches
-        // is recorded before anything inside it.
-        if re.is_match(&child.name) {
+        // is recorded before anything inside it. Matching runs against the
+        // lossy display of the name — search is presentation, and a name
+        // that is not UTF-8 simply has no text to match.
+        if re.is_match(&child.name.to_string_lossy()) {
             *count += 1;
             if out.len() < MAX_RESULTS {
                 out.push(SearchHit {
@@ -437,11 +439,12 @@ mod walk_tests {
             assert!(landed.is_some(), "an index path ran off the tree");
             let Some(node) = landed else { return };
             assert_eq!(
-                node.is_dir, hit.is_dir,
+                node.is_dir,
+                hit.is_dir,
                 "{} was recorded as the wrong kind",
-                node.name
+                node.name.to_string_lossy()
             );
-            names.push(node.name.clone());
+            names.push(node.name.to_string_lossy().to_string());
         }
         assert_eq!(
             names,

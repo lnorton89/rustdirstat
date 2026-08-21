@@ -112,7 +112,9 @@ fn visit(root: &Node, path: &mut Vec<usize>, heap: &mut BinaryHeap<Reverse<Entry
         } else {
             heap.push(Reverse(Entry(TopFile {
                 index_path: path.clone(),
-                name: child.name.clone(),
+                // Display only: the row is a name on screen, and the
+                // index path is what navigation actually follows.
+                name: child.name.to_string_lossy().to_string(),
                 size: child.size,
                 physical_size: child.physical_size,
                 modified: child.modified,
@@ -192,8 +194,8 @@ mod walk_tests {
                 hit.name
             );
             assert_eq!(
-                landed.map(|n| n.name.as_str()),
-                Some(hit.name.as_str()),
+                landed.map(|n| n.name.to_string_lossy().to_string()),
+                Some(hit.name.clone()),
                 "{:?} does not lead to {}",
                 hit.index_path,
                 hit.name

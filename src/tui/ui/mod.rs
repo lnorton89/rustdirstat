@@ -140,7 +140,7 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, app, chunks[3]);
 
     if let Some(pending) = &app.pending_delete {
-        let name = pending.name.clone();
+        let name = pending.name.to_string_lossy().to_string();
         let permanent = pending.permanent;
         let is_dir = pending.is_dir;
         draw_confirm_popup(f, app, &name, permanent, is_dir);

@@ -398,7 +398,7 @@ mod tests {
     fn app_with_differing_sizes() -> GuiApp {
         fn file(name: &str, size: u64, physical: u64) -> Node {
             Node {
-                name: name.to_owned(),
+                name: std::ffi::OsString::from(name),
                 is_dir: false,
                 is_symlink: false,
                 size,
@@ -420,7 +420,7 @@ mod tests {
             volume_free: None,
             volume_total: None,
             root: Node {
-                name: "root".to_owned(),
+                name: std::ffi::OsString::from("root"),
                 is_dir: true,
                 is_symlink: false,
                 size: 100,
@@ -809,7 +809,7 @@ mod tests {
         // there now.
         app.pending_delete = Some(PendingDelete {
             index_path: vec![0],
-            name: "not-the-file-that-is-there".to_string(),
+            name: std::ffi::OsString::from("not-the-file-that-is-there"),
             is_dir: false,
             permanent: true,
         });

@@ -134,7 +134,7 @@ mod tests {
 
     fn node(name: &str, is_dir: bool, children: Vec<Node>) -> Node {
         Node {
-            name: name.to_owned(),
+            name: std::ffi::OsString::from(name),
             is_dir,
             is_symlink: false,
             size: 1,
