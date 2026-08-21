@@ -1,0 +1,77 @@
+version: 2
+updates:
+  # Crate updates as reviewable PRs rather than the toolchain drifting on
+  # its own.
+  #
+  # Only *patch* bumps are grouped. Dependabot classifies an update by the
+  # literal version segments, so eframe 0.29 -> 0.30 reaches it as
+  # `semver-minor` — but under cargo a 0.x minor bump is precisely the
+  # breaking one, and most of this tree is still 0.x (eframe, egui,
+  # egui_extras, rfd, ratatui, crossterm, windows-sys, image, ab_glyph,
+  # unicode-width, winresource). Grouping minors would hand us one PR that
+  # quietly carries breaking API changes for half a dozen crates. Patch
+  # releases are the churn worth batching; anything above patch arrives on
+  # its own so it can be read, built, and reverted by itself.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      cargo-patch:
+        applies-to: version-updates
+        update-types:
+          - patch
+    ignore:
+      # The egui stack is held at 0.29 deliberately: moving it is a project
+      # with its own branch and a person watching the window, not a
+      # dependency bump. CLAUDE.md records what that migration actually
+      # costs — three subsystems redesigned rather than renamed, the menu
+      # API gone, and several pinned tests to re-derive. An egui 0.30+ PR
+      # would only ever be closed unread, so it is not opened. Patch
+      # releases still come through.
+      #
+      # The four ignored advisories in deny.toml are the standing reminder
+      # that this is a debt with a due date, not an oversight; revisit
+      # these three entries and those four at the same time.
+      - dependency-name: eframe
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+      - dependency-name: egui
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+      - dependency-name: egui_extras
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+
+  # Actions are pinned to full commit SHAs (see .github/workflows), so a
+  # Dependabot PR is the deliberate, diff-visible way a pin moves — it
+  # rewrites the SHA and the trailing version comment together.
+  #
+  # Six actions across two workflows, grouped into one PR: they move
+  # independently, but reading a batch of SHA pins against their release
+  # notes is one job rather than six. The exception is
+  # dtolnay/rust-toolchain, pinned to a master commit rather than a
+  # release tag — Dependabot cannot resolve a newer version for a SHA that
+  # belongs to no tag, so that one pin moves by hand.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"

@@ -28,11 +28,13 @@ pub(in crate::gui) struct TreemapKey {
 
 impl GuiApp {
     pub(in crate::gui) fn zoom_node(&self) -> &Node {
-        self.tree.node_for(&self.zoom_path)
+        // Forgiving: the zoom level is display state, and a stale path
+        // should still show the place it now points at.
+        self.tree.deepest_valid_node(&self.zoom_path)
     }
 
     pub(in crate::gui) fn zoom_fs_path(&self) -> PathBuf {
-        self.tree.path_for(&self.zoom_path)
+        self.tree.deepest_valid_path(&self.zoom_path)
     }
 
     pub(in crate::gui) fn navigate_to_absolute(&mut self, index_path: Vec<usize>) {
@@ -46,7 +48,9 @@ impl GuiApp {
         let Some(path) = self.selected_path.clone() else {
             return;
         };
-        let node = self.tree.node_for(&path);
+        let Some(node) = self.tree.node_for(&path) else {
+            return;
+        };
         self.zoom_path = if node.is_dir {
             path
         } else {

@@ -27,6 +27,42 @@ core:
 
 Both run anywhere Rust does: Linux, macOS, and Windows.
 
+## Screenshots
+
+The desktop GUI — directory tree, extension breakdown, and cushion-shaded
+treemap, linked so acting in any one follows in the others:
+
+<p align="center">
+  <img src="assets/screenshots/gui.png" width="880"
+       alt="The RustDirStat desktop GUI: a sortable directory tree with size bars, the file-category breakdown, and a cushion-shaded treemap of a 28 GB build tree.">
+</p>
+
+The terminal UI, the same three coupled views over the same scanning core:
+
+<p align="center">
+  <img src="assets/screenshots/tui.png" width="880"
+       alt="The RustDirStat terminal UI: the size-ranked file list, the colored treemap, and the clickable file-category legend, in Windows Terminal.">
+</p>
+
+## Features
+
+- Size-ranked, sortable directory tree with per-subtree percentage bars
+  and file-type breakdowns computed once at scan time
+- Squarified, recursively nested treemap — click a tile to jump to it,
+  however deep it is
+- Search the whole scan by glob or regex, list the largest files, and find
+  duplicate files by content hash — hard-link aware, so two names for one
+  file are never counted as reclaimable space
+- Logical vs. physical (on-disk) size everywhere, including NTFS
+  compressed and sparse files on Windows
+- Delete to the Recycle Bin/Trash (permanent delete is deliberately
+  harder), empty folders with honest partial-failure reporting, move
+  across volumes without following symlinks
+- Scans stay on one filesystem by default; mount points stay visible as
+  markers instead of silently vanishing
+- Text and CSV reports for scripting; themes; layout preferences that
+  survive restarts; everything long-running stays off the UI thread
+
 ## Install
 
 Prebuilt archives for Linux, macOS (Intel and Apple Silicon), and Windows

@@ -18,7 +18,7 @@
 //! at, and a recursive descent would put it on the call stack.
 
 use crate::color::Category;
-use crate::model::Node;
+use crate::model::{walk_preorder, Node, WalkControl};
 use regex::RegexBuilder;
 use std::time::SystemTime;
 
@@ -80,9 +80,8 @@ pub fn search(node: &Node, query: &str) -> SearchOutcome {
     };
 
     let mut hits = Vec::new();
-    let mut path = Vec::new();
     let mut count = 0usize;
-    visit(node, &re, &mut path, &mut hits, &mut count);
+    visit(node, &re, &mut hits, &mut count);
     SearchOutcome {
         hits,
         truncated: count > MAX_RESULTS,
@@ -90,50 +89,17 @@ pub fn search(node: &Node, query: &str) -> SearchOutcome {
     }
 }
 
-/// One directory still being walked, and how far through its children
-/// the walk has got. See the note on the identical type in
-/// [`crate::top_files`] for why the frame holds an index rather than a
-/// path.
-struct Frame<'a> {
-    node: &'a Node,
-    next: usize,
-}
-
-fn visit(
-    root: &Node,
-    re: &regex::Regex,
-    path: &mut Vec<usize>,
-    out: &mut Vec<SearchHit>,
-    count: &mut usize,
-) {
-    let mut stack = vec![Frame {
-        node: root,
-        next: 0,
-    }];
-
-    while let Some(top) = stack.len().checked_sub(1) {
-        if *count > MAX_RESULTS {
-            return;
-        }
-        let Some(frame) = stack.get_mut(top) else {
-            break;
-        };
-        let Some(child) = frame.node.children.get(frame.next) else {
-            stack.pop();
-            // Not for the root frame: it never pushed a segment of its
-            // own, because `path` is relative to it.
-            if !stack.is_empty() {
-                path.pop();
-            }
-            continue;
-        };
-        let index = frame.next;
-        frame.next += 1;
-
-        path.push(index);
+/// Runs [`walk_preorder`] over `root`'s subtree, collecting name
+/// matches. The walk itself lives on the model — every tree-sized pass
+/// that reports index paths walks the same way; this is just the search
+/// half of it.
+fn visit(root: &Node, re: &regex::Regex, out: &mut Vec<SearchHit>, count: &mut usize) {
+    walk_preorder(root, |child, path| {
         // Pre-order, as the recursive form was: a directory that matches
-        // is recorded before anything inside it.
-        if re.is_match(&child.name) {
+        // is recorded before anything inside it. Matching runs against the
+        // lossy display of the name — search is presentation, and a name
+        // that is not UTF-8 simply has no text to match.
+        if re.is_match(&child.name.to_string_lossy()) {
             *count += 1;
             if out.len() < MAX_RESULTS {
                 out.push(SearchHit {
@@ -146,17 +112,15 @@ fn visit(
                 });
             }
         }
-        if child.is_dir {
-            // Leave `path` extended; the frame just pushed owns that
-            // segment and pops it when it runs out of children.
-            stack.push(Frame {
-                node: child,
-                next: 0,
-            });
+        // Past the cap the walk has served its purpose: it kept going this
+        // far only to learn whether there *are* more matches, so the UI
+        // can say "truncated". Stop now, not when the tree runs out.
+        if *count > MAX_RESULTS {
+            WalkControl::Stop
         } else {
-            path.pop();
+            WalkControl::Continue
         }
-    }
+    });
 }
 
 /// Translates a shell-style glob into an equivalent regex.
@@ -387,11 +351,6 @@ mod walk_tests {
     use super::*;
     use crate::model::fixtures::*;
 
-    /// The depth the stack-overflow test uses. Comfortably past what
-    /// a real filesystem allows, and far past what the recursive
-    /// version survived in a debug build.
-    const DEEP: usize = 60_000;
-
     /// The walk does not put the tree depth on the call stack.
     ///
     /// It used to call itself once per directory level, and depth is the
@@ -399,14 +358,14 @@ mod walk_tests {
     /// stack and took the process with it.
     #[test]
     fn a_tree_far_deeper_than_the_stack_is_still_searched() {
-        let root = dir("root", vec![deep_chain(DEEP, 1)]);
+        let root = dir("root", vec![deep_chain(DEEP_CHAIN_DEPTH, 1)]);
         let outcome = search(&root, "buried*");
         assert!(outcome.error.is_none(), "the pattern is valid");
         assert_eq!(outcome.hits.len(), 1, "the one buried file should match");
         let Some(hit) = outcome.hits.first() else {
             return;
         };
-        assert_eq!(hit.index_path.len(), DEEP + 2);
+        assert_eq!(hit.index_path.len(), DEEP_CHAIN_DEPTH + 2);
     }
 
     /// Matches come back in pre-order — a directory before its contents —
@@ -437,11 +396,12 @@ mod walk_tests {
             assert!(landed.is_some(), "an index path ran off the tree");
             let Some(node) = landed else { return };
             assert_eq!(
-                node.is_dir, hit.is_dir,
+                node.is_dir,
+                hit.is_dir,
                 "{} was recorded as the wrong kind",
-                node.name
+                node.name.to_string_lossy()
             );
-            names.push(node.name.clone());
+            names.push(node.name.to_string_lossy().to_string());
         }
         assert_eq!(
             names,

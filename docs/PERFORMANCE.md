@@ -36,8 +36,8 @@ recomputed from state cannot go stale.
 
 **If you add anything that changes which rows or tiles are produced, add
 it to the key.** `cached_rows_refresh_whenever_an_input_changes` and
-`cached_treemap_follows_the_panel_rect_and_the_zoom` in `src/gui/app.rs`
-cover the existing inputs; extend them.
+`cached_treemap_follows_the_panel_rect_and_the_zoom` in
+`src/gui/app/mod.rs` cover the existing inputs; extend them.
 
 The borrow pattern this forces, in `directory.rs` and `ui/treemap.rs`,
 looks like:
@@ -72,7 +72,7 @@ to release it, and the wall-clock cost goes up sharply. On the UI thread
 that reads as the window hanging.
 
 Two places hand a tree off instead, both via `drop_in_background` in
-`src/gui/app.rs`:
+`src/gui/app/scan.rs`:
 
 - **`replace_tree`**, when a rescan produces a new tree. The old one is
   reclaimed on a detached thread so the UI never stalls mid-rescan.

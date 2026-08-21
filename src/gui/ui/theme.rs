@@ -101,7 +101,7 @@ pub(super) fn apply_style(ctx: &egui::Context, palette: Palette) {
     style.visuals.dark_mode = dark;
     style.spacing.item_spacing = Vec2::new(8.0, 7.0);
     style.spacing.button_padding = Vec2::new(11.0, 7.0);
-    style.spacing.menu_margin = Margin::same(8.0);
+    style.spacing.menu_margin = Margin::same(SPACE_SM);
     style.spacing.indent = 18.0;
     style.spacing.scroll = scroll_style();
     style.spacing.interact_size = Vec2::new(40.0, 32.0);

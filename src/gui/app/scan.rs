@@ -53,17 +53,88 @@ pub(in crate::gui) fn drop_in_background<T: Send + 'static>(value: T) {
         .spawn(move || drop(value));
 }
 
-pub(in crate::gui) fn valid_prefix(tree: &Tree, requested: &[usize]) -> Vec<usize> {
-    let mut valid = Vec::new();
+/// Where the user is, identified by the sequence of raw names from the
+/// root down — the *identity* of a place, as opposed to the `Vec<usize>`
+/// index path that only means anything against the tree it was taken
+/// from.
+///
+/// Carried across a refresh scan. Filesystem enumeration order is not
+/// stable between scans, so the index a directory held last time may now
+/// name a different directory — restoring selection by index would
+/// silently land the user on a different filesystem object. Names are
+/// the identity; index paths are re-derived from them against the new
+/// tree.
+pub(in crate::gui) struct RestoreState {
+    zoom: Vec<std::ffi::OsString>,
+    selected: Option<Vec<std::ffi::OsString>>,
+    expanded: Vec<Vec<std::ffi::OsString>>,
+}
+
+/// The name components along `index_path`, from the root down.
+///
+/// `None` only if the path runs off the end of the tree, which means the
+/// view was already pointing somewhere invalid.
+fn capture_identity(tree: &Tree, index_path: &[usize]) -> Option<Vec<std::ffi::OsString>> {
+    let mut components = Vec::new();
     let mut node = &tree.root;
-    for &idx in requested {
-        let Some(child) = node.children.get(idx) else {
+    for &idx in index_path {
+        node = node.children.get(idx)?;
+        components.push(node.name.clone());
+    }
+    Some(components)
+}
+
+/// The fresh index path for `identity` against `tree`, stopping at the
+/// deepest component that still exists.
+///
+/// Matching is by name, not position — sibling *order* is exactly what
+/// is not stable between scans, and position is what a stale `Vec<usize>`
+/// would have answered about.
+///
+/// Forgiving by design: a place that vanished resolves to the place that
+/// still exists nearest it. That is the right answer for the *zoom*
+/// level — the user is looking at a region, and the region's nearest
+/// surviving ancestor is still that region's neighborhood — and for
+/// `expanded` directories. It is the wrong answer for a *selection*:
+/// see [`resolve_identity_exact`].
+fn resolve_identity(tree: &Tree, identity: &[std::ffi::OsString]) -> Vec<usize> {
+    let mut resolved = Vec::new();
+    let mut node = &tree.root;
+    for component in identity {
+        let Some((idx, _)) = node
+            .children
+            .iter()
+            .enumerate()
+            .find(|(_, child)| child.name == *component)
+        else {
             break;
         };
-        valid.push(idx);
+        resolved.push(idx);
+        node = &node.children[idx];
+    }
+    resolved
+}
+
+/// [`resolve_identity`] that refuses to shorten: `None` unless every
+/// component still exists.
+///
+/// Selection is an exact claim — "this item" — so a file that vanished
+/// between scans must not silently become its parent directory, which is
+/// what the forgiving form would do. Landing on the parent looks like
+/// the selection surviving when the item it named is gone.
+fn resolve_identity_exact(tree: &Tree, identity: &[std::ffi::OsString]) -> Option<Vec<usize>> {
+    let mut resolved = Vec::new();
+    let mut node = &tree.root;
+    for component in identity {
+        let (idx, child) = node
+            .children
+            .iter()
+            .enumerate()
+            .find(|(_, child)| child.name == *component)?;
+        resolved.push(idx);
         node = child;
     }
-    valid
+    Some(resolved)
 }
 
 impl GuiApp {
@@ -88,6 +159,15 @@ impl GuiApp {
             self.status = Some("Another background operation is already running".to_string());
             return;
         }
+        // Remember where the user is — by name identity, not index — so
+        // a refresh scan can put them back even though enumeration order
+        // may have changed. Opening a different folder resets everything
+        // anyway, so only a refresh captures.
+        self.restore = if reset_workspace {
+            None
+        } else {
+            self.capture_restore_state()
+        };
         let progress = Arc::new(crate::scanner::Progress::default());
         let worker_progress = Arc::clone(&progress);
         let display = crate::util::display_path(&root);
@@ -111,6 +191,25 @@ impl GuiApp {
         self.scan_rx = Some(rx);
         self.scan_resets_workspace = reset_workspace;
         self.status = Some(format!("Scanning {display}…"));
+    }
+
+    /// The current zoom, selection, and expansion, as name identities.
+    fn capture_restore_state(&self) -> Option<RestoreState> {
+        let zoom = capture_identity(&self.tree, &self.zoom_path)?;
+        let selected = self
+            .selected_path
+            .as_deref()
+            .and_then(|path| capture_identity(&self.tree, path));
+        let expanded = self
+            .expanded
+            .iter()
+            .filter_map(|path| capture_identity(&self.tree, path))
+            .collect();
+        Some(RestoreState {
+            zoom,
+            selected,
+            expanded,
+        })
     }
 
     pub(in crate::gui) fn is_busy(&self) -> bool {
@@ -184,6 +283,11 @@ impl GuiApp {
         self.largest_files = Vec::new();
         self.duplicate_groups = Vec::new();
         self.search.results = Vec::new();
+        self.search_rx = None;
+        // A zoom-time extension worker would answer about the tree just
+        // retired; the scan recomputes rows for the new one, and the
+        // worker is told to stop walking rather than left to finish.
+        self.cancel_extension_worker();
         let root_path = self.tree.root_path.clone();
         drop_in_background(std::mem::replace(
             &mut self.tree,
@@ -215,11 +319,40 @@ impl GuiApp {
                     if reset {
                         self.reset_workspace();
                     } else {
-                        self.zoom_path = valid_prefix(self.tree.as_ref(), &self.zoom_path);
-                        self.selected_path = self
-                            .selected_path
-                            .as_ref()
-                            .map(|path| valid_prefix(self.tree.as_ref(), path));
+                        // Restore by identity: names, not indices. Index
+                        // paths only mean anything against the tree they
+                        // were taken from, and this is a different tree.
+                        if let Some(state) = self.restore.take() {
+                            self.zoom_path = resolve_identity(&self.tree, &state.zoom);
+                            // Selection is exact: a vanished item must not
+                            // silently become its parent directory. If it
+                            // is gone, it is gone.
+                            self.selected_path = state
+                                .selected
+                                .and_then(|identity| resolve_identity_exact(&self.tree, &identity));
+                            self.expanded = state
+                                .expanded
+                                .iter()
+                                .map(|identity| resolve_identity(&self.tree, identity))
+                                .collect();
+                            self.expanded.insert(Vec::new());
+                        } else {
+                            // Capture can only fail when the view was
+                            // already stale against the old tree — but
+                            // stale index paths still must not be carried
+                            // onto a brand-new tree unvalidated, which is
+                            // the very bug restore-by-name replaced. Same
+                            // semantics as the restore above: placement
+                            // truncates, selection is exact or dropped.
+                            self.zoom_path = self.tree.valid_prefix(&self.zoom_path);
+                            self.selected_path = self
+                                .selected_path
+                                .take()
+                                .filter(|path| self.tree.node_for(path).is_some());
+                            self.expanded
+                                .retain(|path| self.tree.node_for(path).is_some());
+                            self.expanded.insert(Vec::new());
+                        }
                     }
                     // Already computed on the scan thread; see
                     // `ScanOutcome`. Zooming still recomputes the
@@ -229,11 +362,63 @@ impl GuiApp {
                     self.extensions = extensions;
                     self.sort_extensions();
                     self.largest_files = largest_files;
+                    // A search in flight answered about the tree that was
+                    // just retired; its result is stale by construction.
+                    self.search_rx = None;
                     self.search.results.clear();
+                    // Same for a zoom-time extension worker: the rows
+                    // below are the new tree's, and a late delivery must
+                    // not clobber them — and the worker itself is walking
+                    // a retired tree, so it is stopped, not just ignored.
+                    self.cancel_extension_worker();
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
                 }
-                Err(error) => self.status = Some(format!("Scan failed: {error}")),
+                Err(error) => {
+                    self.restore = None;
+                    self.status = Some(format!("Scan failed: {error}"));
+                }
+            }
+        }
+
+        let search_result = self.search_rx.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(outcome) => Some(outcome),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(crate::search::SearchOutcome {
+                hits: vec![],
+                truncated: false,
+                error: Some("The search worker stopped unexpectedly".to_string()),
+            }),
+        });
+        if let Some(outcome) = search_result {
+            self.search_rx = None;
+            self.search.results = outcome.hits;
+            self.search.error = outcome.error;
+            self.status = Some(if outcome.truncated {
+                "Search capped at 2,000 results".to_string()
+            } else {
+                format!("{} search result(s)", self.search.results.len())
+            });
+        }
+
+        let extension_result = self
+            .extensions_rx
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(rows) => Some(Ok(rows)),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(())),
+            });
+        if let Some(result) = extension_result {
+            self.extensions_rx = None;
+            // The worker is done, one way or the other; its stop flag
+            // has nothing left to stop.
+            self.extensions_cancel = None;
+            // A disconnected worker sent nothing; keep the rows already
+            // showing rather than blanking the pane.
+            if let Ok(rows) = result {
+                self.extensions = rows;
+                self.sort_extensions();
             }
         }
 
@@ -253,16 +438,23 @@ impl GuiApp {
                 Ok(scan) => {
                     self.duplicate_groups = scan.groups;
                     let groups = self.duplicate_groups.len();
-                    // Says so when the search was cut short. "12
-                    // duplicate group(s)" reads as the whole answer.
-                    self.status = Some(if scan.skipped > 0 {
-                        format!(
-                            "{groups} duplicate group(s) — {} file(s) not checked,                              the candidate limit was reached",
+                    // Says so when the search was cut short or files could
+                    // not be read. "N duplicate group(s)" reads as the
+                    // whole answer when it was not.
+                    let mut message = format!("{groups} duplicate group(s)");
+                    if scan.skipped > 0 {
+                        message.push_str(&format!(
+                            " — {} file(s) not checked, the candidate limit was reached",
                             scan.skipped
-                        )
-                    } else {
-                        format!("{groups} duplicate group(s)")
-                    });
+                        ));
+                    }
+                    if scan.read_failures > 0 {
+                        message.push_str(&format!(
+                            " — {} file(s) could not be read",
+                            scan.read_failures
+                        ));
+                    }
+                    self.status = Some(message);
                 }
                 Err(error) => self.status = Some(error),
             }
@@ -309,5 +501,136 @@ impl GuiApp {
             // capacity to spare.
             ctx.request_repaint_after(Duration::from_millis(33));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::fixtures::{dir, file};
+
+    /// Rescan restoration matches by name, not by index.
+    ///
+    /// The old code re-validated `Vec<usize>` index paths against the new
+    /// tree, which only answers "do these indices still exist".
+    /// Filesystem enumeration order is not stable between scans, so index
+    /// 0 can be Downloads in one scan and Documents in the next — and the
+    /// restore would silently land the user on the wrong directory. This
+    /// pins that a location is captured as name components and resolved
+    /// by name against the new tree.
+    #[test]
+    fn restore_resolves_by_name_across_a_sibling_reorder() -> anyhow::Result<()> {
+        let before = Tree {
+            root_path: PathBuf::from("root"),
+            volume_free: None,
+            volume_total: None,
+            root: dir(
+                "root",
+                vec![
+                    dir("Downloads", vec![file("a.bin", 1)]),
+                    dir("Documents", vec![file("b.bin", 2)]),
+                ],
+            ),
+        };
+        // The user was looking at Downloads, which this scan happened to
+        // enumerate first.
+        let captured = capture_identity(&before, &[0])
+            .ok_or_else(|| anyhow::anyhow!("index 0 should exist"))?;
+        assert_eq!(captured, [std::ffi::OsString::from("Downloads")]);
+
+        // The next scan of the same folder enumerated the siblings in
+        // the other order: index 0 is now Documents, index 1 Downloads.
+        let reordered = Tree {
+            root_path: PathBuf::from("root"),
+            volume_free: None,
+            volume_total: None,
+            root: dir(
+                "root",
+                vec![
+                    dir("Documents", vec![file("b.bin", 2)]),
+                    dir("Downloads", vec![file("a.bin", 1)]),
+                ],
+            ),
+        };
+        let restored = resolve_identity(&reordered, &captured);
+        assert_eq!(
+            restored,
+            vec![1],
+            "the identity must lead to Downloads, wherever the reorder put it"
+        );
+        assert_ne!(
+            restored,
+            vec![0],
+            "index 0 is Documents now — the index-based restore the old code \
+             performed would have silently landed on the wrong directory"
+        );
+        Ok(())
+    }
+
+    /// An identity whose name is gone entirely resolves to the deepest
+    /// ancestor that still exists rather than to whatever now occupies
+    /// the old index — for *placement* (zoom, expansion). A selection,
+    /// which is an exact claim about a specific item, must instead be
+    /// dropped: see the assertions on [`resolve_identity_exact`] below.
+    #[test]
+    fn a_vanished_name_restores_to_its_ancestor_not_the_index() -> anyhow::Result<()> {
+        let before = Tree {
+            root_path: PathBuf::from("root"),
+            volume_free: None,
+            volume_total: None,
+            root: dir(
+                "root",
+                vec![
+                    dir("alpha", vec![dir("inner", vec![file("x.bin", 1)])]),
+                    dir("beta", vec![file("y.bin", 2)]),
+                ],
+            ),
+        };
+        let captured = capture_identity(&before, &[0, 0])
+            .ok_or_else(|| anyhow::anyhow!("the path should exist"))?;
+        assert_eq!(captured.len(), 2);
+
+        // The rescan has a *different* directory sitting where `alpha`
+        // used to be; `alpha` itself is gone.
+        let after = Tree {
+            root_path: PathBuf::from("root"),
+            volume_free: None,
+            volume_total: None,
+            root: dir(
+                "root",
+                vec![
+                    dir("replacement", vec![file("z.bin", 3)]),
+                    dir("beta", vec![file("y.bin", 2)]),
+                ],
+            ),
+        };
+        // Zoom/expansion placement resolves to the nearest surviving
+        // ancestor.
+        let restored = resolve_identity(&after, &captured);
+        assert_eq!(
+            restored,
+            vec![],
+            "the deepest still-existing component is the root — restoring \
+             to index 0 would have selected 'replacement'"
+        );
+        assert_ne!(restored, vec![0, 0]);
+
+        // A selection, though, is exact: `alpha/inner` is gone, so there
+        // is nothing to select. Falling back to the parent would make the
+        // selection silently point at a different thing.
+        assert_eq!(
+            resolve_identity_exact(&after, &captured),
+            None,
+            "a vanished item must not resolve to its parent"
+        );
+        // A still-present identity resolves exactly, of course.
+        let still_there = capture_identity(&before, &[1])
+            .ok_or_else(|| anyhow::anyhow!("the path should exist"))?;
+        assert_eq!(
+            resolve_identity_exact(&after, &still_there).as_deref(),
+            Some(&[1][..]),
+            "beta is in the same place in both trees"
+        );
+        Ok(())
     }
 }

@@ -360,7 +360,9 @@ fn expand<'a>(
             h: rh,
             is_dir: child.is_dir,
             depth,
-            name: child.name.clone(),
+            // Display only — the tile's label; navigation follows
+            // `index_path`, and the raw bytes stay on the node.
+            name: child.name.to_string_lossy().to_string(),
             category: child.category,
             index_path: child_path.clone(),
             is_free_space: false,

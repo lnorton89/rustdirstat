@@ -32,11 +32,11 @@ this design.
 
 | File | What it owns |
 | --- | --- |
-| `src/scanner.rs` | The parallel filesystem walk. Falls back to single-threaded below `PAR_THRESHOLD` entries per directory. Reports live counts through a lock-free `Progress`. |
-| `src/model.rs` | `Node`, `Tree`, and `SortMode`/`sort_nodes` — the order siblings are listed in, which lives here because both front ends and the persisted config need it. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` stop at the deepest node that exists rather than indexing off the end. |
+| `src/scanner.rs` | The parallel filesystem walk. Falls back to single-threaded below `PAR_THRESHOLD` entries per directory. Reports live counts through a lock-free `Progress`. Materializes owned `EntryInfo` records (metadata fetched in parallel for wide directories) and drops each `DirEntry` before scanning its children, so a deep tree cannot exhaust Unix `RLIMIT_NOFILE`. Stays on the root's filesystem by default — an entry on another device is kept as a childless zero-byte marker (`Node.other_filesystem`) rather than descended into or silently dropped; crossing for real needs `--cross-filesystems` (Unix only — Windows reports no device identity here). |
+| `src/model.rs` | `Node`, `Tree`, and `SortMode`/`sort_nodes` — the order siblings are listed in, which lives here because both front ends and the persisted config need it. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` are exact (`None` on a stale path) with forgiving `deepest_valid_node`/`deepest_valid_path`/`valid_prefix` for display. `Node.file_id` is the filesystem object identity captured at scan time — `(st_dev, st_ino)` on Unix, `None` on Windows, where it would cost a handle-based syscall per file — and is what makes hard-link aliases distinguishable from real duplicate content where it exists. |
 | `src/treemap.rs` | The squarified treemap algorithm (Bruls/Huizing/van Wijk), on an abstract integer grid. Rounds rectangle *edges*, not width/height, so siblings cannot round into a gap or an overlap. |
 | `src/color.rs` | Extension → `Category` mapping, the category palette, and `extension_hue` — the one place an extension's colour is decided, so a file is the same colour in the terminal and in the window. It normalises its input, since the GUI holds `.mkv` and the TUI holds `mkv`. |
-| `src/duplicates.rs` | Size-bucketed, blake3-hashed duplicate detection. |
+| `src/duplicates.rs` | Size-bucketed, blake3-hashed duplicate detection, hard-link aware: two names for one inode are never reported as reclaimable duplicates. |
 | `src/search.rs`, `src/top_files.rs` | Name search across a subtree (glob, or regex behind `re:`) and the k largest files in one. Both walk iteratively and answer in index paths, so neither front end has an opinion about them. |
 | `src/platform.rs`, `src/wintools.rs` | Volume free/total space; Windows maintenance tool shell-outs. |
 | `src/gui/shell_icons.rs` | The icon the OS shows for a file type, cached per extension. Windows-only; elsewhere it reports nothing and callers fall back to the drawn set. |
@@ -61,16 +61,31 @@ child indices from the root, and `Tree::path_for` reconstructs the real
 path on demand for the few operations that touch the filesystem.
 
 This is why selection, expansion, and treemap tiles all carry
-`Vec<usize>` rather than paths, and why `valid_prefix` exists: after a
-rescan the old indices may no longer resolve, so they are truncated to the
-longest prefix that still does.
+`Vec<usize>` rather than paths. A rescan can leave an old index path
+pointing somewhere else entirely — sibling order is not stable between
+scans — so the GUI restores zoom/selection/expansion by *name*: it
+captures the lossless `OsString` components before replacing the tree and
+resolves them against the new one, landing on the same directory rather
+than the same index. Lookups are exact by default — `path_for` returns
+`Option<PathBuf>` and `node_for` returns `Option<&Node>`, `None` when the
+path runs off the end of the tree — because a destructive operation that
+resolved forgivingly would act on a *different* directory than the one
+the user pointed at. The forgiving forms (`deepest_valid_node`,
+`deepest_valid_path`, `valid_prefix`) exist for display and navigation,
+and are named so no one reaches for them in mutation code by accident.
 
 ## GUI (`src/gui/`)
 
 ```
 gui/
   mod.rs             run(), eframe NativeOptions (wgpu renderer)
-  app.rs             GuiApp: ALL state, background work, derived-data caches
+  app/               GuiApp: ALL state, background work, derived-data caches
+    mod.rs           the struct itself, preferences, cache keys, frame update
+    scan.rs          scan/search/extension workers, restore-by-name, polling
+    rows.rs          the flattened visible-row cache and selection
+    extensions.rs    extension aggregation and the flat file views
+    treemap.rs       zoom state and treemap cache keys
+    tools.rs         delete, empty, and Windows maintenance operations
   icons.rs           vector icon set, painted not fonted
   treemap_layout.rs  Node subtree -> positioned pixel tiles
   ui/
@@ -142,8 +157,10 @@ never looks like a failed launch.
 
 ## TUI (`src/tui/`)
 
-`app.rs` holds state and the event loop; `ui/` renders, split the same
-way `gui/ui/` is — `mod.rs` lays the panes out, then `chrome.rs`
+`app/` holds state and the event loop — `mod.rs` the grouped state,
+`input.rs` key/mouse dispatch, `navigation.rs` movement,
+`operations.rs` everything destructive, `views.rs` the alternate views —
+and `ui/` renders, split the same way `gui/ui/` is — `mod.rs` lays the panes out, then `chrome.rs`
 (header, footer, extension legend), `lists.rs` (directory listing,
 largest files, search, duplicates), `treemap.rs`, `popups.rs` (every
 prompt, confirmation and help screen) and `text.rs` (width-aware
@@ -165,7 +182,7 @@ group it belongs to rather than to the top level.
 
 | Change | File |
 | --- | --- |
-| A new column in the file table | `gui/ui/directory.rs` + `DirectoryColumn` in `gui/app.rs` |
+| A new column in the file table | `gui/ui/directory.rs` + `DirectoryColumn` in `gui/app/extensions.rs` |
 | A new menu item | `gui/ui/chrome.rs`; the command itself in `gui/ui/actions.rs` |
 | A new keyboard shortcut | `handle_shortcuts` in `gui/ui/actions.rs`, and show it on the matching menu row |
 | A new theme | `assets/themes.toml` — data only, no code |
@@ -177,4 +194,44 @@ group it belongs to rather than to the top level.
 | The tiling math itself | `treemap.rs` (shared with the TUI — check both) |
 | Anything scanned or aggregated | `scanner.rs` + `model.rs` |
 | A shared TUI pane, popup frame, or list | `tui/ui/widgets.rs` |
+| A new constant | Beside the code it governs — see *Where constants live* below |
 | A new persisted preference | `config.rs`, then both halves of `ViewOptions::from_config`/`to_config` (or `GuiApp::new`/`save_preferences` for anything outside the view toggles) |
+
+## Where constants live
+
+There is no `constants.rs`, and adding one would be a regression. A
+constant sits at the narrowest scope that can see it:
+
+| Scope | When | Examples |
+| --- | --- | --- |
+| Function-local `const` | One function uses it | `nav_row`'s `ICON` / `GAP` / `HEIGHT` in `gui/ui/modal.rs` |
+| Module-private `const` | Several functions in one module | `MIN_TILE_AREA_PX` (`gui/treemap_layout.rs`), `PAR_THRESHOLD` (`scanner.rs`), `MAX_CANDIDATES` (`duplicates.rs`) |
+| `pub` / `pub(super)` from the owning module | Two modules genuinely need it | `SPACE_*` and `PAD` (`gui/ui/theme.rs`), `Category::ALL` (`color.rs`), `TOOLS` (`wintools.rs`), `DEEP_CHAIN_DEPTH` (`model::fixtures`) |
+
+The reasoning is the same one that keeps the two front ends apart. A
+central bucket is a file every change touches; it groups unrelated values
+by the accident of both being numbers; and it separates a number from the
+paragraph explaining why it is that number, which in this codebase is
+where the real content is. `MIN_TILE_AREA_PX` means nothing without the
+comment above it about what a treemap tile smaller than six pixels looks
+like.
+
+Two consequences worth stating:
+
+- **Cross-front-end constants follow cross-front-end code.** Anything the
+  GUI and the TUI both need lives at the crate root, never in `gui/` or
+  `tui/`. The deliberate near-duplicates — `MAX_DEPTH` and
+  `MAX_CHILDREN_PER_LEVEL`, which exist in both `gui/treemap_layout.rs`
+  and `tui/nested.rs` with different values — are not candidates for
+  merging: a terminal cell and a pixel differ by orders of magnitude in
+  area, so they need different floors.
+- **Duplication across modules is the signal to promote one.**
+  `DEEP_CHAIN_DEPTH` was `const DEEP: usize = 60_000` in both `search.rs`
+  and `top_files.rs`, each under its own copy of the same explanation.
+
+Names taken from `gui/ui/theme.rs` are reserved. Every module in
+`gui::ui` glob-imports it, and a glob import loses silently to a local
+declaration of the same name, so a local `const PAD` would mean 10.0 in
+one function while the identifier meant 12.0 everywhere else.
+`no_local_const_shadows_the_theme_scale` in `gui/ui/tests.rs` derives the
+reserved list from `theme.rs` itself and fails the build on a collision.

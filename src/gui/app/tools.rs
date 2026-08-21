@@ -29,7 +29,10 @@ pub(in crate::gui) struct ToolOutcome {
 
 pub(in crate::gui) struct PendingDelete {
     pub index_path: Vec<usize>,
-    pub name: String,
+    /// The raw filesystem name, kept `OsString` so the stale-name check
+    /// in `confirm_delete` compares identity rather than the lossy
+    /// display of it.
+    pub name: std::ffi::OsString,
     pub is_dir: bool,
     pub permanent: bool,
 }
@@ -118,7 +121,12 @@ impl GuiApp {
             self.status = Some("The scan root cannot be deleted from this view".to_string());
             return;
         }
-        let node = self.tree.node_for(&index_path);
+        // Exact: a delete queued against a path that no longer resolves
+        // must not silently describe whatever now sits at those indices.
+        let Some(node) = self.tree.node_for(&index_path) else {
+            self.status = Some("That item is no longer there".to_string());
+            return;
+        };
         self.pending_delete = Some(PendingDelete {
             index_path,
             name: node.name.clone(),
@@ -136,21 +144,27 @@ impl GuiApp {
         // before handing a path to `remove_dir_all`. Deleting the wrong
         // thing is not an error worth being clever about recovering
         // from.
-        let Some(node) = self.tree.try_node_for(&pending.index_path) else {
+        let Some(node) = self.tree.node_for(&pending.index_path) else {
             self.status = Some(format!(
                 "{} is no longer where it was; nothing was deleted",
-                pending.name
+                pending.name.to_string_lossy()
             ));
             return Ok(());
         };
         if node.name != pending.name || node.is_dir != pending.is_dir {
             self.status = Some(format!(
                 "{} moved since it was selected; nothing was deleted",
-                pending.name
+                pending.name.to_string_lossy()
             ));
             return Ok(());
         }
-        let path = self.tree.path_for(&pending.index_path);
+        let Some(path) = self.tree.path_for(&pending.index_path) else {
+            self.status = Some(format!(
+                "{} is no longer where it was; nothing was deleted",
+                pending.name.to_string_lossy()
+            ));
+            return Ok(());
+        };
         if pending.permanent {
             if pending.is_dir {
                 std::fs::remove_dir_all(&path)?;
@@ -180,12 +194,49 @@ impl GuiApp {
         if !pending.is_dir {
             return Ok(());
         }
-        let path = self.tree.path_for(&pending.index_path);
-        for child in std::fs::read_dir(&path)?.filter_map(Result::ok) {
-            trash::delete(child.path())
-                .map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+        let Some(path) = self.tree.path_for(&pending.index_path) else {
+            self.status = Some(format!(
+                "{} is no longer where it was; nothing was emptied",
+                pending.name.to_string_lossy()
+            ));
+            return Ok(());
+        };
+        // Enumerate-fully-then-delete, shared with the TUI: an
+        // incomplete listing aborts before anything is deleted, and a
+        // mid-way failure is reported as the partial emptying it is.
+        // Either way the folder is rescanned so the tree matches what
+        // actually went to the trash.
+        match crate::util::empty_directory_to_trash(&path)? {
+            crate::util::EmptyOutcome::Incomplete { unreadable } => {
+                self.status = Some(format!(
+                    "Nothing was emptied: {unreadable} entr{} could not be read ({})",
+                    if unreadable == 1 { "y" } else { "ies" },
+                    path.display()
+                ));
+            }
+            crate::util::EmptyOutcome::Partial {
+                done,
+                total,
+                first_error,
+            } => {
+                let failed = total - done;
+                self.status = Some(match first_error {
+                    Some(error) => format!(
+                        "Emptied {done} of {total} items in {}; {failed} could not be \
+                         moved to trash ({error})",
+                        path.display()
+                    ),
+                    None => format!(
+                        "Emptied {done} of {total} items in {}; {failed} could not be \
+                         moved to trash",
+                        path.display()
+                    ),
+                });
+            }
+            crate::util::EmptyOutcome::Emptied { .. } => {
+                self.status = Some(format!("Emptied: {}", path.display()));
+            }
         }
-        self.status = Some(format!("Emptied: {}", path.display()));
         self.refresh_scan()
     }
 }

@@ -44,7 +44,7 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
 
             let mut full_idx = base.clone();
             full_idx.extend(&hit.index_path);
-            let full_path = app.tree.path_for(&full_idx);
+            let full_path = app.tree.deepest_valid_path(&full_idx);
             let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
             let suffix = if hit.is_dir { "/" } else { "" };
 
@@ -106,14 +106,17 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         .rows
         .iter()
         .map(|row| match row {
-            DupRow::Header { size, count } => {
+            DupRow::Header {
+                size,
+                count,
+                wasted,
+            } => {
                 group_num += 1;
-                let wasted = *size * (*count as u64 - 1);
                 ListItem::new(Line::from(Span::styled(
                     format!(
                         "Group {group_num} — {count} × {}  ({} wasted)",
                         human_bytes(*size),
-                        human_bytes(wasted)
+                        human_bytes(*wasted)
                     ),
                     Style::default()
                         .fg(theme::ACCENT)
@@ -121,7 +124,7 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
                 )))
             }
             DupRow::Member { index_path } => {
-                let full_path = app.tree.path_for(index_path);
+                let full_path = app.tree.deepest_valid_path(index_path);
                 let rel = full_path.strip_prefix(&root_path).unwrap_or(&full_path);
                 ListItem::new(Line::from(vec![
                     Span::raw("    "),
@@ -147,6 +150,12 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         title.push_str(&format!(
             " ({} files not checked — limit reached)",
             thousands(app.duplicates.skipped as u64)
+        ));
+    }
+    if app.duplicates.read_failures > 0 {
+        title.push_str(&format!(
+            " ({} files could not be read)",
+            thousands(app.duplicates.read_failures as u64)
         ));
     }
     title.push_str(" — u to close ");
@@ -196,6 +205,14 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ""
             };
             let err = if node.error { " <access denied>" } else { "" };
+            // A mount point kept as a zero-byte marker: without the
+            // label a scan boundary reads as an inexplicably empty
+            // directory.
+            let boundary = if node.other_filesystem {
+                " <other filesystem>"
+            } else {
+                ""
+            };
             // Only shown when the directory itself was readable but
             // something inside it wasn't — `error` above already covers
             // "couldn't read this one at all".
@@ -214,8 +231,12 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw(format!(" {:>5.1}%  ", pct)),
                 Span::styled(icon, Style::default().fg(name_color)),
-                Span::styled(format!("{}{}", node.name, suffix), name_style),
+                Span::styled(
+                    format!("{}{}", node.name.to_string_lossy(), suffix),
+                    name_style,
+                ),
                 Span::styled(err, Style::default().fg(theme::DANGER)),
+                Span::styled(boundary, Style::default().fg(theme::MUTED)),
                 Span::styled(warn, Style::default().fg(theme::WARNING)),
             ]);
             if show_details {
@@ -275,7 +296,7 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
 
             let mut full_idx = base.clone();
             full_idx.extend(&tf.index_path);
-            let full_path = app.tree.path_for(&full_idx);
+            let full_path = app.tree.deepest_valid_path(&full_idx);
             let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
 
             let mut spans = size_bar(shown_size, max_size, BAR_WIDTH, color);

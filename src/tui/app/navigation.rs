@@ -53,11 +53,13 @@ impl App {
     }
 
     pub(in crate::tui) fn current_node(&self) -> &Node {
-        self.tree.node_for(&self.path_indices)
+        // Forgiving: the current directory is where the user is, and a
+        // stale position should still show the place it now points at.
+        self.tree.deepest_valid_node(&self.path_indices)
     }
 
     pub(in crate::tui) fn current_path(&self) -> PathBuf {
-        self.tree.path_for(&self.path_indices)
+        self.tree.deepest_valid_path(&self.path_indices)
     }
 
     /// Children of the current directory, filtered by the active search
@@ -69,7 +71,7 @@ impl App {
         let mut v: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
         if !self.filter.is_empty() {
             let f = self.filter.to_lowercase();
-            v.retain(|(_, n)| n.name.to_lowercase().contains(&f));
+            v.retain(|(_, n)| n.name.to_string_lossy().to_lowercase().contains(&f));
         }
         // `use_physical`, not always-logical: this used to sort by
         // `size` whatever the view was showing, so pressing `p` swapped

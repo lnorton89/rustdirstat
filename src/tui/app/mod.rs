@@ -94,13 +94,23 @@ pub(in crate::tui) enum Action {
 /// (not itself navigable — just a size/count label) or a member file
 /// (navigable, like a search hit).
 pub(in crate::tui) enum DupRow {
-    Header { size: u64, count: usize },
-    Member { index_path: Vec<usize> },
+    /// A group header: size, number of copies, and the bytes actually
+    /// reclaimable (hard-link aliases are not copies).
+    Header {
+        size: u64,
+        count: usize,
+        wasted: u64,
+    },
+    Member {
+        index_path: Vec<usize>,
+    },
 }
 
 pub(in crate::tui) struct PendingDelete {
     pub orig_idx: usize,
-    pub name: String,
+    /// The raw filesystem name, kept `OsString` so a stale-name check
+    /// compares identity rather than the lossy display of it.
+    pub name: std::ffi::OsString,
     pub permanent: bool,
     /// Whether the target is a directory — the delete-confirm popup only
     /// offers an "Empty" (keep the folder, delete its contents) option
@@ -157,6 +167,9 @@ pub(in crate::tui) struct DuplicatesState {
     /// Shown, so "no more duplicates" is not confused with "we stopped
     /// looking".
     pub skipped: usize,
+    /// Files that could not be hashed at all (disappeared, unreadable,
+    /// mid-read error). Shown for the same reason as `skipped`.
+    pub read_failures: usize,
 }
 
 pub(in crate::tui) struct App {
@@ -623,26 +636,26 @@ mod tests {
         app.sort = SortMode::SizeDesc;
 
         app.use_physical = false;
-        let logical: Vec<&str> = app
+        let logical: Vec<String> = app
             .display_children()
             .iter()
-            .map(|(_, n)| n.name.as_str())
+            .map(|(_, n)| n.name.to_string_lossy().to_string())
             .collect();
         assert_eq!(
             logical,
-            ["sparse.img", "packed.bin"],
+            ["sparse.img".to_string(), "packed.bin".to_string()],
             "by logical size the sparse file leads"
         );
 
         app.use_physical = true;
-        let physical: Vec<&str> = app
+        let physical: Vec<String> = app
             .display_children()
             .iter()
-            .map(|(_, n)| n.name.as_str())
+            .map(|(_, n)| n.name.to_string_lossy().to_string())
             .collect();
         assert_eq!(
             physical,
-            ["packed.bin", "sparse.img"],
+            ["packed.bin".to_string(), "sparse.img".to_string()],
             "the list should be ordered by the size it is showing"
         );
     }
@@ -651,7 +664,7 @@ mod tests {
         let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
         app.pending_delete = Some(PendingDelete {
             orig_idx: 0,
-            name: "doomed".to_owned(),
+            name: std::ffi::OsString::from("doomed"),
             permanent: false,
             is_dir,
         });
@@ -700,10 +713,11 @@ mod tests {
     /// A delete queued against a tree that no longer has that entry is
     /// refused, not applied to whatever now sits at those indices.
     ///
-    /// `node_for` answers about the deepest node that exists, so a stale
-    /// index path resolves to the target's *parent*. For a delete that
-    /// is worse than a crash: the confirmation would read the parent
-    /// directory's size and then remove it.
+    /// Resolution is exact (`node_for`), so a stale index path yields
+    /// nothing to act on. If it resolved forgivingly instead, it would
+    /// land on the target's *parent* — and for a delete that is worse
+    /// than a crash: the confirmation would read the parent directory's
+    /// size and then remove it.
     #[test]
     fn a_delete_queued_against_a_vanished_entry_is_refused() -> Result<()> {
         let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
@@ -711,7 +725,7 @@ mod tests {
         // already past the end.
         app.pending_delete = Some(PendingDelete {
             orig_idx: 0,
-            name: "gone".to_owned(),
+            name: std::ffi::OsString::from("gone"),
             permanent: true,
             is_dir: false,
         });

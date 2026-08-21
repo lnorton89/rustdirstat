@@ -444,7 +444,7 @@ pub(super) fn draw_status_bar(app: &mut GuiApp, ctx: &egui::Context) {
         .frame(
             Frame::none()
                 .fill(palette().app)
-                .inner_margin(Margin::symmetric(PAD, SPACE_XS + 1.0))
+                .inner_margin(Margin::symmetric(PAD, SPACE_XS))
                 .stroke(Stroke::new(1.0_f32, palette().border)),
         )
         .show(ctx, |ui| {

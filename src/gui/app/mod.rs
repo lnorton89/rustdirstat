@@ -258,7 +258,27 @@ pub(in crate::gui) struct GuiApp {
     treemap_key: Option<TreemapKey>,
     scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
     scan_resets_workspace: bool,
+    /// The user's zoom/selection/expansion captured as name identities
+    /// when a refresh scan started, to be re-derived against the new
+    /// tree when it lands. `None` for a fresh-folder scan, which resets
+    /// the workspace anyway.
+    restore: Option<scan::RestoreState>,
     duplicate_rx: Option<mpsc::Receiver<crate::duplicates::DupScan>>,
+    /// A search in flight. Search is the one whole-tree walk that used
+    /// to run on the frame thread — ten million nodes of regex matching
+    /// froze the window — so it runs on a worker like scanning and
+    /// duplicates do, and `poll_background` applies the result.
+    search_rx: Option<mpsc::Receiver<crate::search::SearchOutcome>>,
+    /// A zoom-time extension recomputation in flight. The scan already
+    /// computes the *root* extension rows off the frame thread, but
+    /// zooming into a subtree recomputes them for that subtree — a walk
+    /// the size of the zoomed region, which on a drive-sized scan is
+    /// millions of nodes. Same worker pattern as the search.
+    extensions_rx: Option<mpsc::Receiver<Vec<ExtensionRow>>>,
+    /// Raised to stop the worker behind `extensions_rx` mid-walk when
+    /// its answer became obsolete — a newer zoom superseded it, or a
+    /// rescan retired the tree it was walking.
+    extensions_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub tools: ToolsState,
 }
 
@@ -303,7 +323,11 @@ impl GuiApp {
             treemap_key: None,
             scan_rx: None,
             scan_resets_workspace: false,
+            restore: None,
             duplicate_rx: None,
+            search_rx: None,
+            extensions_rx: None,
+            extensions_cancel: None,
             tools: ToolsState::default(),
         };
         app.refresh_extensions();
@@ -351,12 +375,19 @@ impl GuiApp {
     }
 
     fn save_preferences(&self) {
-        crate::config::save(&crate::config::Config {
+        let result = crate::config::save(&crate::config::Config {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),
             ..self.view.to_config()
         });
+        // This runs from `on_exit` — the window is already going away,
+        // so stderr is the only channel left. A quiet stderr line beats
+        // the old behavior, which was every failed save looking exactly
+        // like a successful one.
+        if let Err(error) = result {
+            eprintln!("rustdirstat: preferences were not saved: {error}");
+        }
     }
 }
 
@@ -390,6 +421,7 @@ mod tests {
         ViewOptions,
     };
     use crate::model::SortMode;
+    use crate::util::scratch_dir;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -398,7 +430,7 @@ mod tests {
     fn app_with_differing_sizes() -> GuiApp {
         fn file(name: &str, size: u64, physical: u64) -> Node {
             Node {
-                name: name.to_owned(),
+                name: std::ffi::OsString::from(name),
                 is_dir: false,
                 is_symlink: false,
                 size,
@@ -411,6 +443,8 @@ mod tests {
                 category: Some(Category::NoExtension),
                 ext_totals: Vec::new(),
                 unreadable_count: 0,
+                file_id: None,
+                other_filesystem: false,
             }
         }
         let mut totals = vec![(0, 0, 0); Category::COUNT];
@@ -420,7 +454,7 @@ mod tests {
             volume_free: None,
             volume_total: None,
             root: Node {
-                name: "root".to_owned(),
+                name: std::ffi::OsString::from("root"),
                 is_dir: true,
                 is_symlink: false,
                 size: 100,
@@ -433,6 +467,8 @@ mod tests {
                 category: None,
                 ext_totals: totals,
                 unreadable_count: 0,
+                file_id: None,
+                other_filesystem: false,
             },
         })
     }
@@ -506,26 +542,6 @@ mod tests {
         assert_eq!(extension_label("archive.tar.gz"), ".gz");
     }
 
-    /// A scratch directory no other test can collide with.
-    ///
-    /// The counter is the part that matters. Tests run in parallel, and a
-    /// clock alone is not enough to separate them: `SystemTime::now` has
-    /// coarse enough resolution on Windows that two calls can return the
-    /// same value, at which point both tests share a directory and
-    /// whichever finishes first deletes it out from under the other. That
-    /// surfaced as an intermittent `PermissionDenied` from
-    /// `remove_dir_all` on Windows CI.
-    fn test_dir(name: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rustdirstat_gui_{}_{}_{}",
-            std::process::id(),
-            name,
-            unique
-        ))
-    }
-
     fn wait_for_background(app: &mut GuiApp) {
         let ctx = egui::Context::default();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -551,8 +567,8 @@ mod tests {
 
     #[test]
     fn folder_changes_scan_without_blocking_the_caller() -> anyhow::Result<()> {
-        let first = test_dir("first");
-        let second = test_dir("second");
+        let first = scratch_dir("gui", "first");
+        let second = scratch_dir("gui", "second");
         std::fs::create_dir_all(&first)?;
         std::fs::create_dir_all(&second)?;
         std::fs::write(first.join("old.txt"), b"old")?;
@@ -572,7 +588,7 @@ mod tests {
 
     #[test]
     fn initial_gui_shell_opens_before_scan_finishes() -> anyhow::Result<()> {
-        let dir = test_dir("initial");
+        let dir = scratch_dir("gui", "initial");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("payload.dat"), vec![7_u8; 4096])?;
 
@@ -588,7 +604,7 @@ mod tests {
 
     #[test]
     fn duplicate_hashing_runs_in_background() -> anyhow::Result<()> {
-        let dir = test_dir("duplicates");
+        let dir = scratch_dir("gui", "duplicates");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("one.bin"), b"same bytes")?;
         std::fs::write(dir.join("two.bin"), b"same bytes")?;
@@ -604,7 +620,7 @@ mod tests {
     }
 
     fn nested_test_tree() -> anyhow::Result<std::path::PathBuf> {
-        let dir = test_dir("cache");
+        let dir = scratch_dir("gui", "cache");
         std::fs::create_dir_all(dir.join("alpha"))?;
         std::fs::create_dir_all(dir.join("beta"))?;
         std::fs::write(dir.join("alpha/small.bin"), vec![1_u8; 16])?;
@@ -749,7 +765,7 @@ mod tests {
     #[test]
     fn scanning_a_new_folder_clears_the_previous_one_from_the_view() -> anyhow::Result<()> {
         let first = nested_test_tree()?;
-        let second = test_dir("second_scan");
+        let second = scratch_dir("gui", "second_scan");
         std::fs::create_dir_all(&second)?;
         std::fs::write(second.join("other.bin"), vec![9_u8; 32])?;
 
@@ -785,6 +801,158 @@ mod tests {
         Ok(())
     }
 
+    /// A refresh scan restores the browsing location by name identity,
+    /// through the whole scan/poll pipeline, so the user stays where
+    /// they were.
+    #[test]
+    fn a_refresh_scan_restores_selection_and_zoom() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.toggle_expanded(&alpha);
+        app.select_path(alpha.clone());
+        app.zoom_path = alpha.clone();
+
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+
+        let selected = app
+            .selected_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("the selection should have been restored"))?;
+        assert_eq!(
+            selected, alpha,
+            "the selection should survive a refresh scan"
+        );
+        assert_eq!(
+            app.zoom_path, alpha,
+            "the zoom should survive a refresh scan"
+        );
+        assert!(
+            app.expanded.contains(&alpha),
+            "the expansion should survive a refresh scan"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    /// A selection is an exact claim about a specific item, so one whose
+    /// file vanished between scans must be dropped, not silently moved to
+    /// its parent directory — landing on the parent would make the
+    /// selection point at a different thing than the user chose.
+    #[test]
+    fn a_selection_whose_file_vanished_is_dropped_not_moved_to_its_parent() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.toggle_expanded(&alpha);
+        app.refresh_visible_rows();
+        let small = row_path(&app, "small.bin")?;
+        app.select_path(small.clone());
+        assert_eq!(app.selected_path.as_deref(), Some(&small[..]));
+
+        // The file disappears from disk before the refresh scan runs.
+        std::fs::remove_file(dir.join("alpha").join("small.bin"))?;
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+
+        assert!(
+            app.selected_path.is_none(),
+            "a vanished selection must not resolve to its parent directory"
+        );
+        assert!(
+            dir.join("alpha").exists(),
+            "the parent still exists — the test must prove the selection \
+             was dropped rather than moved to it"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    /// A refresh that starts while the view is already stale — the zoom
+    /// path no longer resolves, so no name identity can be captured —
+    /// must still not carry raw index paths onto the new tree
+    /// unvalidated. Same semantics as the restore itself: placement
+    /// truncates to what exists, selection is exact or dropped.
+    #[test]
+    fn a_stale_view_is_still_validated_when_no_identity_could_be_captured() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        // Point the view somewhere the current tree cannot resolve, so
+        // the capture step has nothing to capture.
+        app.zoom_path = vec![97, 98];
+        app.selected_path = Some(vec![97, 98, 99]);
+        app.expanded.insert(vec![97]);
+
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+
+        assert_eq!(
+            app.zoom_path,
+            Vec::<usize>::new(),
+            "a stale zoom truncates to the deepest place that exists"
+        );
+        assert!(
+            app.selected_path.is_none(),
+            "a stale selection is dropped, not carried onto the new tree"
+        );
+        assert!(
+            app.expanded
+                .iter()
+                .all(|path| app.tree.node_for(path).is_some()),
+            "no expanded path may dangle into the new tree"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    /// Zooming recomputes the extension breakdown for the zoomed subtree
+    /// — on a worker, so zooming into a drive-sized subtree cannot freeze
+    /// the window, and the rows that arrive describe the subtree the
+    /// user actually zoomed into.
+    #[test]
+    fn zoom_recomputes_extensions_for_the_zoomed_subtree() -> anyhow::Result<()> {
+        let dir = scratch_dir("gui", "ext_zoom");
+        std::fs::create_dir_all(dir.join("alpha"))?;
+        std::fs::create_dir_all(dir.join("beta"))?;
+        std::fs::write(dir.join("alpha/one.bin"), vec![1_u8; 8])?;
+        std::fs::write(dir.join("beta/two.txt"), vec![2_u8; 8])?;
+
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.zoom_path = alpha;
+        app.refresh_extensions();
+
+        // The rows arrive on a worker; wait for them through the same
+        // poll path the frame update uses.
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.extensions_pending() && Instant::now() < deadline {
+            app.poll_background(&ctx);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !app.extensions_pending(),
+            "the extension worker should finish"
+        );
+        let exts: Vec<String> = app.extensions.iter().map(|e| e.extension.clone()).collect();
+        assert_eq!(
+            exts,
+            [".bin".to_string()],
+            "zoomed into alpha — only its extension should remain"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
     /// A queued deletion holds indices into the tree it was taken from.
     /// Letting one survive a rescan means confirming it deletes whatever
     /// now sits at those indices — a different file entirely.
@@ -809,7 +977,7 @@ mod tests {
         // there now.
         app.pending_delete = Some(PendingDelete {
             index_path: vec![0],
-            name: "not-the-file-that-is-there".to_string(),
+            name: std::ffi::OsString::from("not-the-file-that-is-there"),
             is_dir: false,
             permanent: true,
         });
@@ -823,7 +991,7 @@ mod tests {
 
     #[test]
     fn scan_root_cannot_be_queued_for_deletion() -> anyhow::Result<()> {
-        let dir = test_dir("root_delete");
+        let dir = scratch_dir("gui", "root_delete");
         std::fs::create_dir_all(&dir)?;
         let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.select_path(Vec::new());

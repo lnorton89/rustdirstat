@@ -31,6 +31,11 @@ cargo fmt --all -- --check
 cargo run --bin rustdirstat-gui -- C:/some/path
 ```
 
+```bash
+cargo run --example changelog          # regenerate CHANGELOG.md
+cargo run --example changelog -- --check   # what CI runs
+```
+
 All three are clean on `main` and are enforced by CI
 (`.github/workflows/ci.yml`) on Linux, macOS, and Windows. Keep them that
 way — a warning is a build failure there.
@@ -124,6 +129,24 @@ belongs. Do not restate one in the other, and keep `Dependencies:` to
 what a reader actually needs to know is in play — the crates and modules
 the file leans on, not a transcription of every `use`.
 
+**`CHANGELOG.md` is generated — never hand-edit it.** `examples/changelog.rs`
+rebuilds it from `git tag` plus conventional-commit subjects, and CI runs
+`--check` against the *released* sections, so an edit to one is a build
+failure. `Unreleased` is exempt from the check by design: it changes with
+every merge, and a squash rewrites the hashes it pins. Prose for a release
+belongs in the GitHub release body, not here. `CONTRIBUTING.md` has the
+release ordering — the tag comes before the regeneration, because the
+generator reads tags.
+
+**Never amend or rebase a commit after tagging it.** The tag survives
+pointing at the discarded copy, on no branch at all, and every release
+range (`<previous>..<tag>`) computed from it is then wrong. `v0.2.0` was in
+that state until it was re-pointed at `a2fa793`. The changelog `--check`
+now fails on any version tag no branch can reach. Repairing one means a
+force-pushed tag, which re-triggers `release.yml` and its
+`gh release upload --clobber` — cancel that run unless you actually want a
+published release's assets rebuilt.
+
 **No `unwrap`, `expect`, or `panic!` anywhere — including tests.** Denied
 by lint, so a violation is a build failure, not a warning. In library
 code use `let ... else`, `?`, or an explicit fallback. In tests, return
@@ -189,6 +212,41 @@ larger sizes — regenerate those with `cargo run --example brand_assets`
 rather than editing the PNGs. Nothing else in drawing code gets to hold
 a literal on this argument.
 
+**Constants live with what they govern, and there is no `constants.rs`.**
+Three tiers, in order of preference — reach for the narrowest that works:
+
+- **Function-local `const`**, when one function uses it. Most of the GUI's
+  geometry is this: `nav_row`'s `ICON` / `GAP` / `HEIGHT` are declared
+  inside `nav_row`, where the code that has to agree with them is.
+- **Module-private `const`** at the top of the file, when several
+  functions in one module share it — `treemap_layout`'s `MIN_TILE_AREA_PX`,
+  `scanner`'s `PAR_THRESHOLD`, `duplicates`' `MAX_CANDIDATES`.
+- **`pub` / `pub(super)` in the module that owns the concept**, when two
+  modules genuinely need it. `theme` owns the spacing scale, `color` owns
+  `Category::ALL`, `wintools` owns `TOOLS`, `model::fixtures` owns
+  `DEEP_CHAIN_DEPTH`.
+
+A shared `constants.rs` is the thing to avoid, and the reason is not
+style. It is a file every change touches, it files unrelated numbers next
+to each other by the accident of both being numbers, and it separates a
+value from the reasoning that justifies it — which here is usually a
+paragraph, not a line. The same rule that governs code governs constants:
+neither front end may reach into the other, so anything both need lives
+at the crate root, not in `gui/` or `tui/`.
+
+Duplication across modules is the signal to promote one. `DEEP_CHAIN_DEPTH`
+was `const DEEP: usize = 60_000` in both `search.rs` and `top_files.rs`,
+with the same three-line comment above each — two places to edit when the
+answer to "how deep is deep enough" changes.
+
+**Never shadow a name the theme exports.** Every module in `gui::ui`
+glob-imports `theme`, and a glob is the weakest binding there is: a local
+`const PAD` beats it silently, with no warning, so the identifier means
+10.0 inside one function and 12.0 three lines away. `nav_row` had exactly
+that. `no_local_const_shadows_the_theme_scale` in `gui/ui/tests.rs` reads
+the names back out of `theme.rs` and fails the build for a collision, so
+the check extends itself as the scale grows.
+
 **No hand-picked pixel gaps.** Every margin, inset, and `add_space` in
 the GUI is one of `SPACE_XS` / `SPACE_SM` / `SPACE_MD` / `SPACE_LG` in
 `src/gui/ui/theme.rs`, and `PAD` — the inset from a panel edge to its
@@ -200,6 +258,20 @@ spacing (`a_file_row_lines_its_icon_up_with_the_folders_beside_it`); and
 `ui.separator()` allocates padding of its own on top of the row spacing,
 which is why panes rule off their headings with `section_rule` rather
 than by hand (`every_pane_rules_off_its_heading_at_the_same_inset`).
+
+This is now literally true, not aspirational. It used to be neither: the
+modal carried about forty hand-picked values — `add_space(6.0)`,
+`add_space(28.0)`, `Margin::symmetric(7.0, 2.0)`, `BODY_PAD = 20.0`,
+even a `SPACE_XS + 1.0` — from before the scale existed. Seventeen already
+matched a step exactly and were swapped for the name; the remaining
+twenty-nine were snapped to the nearest step, ties rounding up. `BODY_PAD`
+is now `SPACE_LG` rather than a number of its own.
+
+So there is no literal spacing left in `src/gui`: the only bare number in
+a `Margin` is a `0.0`, which is an absent margin rather than a step. If
+you find yourself wanting a value between two steps, the answer is one of
+the two steps — that is what makes the toolbar, the status bar, every
+pane heading, and now every modal page share one column.
 
 **Every hover fades; nothing switches.** Hoverable surfaces route their
 highlight through `hover_t` / `hover_fill` in `src/gui/ui/widgets.rs`,
@@ -323,9 +395,13 @@ iterative or bounded for this reason; `report.rs` takes an explicit
 `max_depth`. The two searches were the stragglers — both recursed once
 per directory level until `a_tree_far_deeper_than_the_stack_is_still_searched`
 in each of them started failing the build. If you add a walk,
-make it iterative — and note that `Node`'s `Drop` is written so that the
-outermost drop drains the whole tree, leaving every node below it
-childless and costing one allocation for the tree rather than one per
+make it iterative — and if it is a whole-subtree pre-order walk that
+reports index paths, build it on `model::walk_preorder` rather than
+copying the frame discipline a fourth time; `duplicates.rs` and
+`csv_export.rs` keep their own walks only because they need a live
+`PathBuf` for hashing/io. And note that `Node`'s `Drop` is written so
+that the outermost drop drains the whole tree, leaving every node below
+it childless and costing one allocation for the tree rather than one per
 node. `scanner.rs` is the deliberate exception: it recurses through
 rayon, bounded by what a real path can express.
 
@@ -335,6 +411,28 @@ and the TUI holds `mkv`, which are unrelated strings to a hash. Only
 saturation and value are per-front-end. The reserved hue band around the
 directory tan is load-bearing: without it an ordinary `.wav` tile is
 hard to tell from a folder tile beside it.
+
+**A pathname and a filesystem object are different things.** `Node`
+holds `file_id` — `(st_dev, st_ino)` on Unix, `None` on Windows —
+captured at scan time. Duplicates use it to tell two hard links to one
+file from two real copies: a same-content group whose names all share
+one inode is not reclaimable space, and `DupGroup::reclaimable` counts
+`distinct_inodes - 1`, not `files.len() - 1`. The scanner stays on the
+root's filesystem by default (`--cross-filesystems` opts out; Unix only —
+Windows reports no device identity to the scanner); bytes on other
+devices compared against the root volume's free space would be a
+category error, so a mount point is kept as a childless zero-byte marker
+(`Node.other_filesystem`) rather than descended into — and rather than
+dropped, which made it look like the scanner had lost it. And scan-time
+identity is why a rescan restores the
+GUI's zoom/selection/expansion by *name* components rather than by the
+`Vec<usize>` indices, which only mean anything against the tree they
+were taken from. Tree lookups are exact by default — `node_for` /
+`path_for` return `Option`, `None` on a stale path — and the forgiving
+`deepest_valid_node` / `deepest_valid_path` / `valid_prefix` exist for
+display and navigation only. A destructive operation that resolved
+forgivingly would act on a *different* directory than the one the user
+pointed at.
 
 **Neither front end may reach into the other.** Anything both need
 lives at the crate root: `search`, `top_files`, `color`, `stats`,

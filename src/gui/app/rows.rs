@@ -112,6 +112,25 @@ pub(in crate::gui) fn expanded_fingerprint(expanded: &HashSet<Vec<usize>>) -> u6
     xor ^ sum.rotate_left(17) ^ (expanded.len() as u64)
 }
 
+/// A child row's label: the lossy display of the node's name, annotated
+/// when the entry is a scan-boundary marker — a mount point kept as a
+/// zero-byte stub reads as an inexplicably empty directory without it.
+fn child_label(node: &Node) -> String {
+    let name = node.name.to_string_lossy();
+    if node.other_filesystem {
+        format!("{name}  (other filesystem — not scanned)")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Flattens the expanded subtree rooted at `node` into `out`, in the
+/// same pre-order the recursive form produced.
+///
+/// Iterative for the reason every walk in this crate is: an expanded
+/// directory chain is as deep as the user's filesystem, and a recursion
+/// would put a user-chosen depth on the call stack. One frame per
+/// directory being flattened, on the heap.
 pub(in crate::gui) fn push_tree_rows(
     node: &Node,
     path: Vec<usize>,
@@ -121,37 +140,55 @@ pub(in crate::gui) fn push_tree_rows(
     app: &GuiApp,
     out: &mut Vec<TreeRow>,
 ) {
-    out.push(TreeRow {
-        path: path.clone(),
-        depth,
-        name: display_name,
-        is_dir: node.is_dir,
-        size: node.effective_size(app.use_physical),
-        parent_size,
-        files: node.file_count,
-        dirs: node.dir_count,
-        modified: node.modified,
-        unreadable: node.unreadable_count,
-        symlink: node.is_symlink,
-    });
-    if !node.is_dir || !app.expanded.contains(&path) {
-        return;
+    struct Frame<'a> {
+        node: &'a Node,
+        path: Vec<usize>,
+        depth: usize,
+        parent_size: u64,
+        display_name: String,
     }
-    let mut children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
-    sort_nodes(&mut children, app.sort, app.use_physical);
-    let node_size = node.effective_size(app.use_physical).max(1);
-    for (idx, child) in children {
-        let mut child_path = path.clone();
-        child_path.push(idx);
-        push_tree_rows(
-            child,
-            child_path,
-            depth + 1,
-            node_size,
-            child.name.clone(),
-            app,
-            out,
-        );
+
+    let mut pending = vec![Frame {
+        node,
+        path,
+        depth,
+        parent_size,
+        display_name,
+    }];
+    while let Some(frame) = pending.pop() {
+        out.push(TreeRow {
+            path: frame.path.clone(),
+            depth: frame.depth,
+            // The row's display name; identity stays on the node.
+            name: frame.display_name,
+            is_dir: frame.node.is_dir,
+            size: frame.node.effective_size(app.use_physical),
+            parent_size: frame.parent_size,
+            files: frame.node.file_count,
+            dirs: frame.node.dir_count,
+            modified: frame.node.modified,
+            unreadable: frame.node.unreadable_count,
+            symlink: frame.node.is_symlink,
+        });
+        if !frame.node.is_dir || !app.expanded.contains(&frame.path) {
+            continue;
+        }
+        let mut children: Vec<(usize, &Node)> = frame.node.children.iter().enumerate().collect();
+        sort_nodes(&mut children, app.sort, app.use_physical);
+        let node_size = frame.node.effective_size(app.use_physical).max(1);
+        // Pushed in reverse so the first child pops first — the stack
+        // reproduces the recursion's order exactly.
+        for (idx, child) in children.into_iter().rev() {
+            let mut child_path = frame.path.clone();
+            child_path.push(idx);
+            pending.push(Frame {
+                node: child,
+                path: child_path,
+                depth: frame.depth + 1,
+                parent_size: node_size,
+                display_name: child_label(child),
+            });
+        }
     }
 }
 
@@ -162,19 +199,30 @@ pub(in crate::gui) use crate::model::sort_nodes;
 
 impl GuiApp {
     pub(in crate::gui) fn selected_node(&self) -> Option<&Node> {
-        self.selected_path.as_deref().map(|p| self.tree.node_for(p))
+        self.selected_path
+            .as_deref()
+            .map(|p| self.tree.deepest_valid_node(p))
     }
 
     pub(in crate::gui) fn selected_fs_path(&self) -> Option<PathBuf> {
-        self.selected_path.as_deref().map(|p| self.tree.path_for(p))
+        self.selected_path
+            .as_deref()
+            .map(|p| self.tree.deepest_valid_path(p))
     }
 
     pub(in crate::gui) fn select_path(&mut self, path: Vec<usize>) {
         self.expand_ancestors(&path);
         self.selected_path = Some(path.clone());
-        let selected = self.tree.node_for(&path);
+        let Some(selected) = self.tree.node_for(&path) else {
+            // A selection that does not resolve highlights nothing —
+            // leaving the previous selection's extension lit would tie
+            // the highlight to a thing that is no longer selected.
+            self.highlighted_extension = None;
+            self.highlighted_category = None;
+            return;
+        };
         if !selected.is_dir {
-            self.highlighted_extension = Some(extension_label(&selected.name));
+            self.highlighted_extension = Some(extension_label(&selected.name.to_string_lossy()));
             self.highlighted_category = selected.category;
         } else {
             self.highlighted_extension = None;

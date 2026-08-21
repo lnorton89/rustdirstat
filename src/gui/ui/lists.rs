@@ -114,7 +114,9 @@ pub(super) fn path_size_date_table(
                 };
                 row.set_selected(app.selected_path.as_ref() == Some(&path));
                 row.col(|ui| {
-                    ui.label(crate::util::display_path(&app.tree.path_for(&path)));
+                    ui.label(crate::util::display_path(
+                        &app.tree.deepest_valid_path(&path),
+                    ));
                 });
                 row.col(|ui| {
                     ui.label(human_bytes(if app.use_physical {
@@ -241,9 +243,12 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (group_idx, group) in app.duplicate_groups.iter().enumerate() {
-                let wasted = group
-                    .size
-                    .saturating_mul(group.files.len().saturating_sub(1) as u64);
+                let wasted = group.reclaimable();
+                // `files.len()`, not `distinct_inodes`: the header
+                // counts the rows listed under it (every pathname), the
+                // same number the TUI shows — the hard-link awareness is
+                // carried by the reclaimable figure, which already
+                // counts aliases as nothing.
                 egui::CollapsingHeader::new(format!(
                     "Group {} · {} copies · {} each · {} reclaimable",
                     group_idx + 1,
@@ -256,7 +261,9 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
                     for file in &group.files {
                         let response = ui.selectable_label(
                             app.selected_path.as_ref() == Some(&file.index_path),
-                            crate::util::display_path(&app.tree.path_for(&file.index_path)),
+                            crate::util::display_path(
+                                &app.tree.deepest_valid_path(&file.index_path),
+                            ),
                         );
                         #[cfg(test)]
                         probe(&TEST_DUPLICATE_ROW_RECTS)

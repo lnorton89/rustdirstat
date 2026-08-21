@@ -139,7 +139,7 @@ const OPEN_SECONDS: f32 = 0.13;
 /// the scrolled content below it both use it, so the close button, the
 /// page title, and the right edge of every box on every page line up in
 /// one column.
-pub(super) const BODY_PAD: f32 = 20.0;
+pub(super) const BODY_PAD: f32 = SPACE_LG;
 
 /// Anything inside a stretching `Frame` has to claim the width it was
 /// offered, or the frame shrinks to fit its longest line — which is what
@@ -434,7 +434,7 @@ fn draw_nav(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
             ne: 0.0,
             se: 0.0,
         })
-        .inner_margin(Margin::symmetric(10.0, 14.0))
+        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_MD))
         .show(ui, |ui| {
             ui.set_width(NAV_WIDTH);
             ui.set_min_height(height);
@@ -443,7 +443,7 @@ fn draw_nav(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
                     paint_inline_brand(ui, 18.0);
                     ui.label(RichText::new("RustDirStat").strong());
                 });
-                ui.add_space(12.0);
+                ui.add_space(SPACE_MD);
                 for candidate in ModalPage::ALL {
                     if nav_row(ui, candidate == page, candidate).clicked() {
                         app.modal = Some(candidate);
@@ -462,7 +462,11 @@ fn draw_nav(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
 fn nav_row(ui: &mut egui::Ui, selected: bool, page: ModalPage) -> egui::Response {
     const ICON: f32 = 16.0;
     const GAP: f32 = 11.0;
-    const PAD: f32 = 10.0;
+    // Not `theme::PAD`. This file glob-imports the theme, so a local
+    // `PAD` here would shadow the layout scale's own `PAD` for the length
+    // of this function and nowhere else in the file — the same name
+    // meaning 10.0 on one line and 12.0 on the next.
+    const ICON_INSET: f32 = 10.0;
     const HEIGHT: f32 = 34.0;
     let palette = palette();
     let galley = egui::WidgetText::from(page.label()).into_galley(
@@ -504,7 +508,7 @@ fn nav_row(ui: &mut egui::Ui, selected: bool, page: ModalPage) -> egui::Response
             palette.primary_text
         };
         let icon_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.left() + PAD + ICON * 0.5, rect.center().y),
+            egui::pos2(rect.left() + ICON_INSET + ICON * 0.5, rect.center().y),
             Vec2::splat(ICON),
         );
         page.icon().paint(ui.painter(), icon_rect, color);
@@ -542,7 +546,7 @@ fn draw_page_body(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage, card_hei
         // on the right for the close button to sit above the right edge
         // of the content rather than over the bar.
         let bar = ui.spacing().scroll.allocated_width();
-        ui.add_space(16.0);
+        ui.add_space(SPACE_LG);
         ui.horizontal(|ui| {
             ui.add_space(BODY_PAD);
             ui.vertical(|ui| {
@@ -556,7 +560,7 @@ fn draw_page_body(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage, card_hei
                 }
             });
         });
-        ui.add_space(12.0);
+        ui.add_space(SPACE_MD);
         separator(ui);
 
         // Always scrollable, and always bounded. The windows this
@@ -628,7 +632,7 @@ pub(super) fn confirm_card(
             ui.set_opacity(opening);
             ui.set_max_width(width);
             card_frame(palette)
-                .inner_margin(Margin::same(20.0))
+                .inner_margin(Margin::same(SPACE_LG))
                 .show(ui, |ui| {
                     ui.set_width(width - 40.0);
                     add_contents(ui);
@@ -666,13 +670,13 @@ pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
     Frame::none()
         .fill(fill)
         .rounding(egui::Rounding::same(7.0))
-        .inner_margin(Margin::symmetric(11.0, 9.0))
+        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_SM))
         .stroke(Stroke::new(1.0_f32, tone))
         .show(ui, |ui| {
             fill_width(ui);
             ui.horizontal(|ui| {
                 paint_inline_icon(ui, icon, 15.0, tone);
-                ui.add_space(3.0);
+                ui.add_space(SPACE_XS);
                 ui.label(RichText::new(text).color(text_color));
             });
         });

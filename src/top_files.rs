@@ -19,7 +19,7 @@
 //! it on the call stack.
 
 use crate::color::Category;
-use crate::model::Node;
+use crate::model::{walk_preorder, Node, WalkControl};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::SystemTime;
@@ -60,81 +60,41 @@ impl Ord for Entry {
 /// The `k` largest files anywhere in `node`'s subtree, largest first.
 pub fn top_k(node: &Node, k: usize) -> Vec<TopFile> {
     let mut heap: BinaryHeap<Reverse<Entry>> = BinaryHeap::with_capacity(k + 1);
-    let mut path = Vec::new();
-    visit(node, &mut path, &mut heap, k);
+    visit(node, &mut heap, k);
     let mut out: Vec<TopFile> = heap.into_iter().map(|Reverse(e)| e.0).collect();
     out.sort_by_key(|b| Reverse(b.size));
     out
 }
 
-/// One directory still being walked, and how far through its children
-/// the walk has got.
-///
-/// Frames cost depth, not breadth: a stack of `(path, node)` pairs would
-/// hold a `PathBuf`-sized allocation per *pending sibling*, which for a
-/// directory with millions of entries is the memory problem this module
-/// exists to avoid, in a different shape.
-struct Frame<'a> {
-    node: &'a Node,
-    next: usize,
-}
-
-fn visit(root: &Node, path: &mut Vec<usize>, heap: &mut BinaryHeap<Reverse<Entry>>, k: usize) {
-    let mut stack = vec![Frame {
-        node: root,
-        next: 0,
-    }];
-
-    while let Some(top) = stack.len().checked_sub(1) {
-        let Some(frame) = stack.get_mut(top) else {
-            break;
-        };
-        let Some(child) = frame.node.children.get(frame.next) else {
-            stack.pop();
-            // Not for the root frame: it never pushed a segment of its
-            // own, because `path` is relative to it.
-            if !stack.is_empty() {
-                path.pop();
-            }
-            continue;
-        };
-        let index = frame.next;
-        frame.next += 1;
-
-        path.push(index);
+/// Feeds every file in `root`'s subtree through the bounded heap. The
+/// walk itself lives on the model — every tree-sized pass that reports
+/// index paths walks the same way; this is just the top-k half of it.
+fn visit(root: &Node, heap: &mut BinaryHeap<Reverse<Entry>>, k: usize) {
+    walk_preorder(root, |child, path| {
         if child.is_dir {
-            // Leave `path` extended; the frame just pushed owns that
-            // segment and pops it when it runs out of children.
-            stack.push(Frame {
-                node: child,
-                next: 0,
-            });
-        } else {
-            heap.push(Reverse(Entry(TopFile {
-                index_path: path.clone(),
-                name: child.name.clone(),
-                size: child.size,
-                physical_size: child.physical_size,
-                modified: child.modified,
-                category: child.category,
-            })));
-            if heap.len() > k {
-                heap.pop();
-            }
-            path.pop();
+            return WalkControl::Continue;
         }
-    }
+        heap.push(Reverse(Entry(TopFile {
+            index_path: path.clone(),
+            // Display only: the row is a name on screen, and the
+            // index path is what navigation actually follows.
+            name: child.name.to_string_lossy().to_string(),
+            size: child.size,
+            physical_size: child.physical_size,
+            modified: child.modified,
+            category: child.category,
+        })));
+        if heap.len() > k {
+            heap.pop();
+        }
+        WalkControl::Continue
+    });
 }
 
 #[cfg(test)]
 mod walk_tests {
     use super::*;
     use crate::model::fixtures::*;
-
-    /// The depth the stack-overflow test uses. Comfortably past what
-    /// a real filesystem allows, and far past what the recursive
-    /// version survived in a debug build.
-    const DEEP: usize = 60_000;
 
     /// The walk does not put the tree depth on the call stack.
     ///
@@ -143,14 +103,14 @@ mod walk_tests {
     /// took the process with it.
     #[test]
     fn a_tree_far_deeper_than_the_stack_is_still_walked() {
-        let root = dir("root", vec![deep_chain(DEEP, 4096)]);
+        let root = dir("root", vec![deep_chain(DEEP_CHAIN_DEPTH, 4096)]);
         let found = top_k(&root, 10);
         assert_eq!(found.len(), 1, "the one buried file should be found");
         let Some(first) = found.first() else { return };
         assert_eq!(first.name, "buried.bin");
         assert_eq!(
             first.index_path.len(),
-            DEEP + 2,
+            DEEP_CHAIN_DEPTH + 2,
             "the index path should name every level down to the file"
         );
     }
@@ -192,8 +152,8 @@ mod walk_tests {
                 hit.name
             );
             assert_eq!(
-                landed.map(|n| n.name.as_str()),
-                Some(hit.name.as_str()),
+                landed.map(|n| n.name.to_string_lossy().to_string()),
+                Some(hit.name.clone()),
                 "{:?} does not lead to {}",
                 hit.index_path,
                 hit.name

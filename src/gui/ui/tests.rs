@@ -44,14 +44,14 @@ static TEST_UI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Derived from the name the same way `file` below derives the node's
 /// category, so the two cannot disagree — and so the fixtures do not have
 /// to unwrap an `Option` they themselves just filled in.
-fn category_index(name: &str) -> usize {
+fn category_index(name: &std::ffi::OsStr) -> usize {
     crate::model::category_for_name(name).index()
 }
 
 fn file(name: &str, size: u64) -> Node {
-    let category = crate::model::category_for_name(name);
+    let category = crate::model::category_for_name(std::ffi::OsStr::new(name));
     Node {
-        name: name.to_string(),
+        name: std::ffi::OsString::from(name),
         is_dir: false,
         is_symlink: false,
         size,
@@ -64,6 +64,8 @@ fn file(name: &str, size: u64) -> Node {
         category: Some(category),
         ext_totals: Vec::new(),
         unreadable_count: 0,
+        file_id: None,
+        other_filesystem: false,
     }
 }
 
@@ -75,7 +77,7 @@ fn app_with_one_file() -> GuiApp {
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\test-root"),
         root: Node {
-            name: "test-root".to_string(),
+            name: std::ffi::OsString::from("test-root"),
             is_dir: true,
             is_symlink: false,
             size: 128,
@@ -88,6 +90,8 @@ fn app_with_one_file() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
+            other_filesystem: false,
         },
         volume_free: None,
         volume_total: None,
@@ -100,7 +104,7 @@ fn app_with_one_file() -> GuiApp {
 fn app_with_a_folder_beside_a_file() -> GuiApp {
     let leaf = file("inside.bin", 64);
     let folder = Node {
-        name: "sub".to_string(),
+        name: std::ffi::OsString::from("sub"),
         is_dir: true,
         is_symlink: false,
         size: 64,
@@ -113,15 +117,17 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
         category: None,
         ext_totals: Vec::new(),
         unreadable_count: 0,
+        file_id: None,
+        other_filesystem: false,
     };
     let sibling = file("beside.txt", 128);
     let mut totals = vec![(0, 0, 0); Category::COUNT];
-    totals[category_index("inside.bin")] = (64, 64, 1);
-    totals[category_index("beside.txt")] = (128, 128, 1);
+    totals[category_index(std::ffi::OsStr::new("inside.bin"))] = (64, 64, 1);
+    totals[category_index(std::ffi::OsStr::new("beside.txt"))] = (128, 128, 1);
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\test-root"),
         root: Node {
-            name: "test-root".to_string(),
+            name: std::ffi::OsString::from("test-root"),
             is_dir: true,
             is_symlink: false,
             size: 192,
@@ -134,6 +140,8 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
+            other_filesystem: false,
         },
         volume_free: None,
         volume_total: None,
@@ -201,7 +209,7 @@ fn app_with_sortable_files() -> GuiApp {
     GuiApp::new(Tree {
         root_path: PathBuf::from("C:\\sortable-root"),
         root: Node {
-            name: "sortable-root".to_string(),
+            name: std::ffi::OsString::from("sortable-root"),
             is_dir: true,
             is_symlink: false,
             size: 410,
@@ -214,6 +222,8 @@ fn app_with_sortable_files() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
+            other_filesystem: false,
         },
         volume_free: None,
         volume_total: None,
@@ -1679,6 +1689,18 @@ fn clicking_a_rendered_extension_row_changes_highlight() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
+    // The extension rows are computed on a worker since the zoom-time
+    // recomputation moved off the frame thread; wait for them through
+    // the same poll path the frame update uses.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.extensions_pending() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !app.extensions_pending(),
+        "the extension worker should finish"
+    );
     probe(&TEST_EXTENSION_ROW_RECTS).clear();
     probe(&TEST_EXTENSION_TEXT_RECTS).clear();
     for _ in 0..4 {
@@ -1724,6 +1746,14 @@ fn clicking_a_rendered_search_result_changes_selection() -> anyhow::Result<()> {
     let mut app = app_with_one_file();
     app.search.query = "*".to_string();
     app.run_search();
+    // The search runs on a worker now; wait for it rather than reading
+    // results before they exist.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.search_running() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!app.search_running(), "the search should finish");
     probe(&TEST_SEARCH_ROW_RECTS).clear();
     for _ in 0..4 {
         render_search(&ctx, &mut app, raw_input(Vec::new()));
@@ -1747,8 +1777,10 @@ fn clicking_a_rendered_duplicate_member_changes_selection() -> anyhow::Result<()
     let mut app = app_with_one_file();
     app.duplicate_groups = vec![crate::duplicates::DupGroup {
         size: 128,
+        distinct_inodes: 1,
         files: vec![crate::duplicates::DupFile {
             index_path: vec![0],
+            file_id: None,
         }],
     }];
     probe(&TEST_DUPLICATE_ROW_RECTS).clear();
@@ -2772,7 +2804,7 @@ fn app_with_many_extensions() -> GuiApp {
     let mut children = Vec::new();
     for (n, name) in names.iter().enumerate() {
         let size = ((n as u64) + 1) * 1_000_000;
-        let index = category_index(name);
+        let index = category_index(std::ffi::OsStr::new(name));
         totals[index].0 += size;
         totals[index].1 += size;
         totals[index].2 += 1;
@@ -2784,7 +2816,7 @@ fn app_with_many_extensions() -> GuiApp {
         volume_free: None,
         volume_total: None,
         root: Node {
-            name: "test-root".to_string(),
+            name: std::ffi::OsString::from("test-root"),
             is_dir: true,
             is_symlink: false,
             size: total,
@@ -2797,6 +2829,8 @@ fn app_with_many_extensions() -> GuiApp {
             category: None,
             ext_totals: totals,
             unreadable_count: 0,
+            file_id: None,
+            other_filesystem: false,
         },
     })
 }
@@ -3023,4 +3057,156 @@ fn the_extension_table_scrolls_rather_than_dropping_columns() {
             );
         }
     }
+}
+
+/// No module in `gui::ui` may declare a `const` that shadows one of the
+/// theme's.
+///
+/// Every module here glob-imports `theme`, and a glob import is the
+/// weakest binding there is: any `const` of the same name declared in the
+/// importing module wins silently, with no warning and no error. A
+/// function-local one wins for the length of that function *only*, so the
+/// same identifier can mean two different numbers a few lines apart.
+/// `nav_row` had exactly that — `PAD` was 10.0 inside it and 12.0
+/// everywhere else in `modal.rs`.
+///
+/// The names are read back out of `theme.rs` rather than listed here, so
+/// adding a constant to the scale extends this check for free.
+#[test]
+fn no_local_const_shadows_the_theme_scale() -> anyhow::Result<()> {
+    let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("gui")
+        .join("ui");
+
+    let theme_source = std::fs::read_to_string(ui_dir.join("theme.rs"))
+        .context("reading theme.rs to collect the names it exports")?;
+    let exported: Vec<&str> = theme_source
+        .lines()
+        .filter_map(|line| line.strip_prefix("pub(super) const "))
+        .filter_map(|rest| rest.split(':').next())
+        .map(str::trim)
+        .collect();
+
+    assert!(
+        exported.len() >= 4,
+        "expected theme.rs to export the spacing scale, found {exported:?} — has the declaration style changed?"
+    );
+
+    let mut shadowed = Vec::new();
+    for entry in std::fs::read_dir(&ui_dir).context("listing src/gui/ui")? {
+        let path = entry.context("reading an entry of src/gui/ui")?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        // theme.rs is where these are declared, not a place they leak into.
+        if file == "theme.rs" {
+            continue;
+        }
+
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        for (index, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // Checked at every indentation on purpose: a module-level
+            // `const` shadows the glob for the whole file, which is worse
+            // than a function-local one, not better.
+            let bare = trimmed
+                .strip_prefix("pub(crate) ")
+                .or_else(|| trimmed.strip_prefix("pub(super) "))
+                .or_else(|| trimmed.strip_prefix("pub "))
+                .unwrap_or(trimmed);
+            let Some(rest) = bare.strip_prefix("const ") else {
+                continue;
+            };
+            let declared = rest.split(':').next().unwrap_or_default().trim();
+            if exported.contains(&declared) {
+                shadowed.push(format!("{file}:{} declares `const {declared}`", index + 1));
+            }
+        }
+    }
+
+    assert!(
+        shadowed.is_empty(),
+        "these shadow a theme constant of the same name, so the identifier means one thing there and another everywhere else: {shadowed:?}. Rename the local one after what it actually measures."
+    );
+    Ok(())
+}
+
+/// No literal spacing anywhere in `src/gui`.
+///
+/// The scale only buys a shared column if everything is on it, and the
+/// modal spent a long time not being: about forty hand-picked values,
+/// `add_space(6.0)` through `add_space(28.0)`, plus off-scale `Margin`s
+/// and a `SPACE_XS + 1.0`. They are all snapped now, and this is what
+/// stops the next one from being added.
+///
+/// `0.0` is allowed: an absent margin is not a step on the scale, and
+/// rounding it up to `SPACE_XS` would put a gap where the design wants
+/// none.
+#[test]
+fn no_literal_spacing_survives_in_the_gui() -> anyhow::Result<()> {
+    let add_space = regex::Regex::new(r"ui\.add_space\(\s*\d+\.\d+")?;
+    let margin = regex::Regex::new(r"Margin::(?:same|symmetric)\(([^)]*)\)")?;
+    let number = regex::Regex::new(r"\d+\.\d+")?;
+
+    let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("gui")];
+    let mut offenders = Vec::new();
+
+    // Iterative for the same reason everything else here is, even though
+    // a source tree is nothing like tree-sized.
+    while let Some(dir) = pending.pop() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("listing {}", dir.display()))?
+        {
+            let path = entry.context("reading a directory entry")?.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+
+            for (index, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                // Doc comments quote these calls when explaining them.
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                let at = index + 1;
+                if add_space.is_match(trimmed) {
+                    offenders.push(format!("{file}:{at} add_space with a literal"));
+                }
+                for caught in margin.captures_iter(trimmed) {
+                    let Some(args) = caught.get(1) else {
+                        continue;
+                    };
+                    for found in number.find_iter(args.as_str()) {
+                        if found.as_str() != "0.0" {
+                            offenders.push(format!("{file}:{at} Margin with a literal"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "spacing must come from SPACE_XS / SPACE_SM / SPACE_MD / SPACE_LG, not a number picked by eye: {offenders:?}"
+    );
+    Ok(())
 }

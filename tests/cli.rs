@@ -172,3 +172,38 @@ fn a_missing_path_is_an_error() -> Result<()> {
     );
     Ok(())
 }
+
+/// The two non-interactive modes are mutually exclusive: `--no-tui` with
+/// `--csv` used to be accepted and silently mean CSV, which is a report
+/// that never printed and an export the user did not ask for.
+#[test]
+fn the_report_and_csv_modes_conflict() -> Result<()> {
+    let root = scratch("conflict");
+    let _ = fs::remove_dir_all(&root);
+    build_fixture(&root)?;
+    let out = root.join("export.csv");
+
+    let path = root
+        .to_str()
+        .ok_or_else(|| anyhow!("the scratch path is not valid UTF-8"))?;
+    let out_path = out
+        .to_str()
+        .ok_or_else(|| anyhow!("the output path is not valid UTF-8"))?;
+    let (ok, text) = run(&["-n", "--csv", out_path, path])?;
+    assert!(
+        !ok,
+        "--no-tui and --csv must be refused together, but it succeeded:\n{text}"
+    );
+    assert!(
+        text.to_lowercase().contains("cannot be used with")
+            || text.to_lowercase().contains("conflict"),
+        "clap should explain the conflict:\n{text}"
+    );
+    assert!(
+        !out.exists(),
+        "no CSV may be written for a refused invocation"
+    );
+
+    fs::remove_dir_all(&root)?;
+    Ok(())
+}

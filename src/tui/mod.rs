@@ -106,7 +106,7 @@ fn restore_terminal() {
     let _ = stdout.flush();
 }
 
-pub fn run(root: PathBuf) -> Result<()> {
+pub fn run(root: PathBuf, options: crate::scanner::ScanOptions) -> Result<()> {
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal();
@@ -121,11 +121,16 @@ pub fn run(root: PathBuf) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, root);
+    let result = run_app(&mut terminal, root, options);
 
     restore_terminal();
 
-    result
+    // Printed only now: the terminal is back to normal, so the message
+    // is not garbled by raw mode or wiped with the alternate screen.
+    if let Ok(Some(save_error)) = &result {
+        eprintln!("rustdirstat: preferences were not saved: {save_error}");
+    }
+    result.map(|_| ())
 }
 
 enum BrowseOutcome {
@@ -133,14 +138,22 @@ enum BrowseOutcome {
     Refresh,
 }
 
-fn run_app<B: TerminalBackend>(terminal: &mut Terminal<B>, root: PathBuf) -> Result<()> {
+/// Runs the scan/browse loop. `Ok(Some(_))` is a normal quit whose
+/// preference save failed — reported by [`run`] once the terminal is
+/// restored, since nothing printed from in here would survive the
+/// alternate screen.
+fn run_app<B: TerminalBackend>(
+    terminal: &mut Terminal<B>,
+    root: PathBuf,
+    options: crate::scanner::ScanOptions,
+) -> Result<Option<std::io::Error>> {
     let mut restore_to: Option<PathBuf> = None;
     let config = crate::config::load();
 
     loop {
-        let tree = match scan_with_progress(terminal, &root)? {
+        let tree = match scan_with_progress(terminal, &root, options)? {
             Some(t) => t,
-            None => return Ok(()), // cancelled during scan
+            None => return Ok(None), // cancelled during scan
         };
 
         let mut app = App::new(tree);
@@ -151,8 +164,7 @@ fn run_app<B: TerminalBackend>(terminal: &mut Terminal<B>, root: PathBuf) -> Res
 
         match browse(terminal, &mut app)? {
             BrowseOutcome::Quit => {
-                crate::config::save(&app.to_config());
-                return Ok(());
+                return Ok(crate::config::save(&app.to_config()).err());
             }
             BrowseOutcome::Refresh => {
                 restore_to = Some(app.current_path());
@@ -164,11 +176,14 @@ fn run_app<B: TerminalBackend>(terminal: &mut Terminal<B>, root: PathBuf) -> Res
 fn scan_with_progress<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
     root: &Path,
+    options: crate::scanner::ScanOptions,
 ) -> Result<Option<crate::model::Tree>> {
     let progress = Arc::new(Progress::default());
     let progress_clone = progress.clone();
     let root_clone = root.to_path_buf();
-    let handle = std::thread::spawn(move || scanner::scan(&root_clone, Some(&progress_clone)));
+    let handle = std::thread::spawn(move || {
+        scanner::scan_with_options(&root_clone, Some(&progress_clone), options)
+    });
 
     let started = Instant::now();
     loop {

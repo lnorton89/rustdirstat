@@ -1,6 +1,6 @@
 [package]
 name = "rustdirstat"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "A cross-platform WinDirStat clone for visualizing disk usage, with both a native desktop GUI and a terminal UI."
 license = "MIT"
@@ -68,10 +68,32 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    # The seek-penalty (HDD vs SSD) query duplicate hashing sizes its
+    # concurrency by. Win32_Security is not used directly — CreateFileW
+    # takes a SECURITY_ATTRIBUTES pointer, and windows-sys hides the
+    # function unless the parameter's feature is on.
+    "Win32_System_Ioctl",
+    "Win32_System_IO",
+    "Win32_Security",
 ] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# `cargo deb` (the release workflow's Linux packaging step) reads this.
+# The assets are listed because cargo-deb's default includes only the
+# binary named after the package — both front ends ship together, for
+# the same reason the archives carry both. `target/release/...` paths
+# are re-mapped automatically when building with `--target`.
+[package.metadata.deb]
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/rustdirstat", "usr/bin/", "755"],
+    ["target/release/rustdirstat-gui", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/rustdirstat/README.md", "644"],
+    ["LICENSE", "usr/share/doc/rustdirstat/LICENSE", "644"],
+]
 
 # Only the brand-asset generator needs these: `cargo run --example
 # brand_assets` re-renders the PNGs in `assets/brand/` from `src/brand.rs`.
