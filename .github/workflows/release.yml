@@ -1,6 +1,6 @@
 name: Release
 
-# Tagging is the trigger: `git tag v0.1.0 && git push origin v0.1.0`.
+# Tagging is the trigger: `git tag v0.2.0 && git push origin v0.2.0`.
 # The release is created as a draft, the per-platform archives are
 # attached to it, and it is only published once every platform has
 # succeeded -- so a failed build leaves an unpublished draft rather than a
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build a release from (e.g. v0.1.0)"
+        description: "Existing tag to build a release from (e.g. v0.2.0)"
         required: true
 
 permissions:
