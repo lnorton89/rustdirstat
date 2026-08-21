@@ -402,6 +402,7 @@ mod tests {
         ViewOptions,
     };
     use crate::model::SortMode;
+    use crate::util::scratch_dir;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -520,26 +521,6 @@ mod tests {
         assert_eq!(extension_label("archive.tar.gz"), ".gz");
     }
 
-    /// A scratch directory no other test can collide with.
-    ///
-    /// The counter is the part that matters. Tests run in parallel, and a
-    /// clock alone is not enough to separate them: `SystemTime::now` has
-    /// coarse enough resolution on Windows that two calls can return the
-    /// same value, at which point both tests share a directory and
-    /// whichever finishes first deletes it out from under the other. That
-    /// surfaced as an intermittent `PermissionDenied` from
-    /// `remove_dir_all` on Windows CI.
-    fn test_dir(name: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rustdirstat_gui_{}_{}_{}",
-            std::process::id(),
-            name,
-            unique
-        ))
-    }
-
     fn wait_for_background(app: &mut GuiApp) {
         let ctx = egui::Context::default();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -565,8 +546,8 @@ mod tests {
 
     #[test]
     fn folder_changes_scan_without_blocking_the_caller() -> anyhow::Result<()> {
-        let first = test_dir("first");
-        let second = test_dir("second");
+        let first = scratch_dir("gui", "first");
+        let second = scratch_dir("gui", "second");
         std::fs::create_dir_all(&first)?;
         std::fs::create_dir_all(&second)?;
         std::fs::write(first.join("old.txt"), b"old")?;
@@ -586,7 +567,7 @@ mod tests {
 
     #[test]
     fn initial_gui_shell_opens_before_scan_finishes() -> anyhow::Result<()> {
-        let dir = test_dir("initial");
+        let dir = scratch_dir("gui", "initial");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("payload.dat"), vec![7_u8; 4096])?;
 
@@ -602,7 +583,7 @@ mod tests {
 
     #[test]
     fn duplicate_hashing_runs_in_background() -> anyhow::Result<()> {
-        let dir = test_dir("duplicates");
+        let dir = scratch_dir("gui", "duplicates");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("one.bin"), b"same bytes")?;
         std::fs::write(dir.join("two.bin"), b"same bytes")?;
@@ -618,7 +599,7 @@ mod tests {
     }
 
     fn nested_test_tree() -> anyhow::Result<std::path::PathBuf> {
-        let dir = test_dir("cache");
+        let dir = scratch_dir("gui", "cache");
         std::fs::create_dir_all(dir.join("alpha"))?;
         std::fs::create_dir_all(dir.join("beta"))?;
         std::fs::write(dir.join("alpha/small.bin"), vec![1_u8; 16])?;
@@ -763,7 +744,7 @@ mod tests {
     #[test]
     fn scanning_a_new_folder_clears_the_previous_one_from_the_view() -> anyhow::Result<()> {
         let first = nested_test_tree()?;
-        let second = test_dir("second_scan");
+        let second = scratch_dir("gui", "second_scan");
         std::fs::create_dir_all(&second)?;
         std::fs::write(second.join("other.bin"), vec![9_u8; 32])?;
 
@@ -874,7 +855,7 @@ mod tests {
 
     #[test]
     fn scan_root_cannot_be_queued_for_deletion() -> anyhow::Result<()> {
-        let dir = test_dir("root_delete");
+        let dir = scratch_dir("gui", "root_delete");
         std::fs::create_dir_all(&dir)?;
         let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
         app.select_path(Vec::new());

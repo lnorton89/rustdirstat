@@ -39,6 +39,10 @@ pub fn write_csv_to_file(root_path: &Path, root: &Node, out_path: &Path) -> std:
 
 /// Writes the whole tree in the same order the recursive version did:
 /// each node, then its children, depth first.
+///
+/// Its own walk, not [`crate::model::walk_preorder`], because it writes
+/// a row per node *and* must keep a live `PathBuf` in step with the
+/// stack — the shared walker hands out index paths only.
 fn write_csv<W: Write>(out: &mut W, root_path: &Path, root: &Node) -> std::io::Result<()> {
     out.write_all(HEADER.as_bytes())?;
 

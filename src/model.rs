@@ -207,6 +207,78 @@ pub fn sort_nodes(nodes: &mut [(usize, &Node)], sort: SortMode, physical: bool) 
     }
 }
 
+/// Iterative pre-order walk shared by the tree-sized passes: search and
+/// top-files both traverse a whole subtree visiting every node, and both
+/// need an index path to report back. There used to be two copies of the
+/// same frame discipline, and the comment that matters — "not for the
+/// root frame" — was written twice and read zero times.
+///
+/// `root` itself is never visited and its index is never pushed: `path`
+/// is relative to it, so callers that report paths start with the
+/// directory they were handed. Every directory is descended into — every
+/// consumer of this walk visits whole subtrees. A visitor that wants out
+/// early (search, once its result cap is exceeded) returns
+/// [`WalkControl::Stop`] and the walk quits on the spot; a walk over a
+/// drive-sized tree must be able to bail.
+///
+/// One frame per open directory, on the heap: a stack of `(path, node)`
+/// pairs would hold a `PathBuf`-sized allocation per *pending sibling*,
+/// which for a directory with millions of entries is the memory problem
+/// the iterative form exists to avoid, in a different shape.
+pub(crate) fn walk_preorder<'a>(
+    root: &'a Node,
+    mut visit: impl FnMut(&'a Node, &mut Vec<usize>) -> WalkControl,
+) {
+    struct Frame<'a> {
+        node: &'a Node,
+        next: usize,
+    }
+
+    let mut path = Vec::new();
+    let mut stack = vec![Frame {
+        node: root,
+        next: 0,
+    }];
+    while let Some(top) = stack.len().checked_sub(1) {
+        let Some(frame) = stack.get_mut(top) else {
+            break;
+        };
+        let Some(child) = frame.node.children.get(frame.next) else {
+            stack.pop();
+            // Not for the root frame: it never pushed a segment of its
+            // own, because `path` is relative to it.
+            if !stack.is_empty() {
+                path.pop();
+            }
+            continue;
+        };
+        let index = frame.next;
+        frame.next += 1;
+
+        path.push(index);
+        if visit(child, &mut path) == WalkControl::Stop {
+            return;
+        }
+        if child.is_dir {
+            // Leave `path` extended; the frame just pushed owns that
+            // segment and pops it when it runs out of children.
+            stack.push(Frame {
+                node: child,
+                next: 0,
+            });
+        } else {
+            path.pop();
+        }
+    }
+}
+
+/// What a [`walk_preorder`] visitor asks the walk to do after its node.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WalkControl {
+    Continue,
+    Stop,
+}
+
 /// Frees a subtree without recursing once per level.
 ///
 /// The derived drop walks `children` recursively, so a deep enough tree

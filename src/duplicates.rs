@@ -250,6 +250,11 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
 /// scanned costs heap rather than call stack. It used to recurse per
 /// level, which put a user-chosen depth on the stack in the one place
 /// that walks a whole drive twice.
+///
+/// This is deliberately not [`crate::model::walk_preorder`]: the
+/// candidates are hashed *after* the walk, so each one carries a real
+/// `PathBuf` built here, and the shared walker hands out index paths
+/// only.
 fn collect_by_size(
     node: &Node,
     path: &mut PathBuf,
@@ -311,6 +316,7 @@ fn hash_file(path: &std::path::Path) -> std::io::Result<blake3::Hash> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::scratch_dir;
     use std::fs;
 
     /// A size-group is taken whole or not at all, and what was left out
@@ -323,13 +329,7 @@ mod tests {
     /// search had been cut short.
     #[test]
     fn the_candidate_cap_drops_whole_groups_and_says_how_many() -> anyhow::Result<()> {
-        // Named with the pid and a counter: two tests sharing a temp
-        // directory delete it out from under each other, which showed up
-        // as an intermittent PermissionDenied on Windows CI.
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("rustdirstat_dupes_{}_{unique}", std::process::id()));
+        let root = scratch_dir("dupes", "cap");
         let root = root.as_path();
         let _ = fs::remove_dir_all(root);
         fs::create_dir_all(root)?;
@@ -385,12 +385,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hard_links_are_not_reported_as_reclaimable_duplicates() -> anyhow::Result<()> {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "rustdirstat_hardlink_{}_{unique}",
-            std::process::id()
-        ));
+        let root = scratch_dir("hardlink", "two_names");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root)?;
 

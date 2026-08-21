@@ -598,16 +598,8 @@ fn finish_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::scratch_dir;
     use std::fs;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rustdirstat_scan_{}_{name}_{unique}",
-            std::process::id()
-        ))
-    }
 
     /// A tree with something in it for each branch of the walk: a
     /// directory wide enough to go through rayon, a chain deeper than
@@ -691,7 +683,7 @@ mod tests {
     /// changes shape depending how deep the thing being scanned sits.
     #[test]
     fn the_parallel_and_deep_walks_agree() -> std::io::Result<()> {
-        let root = scratch("agree");
+        let root = scratch_dir("scan", "agree");
         let _ = fs::remove_dir_all(&root);
         build_fixture(&root)?;
 
@@ -736,7 +728,7 @@ mod tests {
     fn a_non_utf8_name_round_trips_through_scan_and_path_for() -> std::io::Result<()> {
         use std::os::unix::ffi::OsStrExt;
 
-        let root = scratch("nonutf8");
+        let root = scratch_dir("scan", "nonutf8");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root)?;
         // The literal bytes a\xFFb — a name no UTF-8 string can express.
@@ -776,7 +768,7 @@ mod tests {
     fn names_that_collide_when_lossy_stay_distinct() -> std::io::Result<()> {
         use std::os::unix::ffi::OsStrExt;
 
-        let root = scratch("collide");
+        let root = scratch_dir("scan", "collide");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root)?;
         // `a\xFF` (invalid UTF-8) and `a\u{FFFD}` (a real replacement
@@ -828,7 +820,7 @@ mod tests {
     /// walk may recurse.
     #[test]
     fn a_chain_deeper_than_the_recursion_limit_is_still_scanned() -> std::io::Result<()> {
-        let root = scratch("deep");
+        let root = scratch_dir("scan", "deep");
         let _ = fs::remove_dir_all(&root);
         let mut chain = root.clone();
         for _ in 0..(MAX_PARALLEL_DEPTH * 3) {

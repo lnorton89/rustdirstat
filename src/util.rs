@@ -389,6 +389,25 @@ mod tests {
         Ok(())
     }
 }
+
+/// A scratch directory unique to this test run, for tests that need a
+/// real filesystem.
+///
+/// Named with the pid and a counter rather than a timestamp: two tests
+/// sharing a temp directory delete it out from under each other, which
+/// showed up as an intermittent `PermissionDenied` from `remove_dir_all`
+/// on Windows CI. Every test module used to carry its own copy of this
+/// with a different prefix; the prefix is now a parameter.
+#[cfg(test)]
+pub(crate) fn scratch_dir(prefix: &str, name: &str) -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "rustdirstat_{prefix}_{}_{name}_{unique}",
+        std::process::id()
+    ))
+}
+
 /// The move-hardening regressions: a move must never be allowed to recurse
 /// into its own output, and only a genuine cross-device rename may trigger
 /// the copy fallback. Unix-only: forcing a real `EXDEV` needs two
@@ -399,22 +418,13 @@ mod tests {
 mod move_path_tests {
     use super::*;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rustdirstat_move_{}_{name}_{unique}",
-            std::process::id()
-        ))
-    }
-
     /// `a -> a/b`: the copy fallback would enumerate the destination it
     /// just created and nest copies inside itself (`a/b/b/b/...`) until
     /// the filesystem gave up. The move must be refused before anything
     /// touches the disk.
     #[test]
     fn moving_a_directory_into_its_own_descendant_is_rejected() -> anyhow::Result<()> {
-        let root = scratch("into_descendant");
+        let root = scratch_dir("move", "into_descendant");
         let _ = std::fs::remove_dir_all(&root);
         let a = root.join("a");
         std::fs::create_dir_all(a.join("existing"))?;
@@ -449,7 +459,7 @@ mod move_path_tests {
     /// exists, so the destination already exists.
     #[test]
     fn moving_a_directory_onto_itself_is_rejected() -> anyhow::Result<()> {
-        let root = scratch("onto_itself");
+        let root = scratch_dir("move", "onto_itself");
         let _ = std::fs::remove_dir_all(&root);
         let a = root.join("a");
         std::fs::create_dir_all(&a)?;
@@ -470,7 +480,7 @@ mod move_path_tests {
     /// have been copied.
     #[test]
     fn a_non_cross_device_rename_failure_is_returned_not_copied() -> anyhow::Result<()> {
-        let root = scratch("rename_error");
+        let root = scratch_dir("move", "rename_error");
         let _ = std::fs::remove_dir_all(&root);
         let source = root.join("source");
         std::fs::create_dir_all(&source)?;
@@ -497,7 +507,7 @@ mod move_path_tests {
     /// or not the source would nest inside it.
     #[test]
     fn moving_onto_an_existing_destination_is_refused() -> anyhow::Result<()> {
-        let root = scratch("existing_dest");
+        let root = scratch_dir("move", "existing_dest");
         let _ = std::fs::remove_dir_all(&root);
         let source = root.join("source");
         std::fs::create_dir_all(&source)?;
@@ -524,15 +534,6 @@ mod copy_tests {
     use super::*;
     use std::fs;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "rustdirstat_copy_{}_{name}_{unique}",
-            std::process::id()
-        ))
-    }
-
     /// A copied tree keeps its shape and its contents.
     ///
     /// The walk was rewritten from one call per directory level to a
@@ -542,7 +543,7 @@ mod copy_tests {
     /// result, or children copied to the wrong parent.
     #[test]
     fn a_copied_tree_keeps_its_nesting_and_contents() -> anyhow::Result<()> {
-        let root = scratch("nesting");
+        let root = scratch_dir("copy", "nesting");
         let _ = fs::remove_dir_all(&root);
         let source = root.join("source");
         fs::create_dir_all(source.join("a").join("deep"))?;

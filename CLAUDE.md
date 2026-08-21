@@ -323,9 +323,13 @@ iterative or bounded for this reason; `report.rs` takes an explicit
 `max_depth`. The two searches were the stragglers — both recursed once
 per directory level until `a_tree_far_deeper_than_the_stack_is_still_searched`
 in each of them started failing the build. If you add a walk,
-make it iterative — and note that `Node`'s `Drop` is written so that the
-outermost drop drains the whole tree, leaving every node below it
-childless and costing one allocation for the tree rather than one per
+make it iterative — and if it is a whole-subtree pre-order walk that
+reports index paths, build it on `model::walk_preorder` rather than
+copying the frame discipline a fourth time; `duplicates.rs` and
+`csv_export.rs` keep their own walks only because they need a live
+`PathBuf` for hashing/io. And note that `Node`'s `Drop` is written so
+that the outermost drop drains the whole tree, leaving every node below
+it childless and costing one allocation for the tree rather than one per
 node. `scanner.rs` is the deliberate exception: it recurses through
 rayon, bounded by what a real path can express.
 
@@ -335,6 +339,19 @@ and the TUI holds `mkv`, which are unrelated strings to a hash. Only
 saturation and value are per-front-end. The reserved hue band around the
 directory tan is load-bearing: without it an ordinary `.wav` tile is
 hard to tell from a folder tile beside it.
+
+**A pathname and a filesystem object are different things.** `Node`
+holds `file_id` — `(st_dev, st_ino)` on Unix, `None` on Windows —
+captured at scan time. Duplicates use it to tell two hard links to one
+file from two real copies: a same-content group whose names all share
+one inode is not reclaimable space, and `DupGroup::reclaimable` counts
+`distinct_inodes - 1`, not `files.len() - 1`. The scanner stays on the
+root's filesystem by default (`--cross-filesystems` opts out); bytes on
+other devices compared against the root volume's free space would be a
+category error. And scan-time identity is why a rescan restores the
+GUI's zoom/selection/expansion by *name* components rather than by the
+`Vec<usize>` indices, which only mean anything against the tree they
+were taken from.
 
 **Neither front end may reach into the other.** Anything both need
 lives at the crate root: `search`, `top_files`, `color`, `stats`,
