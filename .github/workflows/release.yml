@@ -14,9 +14,6 @@ on:
         description: "Existing tag to build a release from (e.g. v0.2.0)"
         required: true
 
-permissions:
-  contents: write
-
 env:
   CARGO_TERM_COLOR: always
 
@@ -24,10 +21,14 @@ jobs:
   draft:
     name: Create draft release
     runs-on: ubuntu-latest
+    # This job and `publish` are the only ones that hold a write-capable
+    # token; the build matrix below runs third-party code and needs none.
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Resolve tag
         id: resolve
@@ -53,6 +54,8 @@ jobs:
     name: ${{ matrix.target }}
     needs: draft
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -76,16 +79,19 @@ jobs:
             target: x86_64-apple-darwin
             archive: tar.gz
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to full SHAs, as in ci.yml — a mutable action tag inside a
+      # workflow that once held a release-writing token is exactly the
+      # blast radius this pins away.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.draft.outputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08
         with:
           toolchain: "1.98.0"
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-${{ matrix.target }}
 
@@ -143,29 +149,34 @@ jobs:
           else
             shasum -a 256 "$asset" > "${asset}.sha256"
           fi
-          echo "asset=dist/${asset}" >> "$GITHUB_OUTPUT"
+          echo "artifact=dist/${asset}" >> "$GITHUB_OUTPUT"
           echo "checksum=dist/${asset}.sha256" >> "$GITHUB_OUTPUT"
 
-      - name: Upload to draft release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.draft.outputs.tag }}
-        run: |
-          gh release upload "$TAG" \
-            "${{ steps.package.outputs.asset }}" \
-            "${{ steps.package.outputs.checksum }}" \
-            --clobber
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: dist/
 
   publish:
     name: Publish release
     needs: [draft, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - name: Undraft
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Download archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: dist
+      - name: Upload and undraft
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.draft.outputs.tag }}
-        run: gh release edit "$TAG" --draft=false --latest
+        run: |
+          cd dist
+          gh release upload "$TAG" $(find . -type f) --clobber
+          gh release edit "$TAG" --draft=false --latest

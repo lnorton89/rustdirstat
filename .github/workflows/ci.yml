@@ -19,11 +19,15 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to full SHAs: a mutable tag in a workflow is a supply-chain
+      # risk the moment the workflow holds a write-capable token. Update
+      # deliberately, with a `--checkout <sha>` diff, not silently on the
+      # next run. The versions are in the comments.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # No version here: rust-toolchain.toml pins it, so CI and a local
       # checkout run the same rustfmt and the same clippy. `@stable`
       # meant CI silently moved to each new release on its own.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08
         with:
           toolchain: "1.98.0"
           components: rustfmt
@@ -38,14 +42,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08
         with:
           toolchain: "1.98.0"
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.os }}
 

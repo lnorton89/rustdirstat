@@ -29,8 +29,11 @@ struct Cli {
     #[arg(default_value = ".")]
     path: PathBuf,
 
-    /// Print a plain-text report instead of launching the interactive TUI
-    #[arg(short = 'n', long = "no-tui")]
+    /// Print a plain-text report instead of launching the interactive TUI.
+    /// Mutually exclusive with `--csv` — the two non-interactive modes
+    /// disagree about what the scan is for, so the combination is refused
+    /// rather than silently giving one precedence.
+    #[arg(short = 'n', long = "no-tui", conflicts_with = "csv")]
     no_tui: bool,
 
     /// Number of top entries to show per directory in report mode

@@ -121,7 +121,7 @@ pub const TOOLS: &[WinTool] = &[
     },
     WinTool {
         name: "Delete All Shadow Copies",
-        description: "vssadmin: permanently remove every shadow copy on this volume. Cannot be undone.",
+        description: "vssadmin: permanently remove every client-accessible shadow copy on this volume (Microsoft's own wording — system-authored copies may remain). Cannot be undone.",
         destructive: true,
         irreversible: true,
         needs_admin: true,
@@ -215,7 +215,13 @@ pub fn run(index: usize, volume_path: &std::path::Path) -> Result<ToolOutput, St
         7 => run_and_wait("vssadmin", &["create", "shadow", &format!("/for={volume}")]),
         8 => run_and_wait(
             "vssadmin",
-            &["delete", "shadows", "/for", &volume, "/all", "/quiet"],
+            &[
+                "delete",
+                "shadows",
+                &format!("/for={volume}"),
+                "/all",
+                "/quiet",
+            ],
         ),
         9 => empty_recycle_bin(),
         _ => Err("Unknown tool".to_string()),
