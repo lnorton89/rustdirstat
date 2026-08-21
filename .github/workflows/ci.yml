@@ -23,7 +23,7 @@ jobs:
       # risk the moment the workflow holds a write-capable token. Update
       # deliberately, with a `--checkout <sha>` diff, not silently on the
       # next run. The versions are in the comments.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No version here: rust-toolchain.toml pins it, so CI and a local
       # checkout run the same rustfmt and the same clippy. `@stable`
       # meant CI silently moved to each new release on its own.
@@ -42,11 +42,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Runs `cargo deny check` with `deny.toml` in the repo root. The
       # four ignored advisories and their justification live in that
       # file; anything new fails here.
-      - uses: EmbarkStudios/cargo-deny-action@c3bbe7e4e3f7baeee1a3dd9aec0a3b2aded580fb # v2.1.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
           arguments: --all-features
@@ -65,7 +65,7 @@ jobs:
       # fetches no tags at all, so every release would come back missing —
       # the check would fail for a reason that has nothing to do with the
       # changelog. 119 commits; the extra fetch is not measurable.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
