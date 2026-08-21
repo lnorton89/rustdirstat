@@ -379,6 +379,23 @@ global. Keep taking that lock in new rendering tests.
 - **Nodes do not store their own path.** `Tree::path_for` rebuilds it from
   child indices. A `PathBuf` per node dominates memory on a large scan.
   Selections are therefore `Vec<usize>` index paths, not paths.
+- **The egui stack is held at 0.29, and moving it is a project, not a
+  chore.** Measured against 0.36: 135 compile errors, but the count is
+  not the problem. Three subsystems are redesigned rather than renamed.
+  `eframe::App::update(ctx, frame)` becomes `ui(ui, frame)`, so the
+  whole draw path threads a `Ui` where it currently threads a `Context`.
+  `SidePanel` and `TopBottomPanel` no longer exist — one `Panel::left/
+  right/top/bottom(id)` replaces them, taking a `Ui`. The menu system is
+  gone and rebuilt: no `menu::bar`, no `close_menu` (29 call sites), a
+  new `MenuBar`/`MenuButton`/`MenuConfig` instead.
+  That last one is why this needs its own branch and a person watching
+  the window: several rules above — `set_menu_style` having to run
+  inside `menu::bar`, the square menu-bar highlights, the column-based
+  menu rows — describe an API that no longer exists, and the tests
+  pinning them would have to be re-derived rather than merely fixed.
+  The mechanical part is genuinely mechanical: `Rounding` →
+  `CornerRadius` (now `u8`, not `f32`), `Frame::none()` → `Frame::NONE`,
+  an extra `StrokeKind` argument on the painter's rect calls.
 - **`crossterm` uses the `use-dev-tty` feature.** Not about `/dev/tty` —
   it avoids a real event-loss bug in the default mio backend. The long
   comment in `Cargo.toml` explains it; `tests/quit_stress.rs` is the
