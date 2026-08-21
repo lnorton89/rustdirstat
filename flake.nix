@@ -4,9 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    fenix.url = "github:nix-community/fenix";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, fenix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -46,6 +47,18 @@
           pkgs.darwin.apple_sdk.frameworks.Metal
           pkgs.darwin.apple_sdk.frameworks.QuartzCore
         ];
+
+        # The pinned toolchain, from the same file rustup reads. The
+        # shell used to take unstable's cargo/rustc/clippy/rustfmt, which
+        # drifted from the pin in rust-toolchain.toml — a lint the pinned
+        # compiler in CI could see could not be reproduced here.
+        # `fromToolchainFile` reads the channel and components straight
+        # out of that file, so the pin lives in exactly one place. (The
+        # `sha256` is the hash of the toolchain file itself.)
+        toolchain = fenix.packages.${system}.fromToolchainFile {
+          file = ./rust-toolchain.toml;
+          sha256 = "sha256-P30Tm3O7vQAE725YtDCDHGjNrSsfZO4us11UwJGZSJo=";
+        };
 
         rustdirstat = pkgs.rustPlatform.buildRustPackage {
           pname = cargoToml.package.name;
@@ -103,10 +116,9 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ rustdirstat ];
           packages = [
-            pkgs.cargo
-            pkgs.rustc
-            pkgs.clippy
-            pkgs.rustfmt
+            # The pinned toolchain — the whole point of the shell is that
+            # `cargo clippy` here is the same clippy CI runs.
+            toolchain
             pkgs.rust-analyzer
           ];
 
