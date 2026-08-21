@@ -6,6 +6,16 @@
 // Dependencies: clap (argument parsing), anyhow; rustdirstat::gui
 // ============================================================================
 
+// No console window behind the GUI in a release build. Windows gives a
+// console subsystem binary a terminal whether or not it writes to one,
+// so launching the app from Explorer opened an empty black window beside
+// it that stayed for the session.
+//
+// Debug builds keep the console on purpose: it is where panics and
+// `println!` go while developing, and a GUI-subsystem binary discards
+// both silently.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! Entry point for `rustdirstat-gui`, the desktop build.
 //!
 //! Deliberately thin: it validates and canonicalises the requested path,
@@ -30,8 +40,30 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if !cli.path.exists() {
-        bail!("path does not exist: {}", cli.path.display());
+        return fail(&format!("Path does not exist:\n{}", cli.path.display()));
     }
     let root = cli.path.canonicalize().unwrap_or(cli.path.clone());
-    rustdirstat::gui::run(root)
+    if let Err(error) = rustdirstat::gui::run(root) {
+        return fail(&error.to_string());
+    }
+    Ok(())
+}
+
+/// Reports a startup failure somewhere the user will actually see it.
+///
+/// A release build is a GUI-subsystem binary, so it has no console:
+/// anything written to stderr goes nowhere, and a bad path would look
+/// like the program simply refusing to start. A dialog is the only
+/// channel that works whether it was launched from Explorer or a
+/// terminal — and for a desktop app it is the right one either way.
+///
+/// The error is still returned, so a caller that *is* watching (a debug
+/// build, a shell that checks the exit status) sees it too.
+fn fail(message: &str) -> Result<()> {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("RustDirStat")
+        .set_description(message)
+        .show();
+    bail!("{message}")
 }

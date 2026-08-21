@@ -77,6 +77,12 @@ libc = "0.2"
 # brand_assets` re-renders the PNGs in `assets/brand/` from `src/brand.rs`.
 # Both are already in the tree as eframe dependencies, so this pulls
 # nothing new down.
+[target.'cfg(windows)'.build-dependencies]
+# Embeds the application icon into the .exe. Without it Explorer, the
+# taskbar and Task Manager show the generic blank-page icon — eframe's
+# runtime window icon only covers the window itself.
+winresource = "0.1"
+
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 ab_glyph = "0.2"

@@ -43,6 +43,14 @@ const OUT_DIR: &str = "assets/brand";
 /// resolve into four tiles rather than a smear.
 const ICON_SIZES: [u32; 5] = [512, 256, 128, 64, 32];
 
+/// The sizes packed into `icon.ico`, which is what Explorer, the taskbar
+/// and Task Manager read.
+///
+/// Windows picks the nearest of these per surface rather than scaling
+/// one, so a 16px taskbar entry gets a mark drawn for 16px instead of a
+/// 256px one squeezed down to mush. 256 is the format's maximum.
+const ICO_SIZES: [u32; 6] = [16, 32, 48, 64, 128, 256];
+
 /// The banner's canvas. 2× the width it is displayed at in the README,
 /// so it stays sharp on a HiDPI screen.
 const BANNER: (u32, u32) = (1440, 380);
@@ -68,6 +76,10 @@ fn main() -> Result<()> {
         write_png(&path, size, size, &brand::rgba(size as usize))?;
         println!("wrote {}", path.display());
     }
+
+    let path = out.join("icon.ico");
+    write_ico(&path)?;
+    println!("wrote {}", path.display());
 
     let path = out.join("banner.png");
     let (width, height) = BANNER;
@@ -293,6 +305,61 @@ impl Canvas {
             });
         }
     }
+}
+
+/// Packs the mark, at every size Windows asks for, into one `.ico`.
+///
+/// Assembled here rather than through an encoder crate because the
+/// container is trivial and the frames are already PNGs: since Vista an
+/// icon directory may hold PNG-encoded entries directly, so this is a
+/// header, one 16-byte record per size, and the PNG bytes themselves.
+/// That keeps `brand.rs` the only place the mark is defined — the whole
+/// reason these assets are generated rather than drawn.
+fn write_ico(path: &Path) -> Result<()> {
+    let frames: Vec<(u32, Vec<u8>)> = ICO_SIZES
+        .iter()
+        .map(|&size| Ok((size, png_bytes(size)?)))
+        .collect::<Result<_>>()?;
+
+    let count = u16::try_from(frames.len()).context("too many icon sizes for one .ico")?;
+    let mut out = Vec::new();
+    out.extend_from_slice(&0_u16.to_le_bytes()); // reserved
+    out.extend_from_slice(&1_u16.to_le_bytes()); // 1 = icon, 2 = cursor
+    out.extend_from_slice(&count.to_le_bytes());
+
+    // Entries come first, so every offset has to account for all of them.
+    let mut offset = 6 + 16 * u32::from(count);
+    for (size, png) in &frames {
+        let length = u32::try_from(png.len()).context("icon frame too large for the format")?;
+        // 256 is stored as 0: the field is one byte and 256 does not fit.
+        let dimension = u8::try_from(*size).unwrap_or(0);
+        out.push(dimension); // width
+        out.push(dimension); // height
+        out.push(0); // palette size, 0 for truecolour
+        out.push(0); // reserved
+        out.extend_from_slice(&1_u16.to_le_bytes()); // colour planes
+        out.extend_from_slice(&32_u16.to_le_bytes()); // bits per pixel
+        out.extend_from_slice(&length.to_le_bytes());
+        out.extend_from_slice(&offset.to_le_bytes());
+        offset += length;
+    }
+    for (_size, png) in &frames {
+        out.extend_from_slice(png);
+    }
+
+    std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))
+}
+
+/// The mark at `size`, PNG-encoded in memory.
+fn png_bytes(size: u32) -> Result<Vec<u8>> {
+    let pixels = brand::rgba(size as usize);
+    let buffer = image::RgbaImage::from_raw(size, size, pixels)
+        .ok_or_else(|| anyhow!("pixels do not fill {size}x{size}"))?;
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    buffer
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .with_context(|| format!("encoding the {size}px icon"))?;
+    Ok(encoded.into_inner())
 }
 
 /// Encodes straight RGBA8 to a PNG on disk.
