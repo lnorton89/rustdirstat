@@ -1,7 +1,13 @@
-# cargo-deny configuration. Run `cargo install cargo-deny && cargo deny
-# check` locally, or wire it into CI once the initial run is clean — the
-# point is that a bad advisory or a surprising license shows up as a
-# reviewable event, not a release-day surprise.
+# cargo-deny configuration. Enforced in CI by the `deny` job in
+# .github/workflows/ci.yml; `cargo install cargo-deny && cargo deny check
+# --all-features` locally gives the same answer before you push. The point
+# is that a bad advisory or a surprising license shows up as a reviewable
+# event, not a release-day surprise.
+#
+# Dependabot is the other half of this: .github/dependabot.yml opens the
+# version-update PRs, and the `deny` job runs against each one. Note that
+# the egui stack is ignored above patch there for the same reason the four
+# advisories below have no fix — see the comment on those.
 
 [advisories]
 # Nightly advisory DB is fine for a utility; the lockfile is checked
