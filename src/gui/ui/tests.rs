@@ -2962,3 +2962,65 @@ fn escape_closes_the_modal_it_is_aimed_at() {
     press(&ctx, &mut app, egui::Key::Escape, egui::Modifiers::NONE);
     assert!(!modal_is_open(&app), "Escape should dismiss the open modal");
 }
+
+/// The extension table keeps every column and scrolls to reach them.
+///
+/// Same rule as the file list: a column that vanishes on a narrow pane
+/// cannot be scrolled to, resized, or even known to exist. This is the
+/// half that a screenshot cannot answer — whether the columns past the
+/// pane edge are *reachable* or merely clipped, which is the difference
+/// between a narrow pane and a broken one.
+#[test]
+fn the_extension_table_scrolls_rather_than_dropping_columns() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_many_extensions();
+    apply_style(&ctx, app.palette);
+
+    let expected: Vec<&'static str> = app
+        .extension_column_order
+        .iter()
+        .map(|column| extension_column_label(*column))
+        .collect();
+
+    // 340px is roughly the pane in the treemap-below layout, where the
+    // table genuinely does not fit.
+    for width in [900.0, 520.0, 340.0, 200.0] {
+        probe(&TEST_EXTENSION_HEADER_RECTS).clear();
+        probe(&TEST_EXTENSION_SCROLL).clear();
+        for _ in 0..4 {
+            render_extensions(&ctx, &mut app, raw_input_at_width(Vec::new(), width));
+        }
+
+        let headers = probe(&TEST_EXTENSION_HEADER_RECTS);
+        let drawn: Vec<&str> = headers
+            .iter()
+            .rev()
+            .take(expected.len())
+            .rev()
+            .map(|(label, _)| *label)
+            .collect();
+        assert_eq!(
+            drawn, expected,
+            "at {width:.0}px the table drew {drawn:?} instead of every column"
+        );
+
+        let (content, viewport) = probe(&TEST_EXTENSION_SCROLL)
+            .last()
+            .copied()
+            .unwrap_or_default();
+        assert!(
+            content >= viewport - 1.0,
+            "at {width:.0}px the table reports {content:.0}px of content in a \
+             {viewport:.0}px viewport, leaving dead space beside it"
+        );
+        if width <= 520.0 {
+            assert!(
+                content > viewport + 1.0,
+                "at {width:.0}px the columns cannot all fit, so the table should report \
+                 more content than viewport and give a scrollbar to reach them — it \
+                 reported {content:.0}px in {viewport:.0}px"
+            );
+        }
+    }
+}

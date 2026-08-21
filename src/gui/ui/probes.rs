@@ -89,6 +89,13 @@ pub(super) static TEST_TREEMAP_HOVER: std::sync::Mutex<Vec<(Vec<usize>, egui::Re
 pub(super) static TEST_DIRECTORY_SCROLL: std::sync::Mutex<Vec<(f32, f32)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// The extension table's (content width, viewport width), for the same
+/// reason as the directory table's above: whether a column past the pane
+/// edge can be *reached* is not visible in the row rects.
+#[cfg(test)]
+pub(super) static TEST_EXTENSION_SCROLL: std::sync::Mutex<Vec<(f32, f32)>> =
+    std::sync::Mutex::new(Vec::new());
+
 #[cfg(test)]
 pub(super) static TEST_DIRECTORY_ROW_RECTS: std::sync::Mutex<Vec<(Vec<usize>, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());

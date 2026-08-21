@@ -400,13 +400,17 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             });
     };
 
-    egui::ScrollArea::horizontal()
+    let scroll = egui::ScrollArea::horizontal()
         .id_salt("extension_hscroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(table_width);
             render_table(ui);
         });
+    #[cfg(test)]
+    probe(&TEST_EXTENSION_SCROLL).push((scroll.content_size.x, scroll.inner_rect.width()));
+    #[cfg(not(test))]
+    let _ = scroll;
 
     if let Some((source, target)) = reorder {
         app.reorder_extension_column(source, target);
