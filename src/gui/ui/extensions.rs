@@ -195,7 +195,7 @@ pub(super) fn draw_extension_cell(
                     );
                 }
             }
-            ui.add_space(2.0);
+            ui.add_space(SPACE_XS);
             let _response = ui.label(&ext.extension);
             #[cfg(test)]
             probe(&TEST_EXTENSION_TEXT_RECTS).push((ext.extension.clone(), _response.rect));

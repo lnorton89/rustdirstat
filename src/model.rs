@@ -525,9 +525,23 @@ pub mod fixtures {
         }
     }
 
+    /// The depth the stack-overflow regression tests build to.
+    ///
+    /// Comfortably past what a real filesystem can express — an NTFS path
+    /// caps at 32,767 characters, so even single-character directory names
+    /// run out well before this — and far past what the recursive versions
+    /// of these walks survived in a debug build.
+    ///
+    /// Shared rather than per-module: `search` and `top_files` each had
+    /// their own copy of this number and of the paragraph above it, which
+    /// is two places to update when the answer to "how deep is deep
+    /// enough" changes.
+    pub const DEEP_CHAIN_DEPTH: usize = 60_000;
+
     /// A single chain `depth` directories deep with one file at the
     /// bottom, for the tests that check a walk does not put the tree's
-    /// depth on the call stack.
+    /// depth on the call stack. Pass [`DEEP_CHAIN_DEPTH`] unless the test
+    /// needs a specific shallower depth.
     pub fn deep_chain(depth: usize, leaf_size: u64) -> Node {
         let mut node = dir("bottom", vec![file("buried.bin", leaf_size)]);
         for level in 0..depth {

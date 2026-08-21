@@ -96,11 +96,6 @@ mod walk_tests {
     use super::*;
     use crate::model::fixtures::*;
 
-    /// The depth the stack-overflow test uses. Comfortably past what
-    /// a real filesystem allows, and far past what the recursive
-    /// version survived in a debug build.
-    const DEEP: usize = 60_000;
-
     /// The walk does not put the tree depth on the call stack.
     ///
     /// It used to call itself once per directory level, and depth is the
@@ -108,14 +103,14 @@ mod walk_tests {
     /// took the process with it.
     #[test]
     fn a_tree_far_deeper_than_the_stack_is_still_walked() {
-        let root = dir("root", vec![deep_chain(DEEP, 4096)]);
+        let root = dir("root", vec![deep_chain(DEEP_CHAIN_DEPTH, 4096)]);
         let found = top_k(&root, 10);
         assert_eq!(found.len(), 1, "the one buried file should be found");
         let Some(first) = found.first() else { return };
         assert_eq!(first.name, "buried.bin");
         assert_eq!(
             first.index_path.len(),
-            DEEP + 2,
+            DEEP_CHAIN_DEPTH + 2,
             "the index path should name every level down to the file"
         );
     }

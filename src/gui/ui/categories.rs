@@ -47,7 +47,7 @@ pub(super) fn draw_categories(app: &mut GuiApp, ui: &mut egui::Ui) {
     let total: u64 = stats.iter().map(|stat| stat.size).sum::<u64>().max(1);
 
     draw_bar(ui, &stats, total, app.highlighted_category);
-    ui.add_space(6.0);
+    ui.add_space(SPACE_SM);
 
     let mut clicked = None;
     ui.horizontal_wrapped(|ui| {

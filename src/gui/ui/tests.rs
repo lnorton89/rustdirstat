@@ -3058,3 +3058,155 @@ fn the_extension_table_scrolls_rather_than_dropping_columns() {
         }
     }
 }
+
+/// No module in `gui::ui` may declare a `const` that shadows one of the
+/// theme's.
+///
+/// Every module here glob-imports `theme`, and a glob import is the
+/// weakest binding there is: any `const` of the same name declared in the
+/// importing module wins silently, with no warning and no error. A
+/// function-local one wins for the length of that function *only*, so the
+/// same identifier can mean two different numbers a few lines apart.
+/// `nav_row` had exactly that — `PAD` was 10.0 inside it and 12.0
+/// everywhere else in `modal.rs`.
+///
+/// The names are read back out of `theme.rs` rather than listed here, so
+/// adding a constant to the scale extends this check for free.
+#[test]
+fn no_local_const_shadows_the_theme_scale() -> anyhow::Result<()> {
+    let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("gui")
+        .join("ui");
+
+    let theme_source = std::fs::read_to_string(ui_dir.join("theme.rs"))
+        .context("reading theme.rs to collect the names it exports")?;
+    let exported: Vec<&str> = theme_source
+        .lines()
+        .filter_map(|line| line.strip_prefix("pub(super) const "))
+        .filter_map(|rest| rest.split(':').next())
+        .map(str::trim)
+        .collect();
+
+    assert!(
+        exported.len() >= 4,
+        "expected theme.rs to export the spacing scale, found {exported:?} — has the declaration style changed?"
+    );
+
+    let mut shadowed = Vec::new();
+    for entry in std::fs::read_dir(&ui_dir).context("listing src/gui/ui")? {
+        let path = entry.context("reading an entry of src/gui/ui")?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        // theme.rs is where these are declared, not a place they leak into.
+        if file == "theme.rs" {
+            continue;
+        }
+
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        for (index, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // Checked at every indentation on purpose: a module-level
+            // `const` shadows the glob for the whole file, which is worse
+            // than a function-local one, not better.
+            let bare = trimmed
+                .strip_prefix("pub(crate) ")
+                .or_else(|| trimmed.strip_prefix("pub(super) "))
+                .or_else(|| trimmed.strip_prefix("pub "))
+                .unwrap_or(trimmed);
+            let Some(rest) = bare.strip_prefix("const ") else {
+                continue;
+            };
+            let declared = rest.split(':').next().unwrap_or_default().trim();
+            if exported.contains(&declared) {
+                shadowed.push(format!("{file}:{} declares `const {declared}`", index + 1));
+            }
+        }
+    }
+
+    assert!(
+        shadowed.is_empty(),
+        "these shadow a theme constant of the same name, so the identifier means one thing there and another everywhere else: {shadowed:?}. Rename the local one after what it actually measures."
+    );
+    Ok(())
+}
+
+/// No literal spacing anywhere in `src/gui`.
+///
+/// The scale only buys a shared column if everything is on it, and the
+/// modal spent a long time not being: about forty hand-picked values,
+/// `add_space(6.0)` through `add_space(28.0)`, plus off-scale `Margin`s
+/// and a `SPACE_XS + 1.0`. They are all snapped now, and this is what
+/// stops the next one from being added.
+///
+/// `0.0` is allowed: an absent margin is not a step on the scale, and
+/// rounding it up to `SPACE_XS` would put a gap where the design wants
+/// none.
+#[test]
+fn no_literal_spacing_survives_in_the_gui() -> anyhow::Result<()> {
+    let add_space = regex::Regex::new(r"ui\.add_space\(\s*\d+\.\d+")?;
+    let margin = regex::Regex::new(r"Margin::(?:same|symmetric)\(([^)]*)\)")?;
+    let number = regex::Regex::new(r"\d+\.\d+")?;
+
+    let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("gui")];
+    let mut offenders = Vec::new();
+
+    // Iterative for the same reason everything else here is, even though
+    // a source tree is nothing like tree-sized.
+    while let Some(dir) = pending.pop() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("listing {}", dir.display()))?
+        {
+            let path = entry.context("reading a directory entry")?.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+
+            for (index, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                // Doc comments quote these calls when explaining them.
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                let at = index + 1;
+                if add_space.is_match(trimmed) {
+                    offenders.push(format!("{file}:{at} add_space with a literal"));
+                }
+                for caught in margin.captures_iter(trimmed) {
+                    let Some(args) = caught.get(1) else {
+                        continue;
+                    };
+                    for found in number.find_iter(args.as_str()) {
+                        if found.as_str() != "0.0" {
+                            offenders.push(format!("{file}:{at} Margin with a literal"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "spacing must come from SPACE_XS / SPACE_SM / SPACE_MD / SPACE_LG, not a number picked by eye: {offenders:?}"
+    );
+    Ok(())
+}

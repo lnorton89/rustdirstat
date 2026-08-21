@@ -52,7 +52,7 @@ fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&
     Frame::none()
         .fill(palette.raised)
         .rounding(egui::Rounding::same(9.0))
-        .inner_margin(Margin::same(14.0))
+        .inner_margin(Margin::same(SPACE_MD))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -60,10 +60,10 @@ fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&
                 paint_inline_icon(ui, icon, 16.0, palette.accent);
                 ui.label(RichText::new(title).strong());
             });
-            ui.add_space(8.0);
+            ui.add_space(SPACE_SM);
             add_contents(ui);
         });
-    ui.add_space(12.0);
+    ui.add_space(SPACE_MD);
 }
 
 /// A sentence that ends by sending the reader to another page.
@@ -93,7 +93,7 @@ fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
             )
             .color(palette().secondary_text),
         );
-        ui.add_space(10.0);
+        ui.add_space(SPACE_MD);
         // Its own scroll, bounded. The catalog is long enough that
         // letting it run at full height pushes every other control on the
         // page past the bottom of the card.
@@ -115,14 +115,14 @@ fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
                             .small()
                             .color(palette().secondary_text),
                     );
-                    ui.add_space(4.0);
+                    ui.add_space(SPACE_XS);
                     for spec in specs {
                         let selected = spec.id == app.theme_id;
                         if theme_row(ui, selected, spec).clicked() {
                             chosen = Some(&spec.id);
                         }
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(SPACE_MD);
                 }
             });
     });
@@ -239,7 +239,7 @@ fn draw_layout(app: &mut GuiApp, ui: &mut egui::Ui) {
         )
         .color(palette().secondary_text),
     );
-    ui.add_space(6.0);
+    ui.add_space(SPACE_SM);
     see_also(ui, app, "To turn panes off outright, see", ModalPage::Views);
 }
 
@@ -303,12 +303,12 @@ fn draw_properties(app: &mut GuiApp, ui: &mut egui::Ui) {
 
 fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, body: &str) {
     let palette = palette();
-    ui.add_space(28.0);
+    ui.add_space(SPACE_LG);
     ui.vertical_centered(|ui| {
         paint_inline_icon(ui, icon, 38.0, palette.secondary_text);
-        ui.add_space(10.0);
+        ui.add_space(SPACE_MD);
         ui.label(RichText::new(title).strong());
-        ui.add_space(4.0);
+        ui.add_space(SPACE_XS);
         ui.label(RichText::new(body).color(palette.secondary_text));
     });
 }
@@ -334,7 +334,7 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
             Icon::Warning,
             "These are Windows utilities. Nothing on this page can run on this system.",
         );
-        ui.add_space(12.0);
+        ui.add_space(SPACE_MD);
     }
 
     let mut requested = None;
@@ -348,7 +348,7 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
             })
             .color(palette.secondary_text),
         );
-        ui.add_space(8.0);
+        ui.add_space(SPACE_SM);
         for (index, tool) in crate::wintools::TOOLS.iter().enumerate() {
             if LAUNCHERS.contains(&index) != launchers {
                 continue;
@@ -357,7 +357,7 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
                 requested = Some(index);
             }
         }
-        ui.add_space(10.0);
+        ui.add_space(SPACE_MD);
     }
     if let Some(index) = requested {
         app.request_windows_tool(index);
@@ -365,9 +365,9 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
 
     if !app.tools.log.is_empty() {
         separator(ui);
-        ui.add_space(12.0);
+        ui.add_space(SPACE_MD);
         ui.label(RichText::new("Results").strong());
-        ui.add_space(8.0);
+        ui.add_space(SPACE_SM);
         for entry in app.tools.log.iter().rev() {
             result_row(ui, entry);
         }
@@ -402,7 +402,7 @@ fn tool_row(
     let frame = Frame::none()
         .fill(palette.raised)
         .rounding(egui::Rounding::same(9.0))
-        .inner_margin(Margin::symmetric(14.0, 12.0))
+        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_MD))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -421,7 +421,7 @@ fn tool_row(
                         ui.label(RichText::new(tool.name).strong());
                         ui.label(RichText::new(tool.description).color(palette.secondary_text));
                         if tool.irreversible || tool.needs_admin {
-                            ui.add_space(4.0);
+                            ui.add_space(SPACE_XS);
                             ui.horizontal(|ui| {
                                 if tool.irreversible {
                                     chip(ui, palette.danger, "Cannot be undone");
@@ -484,7 +484,7 @@ fn tool_row(
     }
     #[cfg(test)]
     probe(&TEST_TOOL_ROW_MARKERS).push((index, tool.destructive, row));
-    ui.add_space(8.0);
+    ui.add_space(SPACE_SM);
     clicked
 }
 
@@ -493,7 +493,7 @@ fn chip(ui: &mut egui::Ui, tone: Color32, text: &str) {
     Frame::none()
         .fill(blend(palette().raised, tone, 0.18))
         .rounding(egui::Rounding::same(5.0))
-        .inner_margin(Margin::symmetric(7.0, 2.0))
+        .inner_margin(Margin::symmetric(SPACE_SM, SPACE_XS))
         .show(ui, |ui| {
             ui.label(RichText::new(text).small().color(tone));
         });
@@ -509,7 +509,7 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
     Frame::none()
         .fill(palette.raised)
         .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::same(12.0))
+        .inner_margin(Margin::same(SPACE_MD))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -528,20 +528,20 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
             });
             ui.label(RichText::new(&entry.summary).color(palette.secondary_text));
             if !entry.detail.is_empty() {
-                ui.add_space(6.0);
+                ui.add_space(SPACE_SM);
                 // Monospace, because a DISM report is a table and a
                 // proportional font turns it back into prose.
                 Frame::none()
                     .fill(palette.app)
                     .rounding(egui::Rounding::same(6.0))
-                    .inner_margin(Margin::same(9.0))
+                    .inner_margin(Margin::same(SPACE_SM))
                     .show(ui, |ui| {
                         fill_width(ui);
                         ui.label(RichText::new(&entry.detail).monospace().small());
                     });
             }
         });
-    ui.add_space(8.0);
+    ui.add_space(SPACE_SM);
 }
 
 // ------------------------------------------------------------ Guide/About
@@ -573,7 +573,7 @@ fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
     ui.horizontal(|ui| {
         paint_inline_brand(ui, 40.0);
-        ui.add_space(6.0);
+        ui.add_space(SPACE_SM);
         ui.vertical(|ui| {
             ui.label(RichText::new("RustDirStat").heading().strong());
             ui.label(
@@ -582,7 +582,7 @@ fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
             );
         });
     });
-    ui.add_space(14.0);
+    ui.add_space(SPACE_MD);
     group(ui, Icon::Info, "What this is", |ui| {
         ui.label("A WinDirStat clone in Rust, with a terminal front end and this desktop one over a single scanning core.");
     });
@@ -631,7 +631,7 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
     confirm_card(ctx, "confirm_delete", opening, |ui| {
         ui.horizontal(|ui| {
             paint_inline_icon(ui, Icon::Trash, 20.0, palette.danger);
-            ui.add_space(4.0);
+            ui.add_space(SPACE_XS);
             ui.label(
                 RichText::new(if permanent {
                     "Delete permanently?"
@@ -642,9 +642,9 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
                 .strong(),
             );
         });
-        ui.add_space(8.0);
+        ui.add_space(SPACE_SM);
         ui.label(RichText::new(&name).strong());
-        ui.add_space(8.0);
+        ui.add_space(SPACE_SM);
         if permanent {
             callout(ui, Tone::Danger, Icon::Warning, "This cannot be undone.");
         } else {
@@ -654,13 +654,13 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
             );
         }
         if is_dir {
-            ui.add_space(6.0);
+            ui.add_space(SPACE_SM);
             ui.label(
                 RichText::new("Empty keeps the folder and removes only its contents.")
                     .color(palette.secondary_text),
             );
         }
-        ui.add_space(16.0);
+        ui.add_space(SPACE_LG);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button("Cancel").clicked() {
                 cancel = true;
@@ -718,18 +718,18 @@ fn draw_tool_confirm(app: &mut GuiApp, ctx: &egui::Context, index: usize, openin
                 palette.warning
             };
             paint_inline_icon(ui, icon, 20.0, tone);
-            ui.add_space(4.0);
+            ui.add_space(SPACE_XS);
             ui.label(RichText::new(tool.name).heading().strong());
         });
-        ui.add_space(10.0);
+        ui.add_space(SPACE_MD);
         // The tool's own words, not a generic warning. The generic one
         // was simultaneously stronger than the truth for routine cleanup
         // and weaker than it for deleting every shadow copy.
         ui.label(tool.description);
-        ui.add_space(10.0);
+        ui.add_space(SPACE_MD);
         if tool.irreversible {
             callout(ui, Tone::Danger, Icon::Warning, "This cannot be undone.");
-            ui.add_space(6.0);
+            ui.add_space(SPACE_SM);
         }
         if tool.needs_admin {
             callout(
@@ -739,7 +739,7 @@ fn draw_tool_confirm(app: &mut GuiApp, ctx: &egui::Context, index: usize, openin
                 "Needs an elevated session. Without one it will fail immediately.",
             );
         }
-        ui.add_space(16.0);
+        ui.add_space(SPACE_LG);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button("Cancel").clicked() {
                 cancel = true;
