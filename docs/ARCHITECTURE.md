@@ -79,7 +79,13 @@ and are named so no one reaches for them in mutation code by accident.
 ```
 gui/
   mod.rs             run(), eframe NativeOptions (wgpu renderer)
-  app.rs             GuiApp: ALL state, background work, derived-data caches
+  app/               GuiApp: ALL state, background work, derived-data caches
+    mod.rs           the struct itself, preferences, cache keys, frame update
+    scan.rs          scan/search/extension workers, restore-by-name, polling
+    rows.rs          the flattened visible-row cache and selection
+    extensions.rs    extension aggregation and the flat file views
+    treemap.rs       zoom state and treemap cache keys
+    tools.rs         delete, empty, and Windows maintenance operations
   icons.rs           vector icon set, painted not fonted
   treemap_layout.rs  Node subtree -> positioned pixel tiles
   ui/
@@ -151,8 +157,10 @@ never looks like a failed launch.
 
 ## TUI (`src/tui/`)
 
-`app.rs` holds state and the event loop; `ui/` renders, split the same
-way `gui/ui/` is — `mod.rs` lays the panes out, then `chrome.rs`
+`app/` holds state and the event loop — `mod.rs` the grouped state,
+`input.rs` key/mouse dispatch, `navigation.rs` movement,
+`operations.rs` everything destructive, `views.rs` the alternate views —
+and `ui/` renders, split the same way `gui/ui/` is — `mod.rs` lays the panes out, then `chrome.rs`
 (header, footer, extension legend), `lists.rs` (directory listing,
 largest files, search, duplicates), `treemap.rs`, `popups.rs` (every
 prompt, confirmation and help screen) and `text.rs` (width-aware
@@ -174,7 +182,7 @@ group it belongs to rather than to the top level.
 
 | Change | File |
 | --- | --- |
-| A new column in the file table | `gui/ui/directory.rs` + `DirectoryColumn` in `gui/app.rs` |
+| A new column in the file table | `gui/ui/directory.rs` + `DirectoryColumn` in `gui/app/extensions.rs` |
 | A new menu item | `gui/ui/chrome.rs`; the command itself in `gui/ui/actions.rs` |
 | A new keyboard shortcut | `handle_shortcuts` in `gui/ui/actions.rs`, and show it on the matching menu row |
 | A new theme | `assets/themes.toml` — data only, no code |

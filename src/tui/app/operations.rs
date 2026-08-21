@@ -348,59 +348,43 @@ impl App {
 
         let removed = Removed::emptying(target);
 
-        // Enumerate every direct child before deleting anything: an
-        // incomplete listing must not be acted on as if it were complete.
-        // The scanner counts partial listings rather than pretending they
-        // are whole, and a destructive path cannot be looser than the
-        // read-only one.
-        let mut children = Vec::new();
-        let mut unreadable = 0usize;
-        for entry in std::fs::read_dir(&path)? {
-            match entry {
-                Ok(e) => children.push(e.path()),
-                Err(_) => unreadable += 1,
+        // Enumerate-fully-then-delete, shared with the GUI through
+        // `util::empty_directory_to_trash`: an incomplete listing aborts
+        // before anything is deleted, and a mid-way failure is reported
+        // as the partial emptying it is. In both of those cases the tree
+        // no longer matches the disk by an unknown amount, so it is
+        // rescanned rather than subtracted in place — the in-place
+        // subtraction below is only correct for a *complete* emptying.
+        match crate::util::empty_directory_to_trash(&path)? {
+            crate::util::EmptyOutcome::Incomplete { unreadable } => {
+                self.message = Some(format!(
+                    "Nothing was emptied: {unreadable} entr{} could not be read",
+                    if unreadable == 1 { "y" } else { "ies" }
+                ));
+                self.refresh_requested = true;
+                return Ok(());
             }
-        }
-        if unreadable > 0 {
-            self.message = Some(format!(
-                "Nothing was emptied: {unreadable} entr{} could not be read",
-                if unreadable == 1 { "y" } else { "ies" }
-            ));
-            // The tree no longer matches the disk, and by how much is
-            // unknown — rescan rather than subtract in place.
-            self.refresh_requested = true;
-            return Ok(());
-        }
-
-        // Then each child individually, reporting partial failure. Once
-        // the first child is in the trash the disk has changed, so a
-        // mid-way failure is "partially emptied", not an error implying
-        // nothing happened — and the in-place subtraction below would be
-        // wrong by exactly however many failed, so the tree is rescanned.
-        let total = children.len();
-        let mut failed = 0usize;
-        let mut first_error: Option<String> = None;
-        for child_path in children {
-            if let Err(e) = trash::delete(&child_path) {
-                failed += 1;
-                if first_error.is_none() {
-                    first_error = Some(e.to_string());
-                }
+            crate::util::EmptyOutcome::Partial {
+                done,
+                total,
+                first_error,
+            } => {
+                let failed = total - done;
+                self.message = Some(match first_error {
+                    Some(error) => format!(
+                        "Emptied {done} of {total} items; {failed} could not be moved \
+                         to trash ({error})"
+                    ),
+                    None => {
+                        format!(
+                            "Emptied {done} of {total} items; {failed} could not be moved to trash"
+                        )
+                    }
+                });
+                self.refresh_requested = true;
+                return Ok(());
             }
-        }
-        if failed > 0 {
-            let done = total - failed;
-            self.message = Some(match first_error {
-                Some(error) => format!(
-                    "Emptied {done} of {total} items; {failed} could not be moved \
-                     to trash ({error})"
-                ),
-                None => {
-                    format!("Emptied {done} of {total} items; {failed} could not be moved to trash")
-                }
-            });
-            self.refresh_requested = true;
-            return Ok(());
+            crate::util::EmptyOutcome::Emptied { .. } => {}
         }
 
         let parent = self.subtract_along_current_path(&removed);

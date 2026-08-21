@@ -61,8 +61,43 @@ fn config_path() -> Option<PathBuf> {
 pub fn load() -> Config {
     config_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| toml::from_str(&s).ok())
+        .map(|s| parse(&s))
         .unwrap_or_default()
+}
+
+/// Parses a config, forgiving per field: one malformed value costs that
+/// one preference, not all of them.
+///
+/// Deserializing the whole struct in one shot meant a single bad field
+/// — a mistyped sort name, a string where a bool belongs — silently
+/// threw away every other saved preference along with it. A file that
+/// is not TOML at all still yields the defaults; there is nothing in it
+/// to salvage.
+fn parse(text: &str) -> Config {
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Config::default();
+    };
+    fn field<T: serde::de::DeserializeOwned>(table: &toml::Table, key: &str) -> Option<T> {
+        table
+            .get(key)
+            .cloned()
+            .and_then(|value| value.try_into().ok())
+    }
+    Config {
+        sort: field(&table, "sort"),
+        show_treemap: field(&table, "show_treemap"),
+        treemap_split: field(&table, "treemap_split"),
+        detailed: field(&table, "detailed"),
+        use_physical: field(&table, "use_physical"),
+        gui_orientation: field(&table, "gui_orientation"),
+        gui_show_extensions: field(&table, "gui_show_extensions"),
+        gui_show_toolbar: field(&table, "gui_show_toolbar"),
+        gui_show_status_bar: field(&table, "gui_show_status_bar"),
+        gui_show_free_space: field(&table, "gui_show_free_space"),
+        gui_show_grid: field(&table, "gui_show_grid"),
+        gui_show_labels: field(&table, "gui_show_labels"),
+        gui_theme: field(&table, "gui_theme"),
+    }
 }
 
 /// Writes `cfg` to the platform config location, atomically.
@@ -108,7 +143,37 @@ pub fn save(cfg: &Config) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{parse, Config};
+
+    /// One malformed field costs that field, not the whole file: the
+    /// old whole-struct deserialize threw away every preference when a
+    /// single value failed to parse.
+    #[test]
+    fn one_malformed_field_does_not_discard_the_rest() {
+        let config = parse(concat!(
+            "sort = \"NotARealSortMode\"\n",
+            "use_physical = true\n",
+            "gui_theme = \"catppuccin-mocha\"\n",
+            "treemap_split = \"not a number\"\n",
+        ));
+        assert!(config.sort.is_none(), "the bad sort value is dropped alone");
+        assert_eq!(config.treemap_split, None, "the bad split is dropped alone");
+        assert_eq!(
+            config.use_physical,
+            Some(true),
+            "a good field beside a bad one survives"
+        );
+        assert_eq!(config.gui_theme.as_deref(), Some("catppuccin-mocha"));
+    }
+
+    /// A file that is not TOML at all still yields defaults rather than
+    /// an error — preferences are convenience state, never a failure.
+    #[test]
+    fn garbage_yields_defaults() {
+        let config = parse("this is { not toml");
+        assert!(config.sort.is_none(), "no sort can come out of garbage");
+        assert_eq!(config.gui_theme, None);
+    }
 
     #[test]
     fn gui_preferences_round_trip_through_toml() -> anyhow::Result<()> {

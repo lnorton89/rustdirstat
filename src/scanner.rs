@@ -976,6 +976,59 @@ mod tests {
         Ok(())
     }
 
+    /// A junction is scanned as a link, not followed. Following one
+    /// would double-count the target's bytes — and for a junction cycle,
+    /// walk forever. Windows' junctions carry the directory attribute,
+    /// so this pins that the reparse point wins over it.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_is_scanned_as_a_link_not_followed() -> anyhow::Result<()> {
+        use std::process::Command;
+
+        let root = scratch_dir("scan", "junction");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("real"))?;
+        fs::write(root.join("real").join("payload.bin"), vec![b'x'; 512])?;
+
+        // `mklink /J` needs no privilege, unlike a symlink — but a
+        // locked-down environment may still refuse, and a skipped
+        // assertion beats a flaky failure.
+        let made = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(root.join("jct"))
+            .arg(root.join("real"))
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !made {
+            let _ = fs::remove_dir_all(&root);
+            return Ok(());
+        }
+
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        assert_eq!(
+            node.size, 512,
+            "the payload is counted once — a followed junction would double it"
+        );
+        let junction = node
+            .children
+            .iter()
+            .find(|c| c.name == std::ffi::OsStr::new("jct"))
+            .ok_or_else(|| anyhow::anyhow!("the junction must appear in the scan"))?;
+        assert!(
+            junction.is_symlink,
+            "a junction is a link in the model, not a directory"
+        );
+        assert!(
+            junction.children.is_empty(),
+            "nothing behind the junction may be walked"
+        );
+        assert_eq!(junction.size, 0, "a link contributes no bytes");
+
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
     /// A scan reaches the bottom of a chain deeper than the parallel
     /// walk may recurse.
     #[test]

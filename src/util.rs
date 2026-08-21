@@ -193,6 +193,11 @@ pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
 /// evidence the source lives on another volume, and copying for it would
 /// mask the real error while doing exactly the wrong thing. Refuses to
 /// silently overwrite an existing `dest`.
+///
+/// The fallback copy carries timestamps and directory permission bits
+/// with it (see [`preserve_metadata`]); ownership, ACLs, and extended
+/// attributes are not carried — a same-volume move keeps them because
+/// it is a rename and never copies at all.
 pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     if dest.exists() {
         return Err(std::io::Error::new(
@@ -242,7 +247,9 @@ pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::R
     } else if is_dir {
         copy_dir_recursive(source, dest)
     } else {
-        std::fs::copy(source, dest).map(|_| ())
+        std::fs::copy(source, dest).map(|_| ()).inspect(|()| {
+            preserve_metadata(&meta, dest);
+        })
     };
     if let Err(e) = copy_result {
         // Whatever landed at `dest` (nothing, or a partial copy) is
@@ -255,6 +262,69 @@ pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::R
     }
 
     remove_path(source, is_dir, is_symlink)
+}
+
+/// What emptying a folder actually accomplished.
+///
+/// Shared by both front ends, which used to carry near-identical copies
+/// of the enumerate-then-delete discipline — and the discipline is the
+/// point: an incomplete listing must abort before anything is deleted,
+/// and a mid-way failure is "partially emptied", not an error implying
+/// nothing happened.
+pub enum EmptyOutcome {
+    /// The listing was incomplete — `unreadable` entries could not be
+    /// read — so nothing was deleted: acting on a partial listing as if
+    /// it were complete is how files get silently left behind under a
+    /// "Emptied" message.
+    Incomplete { unreadable: usize },
+    /// Some children could not be moved to the trash. The disk has
+    /// changed by `done` of `total`; the caller must rescan rather than
+    /// subtract, because the in-memory tree is wrong by exactly the
+    /// failures.
+    Partial {
+        done: usize,
+        total: usize,
+        first_error: Option<String>,
+    },
+    /// Every child went to the trash.
+    Emptied { total: usize },
+}
+
+/// Moves every direct child of `dir` to the trash, enumerating fully
+/// before deleting anything. `Err` means the directory itself could not
+/// be listed and nothing was touched.
+pub fn empty_directory_to_trash(dir: &std::path::Path) -> std::io::Result<EmptyOutcome> {
+    let mut children = Vec::new();
+    let mut unreadable = 0usize;
+    for entry in std::fs::read_dir(dir)? {
+        match entry {
+            Ok(e) => children.push(e.path()),
+            Err(_) => unreadable += 1,
+        }
+    }
+    if unreadable > 0 {
+        return Ok(EmptyOutcome::Incomplete { unreadable });
+    }
+
+    let total = children.len();
+    let mut failed = 0usize;
+    let mut first_error: Option<String> = None;
+    for child in children {
+        if let Err(e) = trash::delete(&child) {
+            failed += 1;
+            if first_error.is_none() {
+                first_error = Some(e.to_string());
+            }
+        }
+    }
+    if failed > 0 {
+        return Ok(EmptyOutcome::Partial {
+            done: total - failed,
+            total,
+            first_error,
+        });
+    }
+    Ok(EmptyOutcome::Emptied { total })
 }
 
 /// Whether a rename failed because the two paths are on different
@@ -321,8 +391,12 @@ fn remove_path(path: &std::path::Path, is_dir: bool, is_symlink: bool) -> std::i
 /// to visit, which is heap and can simply be large.
 fn copy_dir_recursive(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     let mut pending = vec![(source.to_path_buf(), dest.to_path_buf())];
+    let mut copied_dirs: Vec<(std::fs::Metadata, std::path::PathBuf)> = Vec::new();
     while let Some((source, dest)) = pending.pop() {
         std::fs::create_dir_all(&dest)?;
+        if let Ok(meta) = std::fs::symlink_metadata(&source) {
+            copied_dirs.push((meta, dest.clone()));
+        }
         for entry in std::fs::read_dir(&source)? {
             let entry = entry?;
             let ty = entry.file_type()?;
@@ -343,10 +417,74 @@ fn copy_dir_recursive(source: &std::path::Path, dest: &std::path::Path) -> std::
                 pending.push((entry.path(), dest_path));
             } else {
                 std::fs::copy(entry.path(), &dest_path)?;
+                if let Ok(meta) = entry.metadata() {
+                    preserve_metadata(&meta, &dest_path);
+                }
             }
         }
     }
+    // Directory metadata is applied only after every copy has landed:
+    // each file copied *into* a directory bumps that directory's
+    // modified time, so timestamps written during the walk would be
+    // quietly undone by the walk itself.
+    for (meta, dest) in copied_dirs {
+        preserve_metadata(&meta, &dest);
+    }
     Ok(())
+}
+
+/// Best-effort carryover of the metadata a fallback copy would
+/// otherwise lose: timestamps for files and directories, and a
+/// directory's permission bits (`fs::copy` already carries a file's).
+///
+/// A user choosing "Move" expects filesystem-manager semantics, and a
+/// copy that resets every folder's modified time to "now" destroys
+/// information this application itself displays and sorts by. Failures
+/// are deliberately swallowed — the data arrived, and stale metadata on
+/// it is strictly better than failing the move. What this cannot carry
+/// (ownership, ACLs, extended attributes) is not guessed at; a
+/// same-volume move keeps them because it is a rename and never comes
+/// through here.
+fn preserve_metadata(source_meta: &std::fs::Metadata, dest: &std::path::Path) {
+    if source_meta.is_dir() {
+        let _ = std::fs::set_permissions(dest, source_meta.permissions());
+    }
+    let mut times = std::fs::FileTimes::new();
+    if let Ok(modified) = source_meta.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = source_meta.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    let file = if source_meta.is_dir() {
+        open_dir_for_times(dest)
+    } else {
+        std::fs::OpenOptions::new().write(true).open(dest).ok()
+    };
+    if let Some(file) = file {
+        let _ = file.set_times(times);
+    }
+}
+
+/// A handle on a directory that `File::set_times` accepts.
+///
+/// Unix `futimens` is happy with a read-only descriptor. Windows needs
+/// the handle opened with backup semantics — the flag that permits
+/// opening a directory at all — plus write access for the timestamp.
+#[cfg(unix)]
+fn open_dir_for_times(dir: &std::path::Path) -> Option<std::fs::File> {
+    std::fs::File::open(dir).ok()
+}
+
+#[cfg(windows)]
+fn open_dir_for_times(dir: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(dir)
+        .ok()
 }
 
 #[cfg(all(test, unix))]
@@ -527,12 +665,125 @@ mod move_path_tests {
     }
 }
 
+/// The empty-folder discipline: enumerate fully before deleting, and
+/// report a partial emptying as partial. Unix-only because the failure
+/// it needs — children that cannot be unlinked — is produced with a
+/// read-only directory, which Windows permissions do not express this
+/// way.
+#[cfg(all(test, unix))]
+mod empty_tests {
+    use super::*;
+
+    /// Safe leaf wrapper over `geteuid(2)`.
+    fn effective_uid() -> u32 {
+        // SAFETY: `geteuid` takes no arguments and cannot fail.
+        unsafe { libc::geteuid() }
+    }
+
+    /// A child that cannot be moved to the trash is reported, not
+    /// silently ignored: "Emptied" and "emptied all but two" are very
+    /// different messages to show above a folder that still has files
+    /// in it.
+    #[test]
+    fn a_child_that_cannot_be_trashed_is_reported_not_ignored() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch_dir("empty", "partial");
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("stuck");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("a.bin"), b"x")?;
+        std::fs::write(dir.join("b.bin"), b"y")?;
+        // r-x: listing the directory succeeds, unlinking from it cannot.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))?;
+
+        let outcome = empty_directory_to_trash(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))?;
+
+        // Root unlinks regardless of directory bits, so the failure
+        // this asserts cannot be produced there (some CI containers run
+        // as root); the setup still runs everywhere.
+        if effective_uid() != 0 {
+            let EmptyOutcome::Partial {
+                done,
+                total,
+                first_error,
+            } = outcome?
+            else {
+                anyhow::bail!("an undeletable child must yield a partial outcome");
+            };
+            assert_eq!(done, 0, "nothing could be moved to trash");
+            assert_eq!(total, 2, "both children must have been attempted");
+            assert!(
+                first_error.is_some(),
+                "the first error is carried into the status message"
+            );
+        }
+
+        std::fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+}
+
 /// Cross-platform, unlike the symlink tests above: nothing here needs
 /// privileges to create.
 #[cfg(test)]
 mod copy_tests {
     use super::*;
     use std::fs;
+
+    /// Filesystems differ in timestamp granularity (2 s on FAT, 100 ns
+    /// on NTFS), so preserved times are compared with slack rather than
+    /// for equality.
+    fn within_five_seconds(actual: std::time::SystemTime, expected: std::time::SystemTime) -> bool {
+        let tolerance = std::time::Duration::from_secs(5);
+        match actual.duration_since(expected) {
+            Ok(ahead) => ahead < tolerance,
+            Err(behind) => behind.duration() < tolerance,
+        }
+    }
+
+    /// The fallback copy keeps modified times, for files and for the
+    /// directories that hold them. A moved tree whose every entry
+    /// claims to have been modified "just now" has destroyed
+    /// information this application itself displays and sorts by.
+    #[test]
+    fn a_copied_tree_keeps_its_modified_times() -> anyhow::Result<()> {
+        let root = scratch_dir("copy", "times");
+        let _ = fs::remove_dir_all(&root);
+        let source = root.join("source");
+        fs::create_dir_all(source.join("inner"))?;
+        let file = source.join("inner").join("old.txt");
+        fs::write(&file, b"payload")?;
+
+        // Age everything well past anything a fresh copy could produce.
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        let times = fs::FileTimes::new().set_modified(old).set_accessed(old);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&file)?
+            .set_times(times)?;
+        if let Some(dir) = open_dir_for_times(&source.join("inner")) {
+            dir.set_times(times)?;
+        }
+
+        let dest = root.join("dest");
+        copy_dir_recursive(&source, &dest)?;
+
+        let copied_file = fs::metadata(dest.join("inner").join("old.txt"))?;
+        assert!(
+            within_five_seconds(copied_file.modified()?, old),
+            "the file's modified time must survive the copy"
+        );
+        let copied_dir = fs::metadata(dest.join("inner"))?;
+        assert!(
+            within_five_seconds(copied_dir.modified()?, old),
+            "the directory's modified time must survive the copy"
+        );
+
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
 
     /// A copied tree keeps its shape and its contents.
     ///

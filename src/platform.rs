@@ -35,9 +35,11 @@ pub struct FileId {
 /// The identity of the file `meta` describes, if the platform captures
 /// one for free. Unix gets `(st_dev, st_ino)` out of the `stat()` the
 /// scanner already makes; Windows would need a separate handle-based
-/// syscall per file, so it is `None` there and hard-link detection is
-/// simply unavailable — each pathname counts as its own file, as it
-/// always has.
+/// syscall per file, so the *scan* leaves it `None` there — and
+/// duplicate detection recovers the identity later through
+/// [`file_id_from_handle`], from the handle the hasher already holds
+/// open, so hard-link awareness works on Windows exactly where it
+/// matters.
 #[cfg(unix)]
 pub fn file_id(meta: &std::fs::Metadata) -> Option<FileId> {
     use std::os::unix::fs::MetadataExt;
@@ -49,6 +51,45 @@ pub fn file_id(meta: &std::fs::Metadata) -> Option<FileId> {
 
 #[cfg(not(unix))]
 pub fn file_id(_meta: &std::fs::Metadata) -> Option<FileId> {
+    None
+}
+
+/// The identity of an already-open file, read from its handle.
+///
+/// This is how Windows gets hard-link identity without the scanner
+/// paying a per-file open: duplicate hashing *already holds* the file
+/// open to read it, and the volume serial + file index pair is one
+/// metadata query on that same handle. Safe leaf wrapper over
+/// `GetFileInformationByHandle`; the `unsafe` blocks hold one call
+/// each and nothing else.
+#[cfg(windows)]
+pub fn file_id_from_handle(file: &std::fs::File) -> Option<FileId> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: the handle comes from a live `&File`, so it is a valid,
+    // open file handle for the duration of the call, and `info` is a
+    // live out-parameter the callee writes only on success.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+    if ok == 0 {
+        return None;
+    }
+    // SAFETY: the callee reported success, so the struct is initialized.
+    let info = unsafe { info.assume_init() };
+    Some(FileId {
+        device: info.dwVolumeSerialNumber as u64,
+        inode: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+    })
+}
+
+/// Unix never needs the handle form: the scan-time `stat()` already
+/// captured every file's identity for free.
+#[cfg(not(windows))]
+pub fn file_id_from_handle(_file: &std::fs::File) -> Option<FileId> {
     None
 }
 
@@ -141,6 +182,141 @@ pub fn physical_size(meta: &std::fs::Metadata, _path: &std::path::Path) -> u64 {
 /// Free and total bytes on the volume containing `path`, if determinable.
 pub fn volume_space(path: &std::path::Path) -> (Option<u64>, Option<u64>) {
     imp::volume_space(path)
+}
+
+/// Whether the volume under `path` is spinning media, where the platform
+/// can say. `Some(true)` = rotational (HDD), `Some(false)` = solid
+/// state, `None` = no answer (macOS, query failure, exotic devices).
+///
+/// Duplicate hashing uses this to pick its concurrency: hashing is
+/// storage-bound, and on spinning media many workers seeking between
+/// large files is slower than one or two streaming sequentially, while
+/// solid state devices want the parallelism. An uncertain answer keeps
+/// the parallel default.
+#[cfg(target_os = "linux")]
+pub fn storage_is_rotational(path: &std::path::Path) -> Option<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let dev = std::fs::metadata(path).ok()?.dev();
+    let (major, minor) = (libc::major(dev), libc::minor(dev));
+    // A partition's sysfs node has no `queue/` of its own — the
+    // whole-disk parent one level up does, so try both.
+    let direct = format!("/sys/dev/block/{major}:{minor}/queue/rotational");
+    let parent = format!("/sys/dev/block/{major}:{minor}/../queue/rotational");
+    let text = std::fs::read_to_string(&direct)
+        .or_else(|_| std::fs::read_to_string(&parent))
+        .ok()?;
+    Some(text.trim() == "1")
+}
+
+#[cfg(windows)]
+pub fn storage_is_rotational(path: &std::path::Path) -> Option<bool> {
+    let letter = drive_letter(path)?;
+    let volume = format!(r"\\.\{}:", letter as char);
+    let handle = open_volume_for_query(&volume)?;
+    seek_penalty(&handle)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn storage_is_rotational(_path: &std::path::Path) -> Option<bool> {
+    None
+}
+
+/// The drive letter of `path`'s prefix, when it has one. UNC and device
+/// paths answer `None` — their storage is not queryable this way.
+#[cfg(windows)]
+fn drive_letter(path: &std::path::Path) -> Option<u8> {
+    let std::path::Component::Prefix(prefix) = path.components().next()? else {
+        return None;
+    };
+    match prefix.kind() {
+        std::path::Prefix::Disk(letter) | std::path::Prefix::VerbatimDisk(letter) => Some(letter),
+        std::path::Prefix::Verbatim(_)
+        | std::path::Prefix::VerbatimUNC(..)
+        | std::path::Prefix::DeviceNS(_)
+        | std::path::Prefix::UNC(..) => None,
+    }
+}
+
+/// Safe leaf wrapper over `CreateFileW`, opening a volume with zero
+/// access rights — enough for metadata queries, nothing else. The
+/// returned handle closes itself on drop.
+#[cfg(windows)]
+fn open_volume_for_query(volume: &str) -> Option<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = volume.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated wide string valid for the
+    // duration of the call; every other argument is a plain flag, zero,
+    // or null, all documented-valid for opening an existing volume.
+    let raw = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    // SAFETY: `raw` is the valid handle `CreateFileW` just returned and
+    // nothing else owns it — wrapping hands ownership (and the eventual
+    // `CloseHandle`) to the returned value, so early returns cannot
+    // leak it.
+    Some(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+/// Safe leaf wrapper over the `IOCTL_STORAGE_QUERY_PROPERTY` seek-
+/// penalty query: `Some(true)` when the device incurs one (spinning
+/// media), `Some(false)` when it does not, `None` when the query fails
+/// (drivers are not obliged to implement it).
+#[cfg(windows)]
+fn seek_penalty(handle: &std::os::windows::io::OwnedHandle) -> Option<bool> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Ioctl::{
+        PropertyStandardQuery, StorageDeviceSeekPenaltyProperty, DEVICE_SEEK_PENALTY_DESCRIPTOR,
+        IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageDeviceSeekPenaltyProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+    let mut descriptor = MaybeUninit::<DEVICE_SEEK_PENALTY_DESCRIPTOR>::uninit();
+    let mut written: u32 = 0;
+    // SAFETY: the handle is open for the duration of the call, `query`
+    // outlives it, `descriptor` is a live out-buffer of exactly the
+    // size passed, and `written` is a live `u32` — all as the API
+    // documents. The descriptor is read only on the success path.
+    let ok = unsafe {
+        DeviceIoControl(
+            handle.as_raw_handle(),
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            (&query as *const STORAGE_PROPERTY_QUERY).cast(),
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            descriptor.as_mut_ptr().cast(),
+            std::mem::size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32,
+            &mut written,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || (written as usize) < std::mem::size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() {
+        return None;
+    }
+    // SAFETY: the callee reported success and wrote the whole
+    // descriptor.
+    let descriptor = unsafe { descriptor.assume_init() };
+    Some(descriptor.IncursSeekPenalty)
 }
 
 #[cfg(unix)]
@@ -240,6 +416,24 @@ mod imp {
 mod imp {
     pub(super) fn volume_space(_path: &std::path::Path) -> (Option<u64>, Option<u64>) {
         (None, None)
+    }
+}
+
+#[cfg(test)]
+mod rotational_tests {
+    use super::*;
+
+    /// The FFI plumbing, not the hardware: whatever volume the temp dir
+    /// sits on, the query must come back as a clean `Option` rather
+    /// than failing — on Windows this drives the volume-open and IOCTL
+    /// marshalling for real, on Linux the sysfs walk.
+    #[test]
+    fn the_seek_penalty_query_answers_cleanly() {
+        let answer = storage_is_rotational(&std::env::temp_dir());
+        assert!(
+            matches!(answer, None | Some(true) | Some(false)),
+            "any honest answer is fine; a panic or hang is the failure mode"
+        );
     }
 }
 

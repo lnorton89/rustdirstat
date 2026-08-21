@@ -79,6 +79,12 @@ pub struct DupScan {
     pub read_failures: usize,
 }
 
+/// How many workers hash when the volume reports a seek penalty
+/// (spinning media). Two rather than one: it keeps one request queued
+/// while the other streams, without degenerating into the all-cores
+/// seek storm the bound exists to avoid.
+const HDD_HASH_THREADS: usize = 2;
+
 /// Caps how many same-size candidates get hashed — a pathological tree
 /// (e.g. millions of empty-ish config files) could otherwise turn "find
 /// duplicates" into "read the entire drive". Candidates beyond this are
@@ -143,27 +149,51 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
     // Failures are rare (a race with a delete, a permission edge case), so
     // one shared atomic is fine even with hashing parallel across workers.
     let read_failures = AtomicUsize::new(0);
-    let hashed: Vec<(blake3::Hash, Vec<usize>, u64, Option<FileId>)> = candidates
-        .into_par_iter()
-        .filter_map(|(idx, path, size, file_id)| {
-            if let Some(p) = progress {
-                if p.cancelled.load(Ordering::Relaxed) {
-                    return None;
+    let hash_all = || -> Vec<(blake3::Hash, Vec<usize>, u64, Option<FileId>)> {
+        candidates
+            .into_par_iter()
+            .filter_map(|(idx, path, size, file_id)| {
+                if let Some(p) = progress {
+                    if p.cancelled.load(Ordering::Relaxed) {
+                        return None;
+                    }
                 }
-            }
-            let result = match hash_file(&path) {
-                Ok(h) => Some((h, idx, size, file_id)),
-                Err(_) => {
-                    read_failures.fetch_add(1, Ordering::Relaxed);
-                    None
+                let result = match hash_file(&path) {
+                    // Scan-time identity wins where it exists (Unix); the
+                    // hash-time handle identity fills in where it does not
+                    // (Windows).
+                    Ok((h, handle_id)) => Some((h, idx, size, file_id.or(handle_id))),
+                    Err(_) => {
+                        read_failures.fetch_add(1, Ordering::Relaxed);
+                        None
+                    }
+                };
+                if let Some(p) = progress {
+                    p.hashed.fetch_add(1, Ordering::Relaxed);
                 }
-            };
-            if let Some(p) = progress {
-                p.hashed.fetch_add(1, Ordering::Relaxed);
-            }
-            result
-        })
-        .collect();
+                result
+            })
+            .collect()
+    };
+    // Hashing is storage-bound, not CPU-bound, and the access pattern
+    // matters: on spinning media, many workers seeking between many
+    // large files is slower than a couple streaming sequentially, while
+    // solid state wants the parallelism. So the width narrows only when
+    // the volume actually reports a seek penalty — an uncertain answer
+    // keeps the parallel default.
+    let hashed = if crate::platform::storage_is_rotational(&tree.root_path) == Some(true) {
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(HDD_HASH_THREADS)
+            .build()
+        {
+            Ok(pool) => pool.install(hash_all),
+            // A pool that cannot be built is no reason to skip the
+            // scan; wide hashing on an HDD is slow, not wrong.
+            Err(_) => hash_all(),
+        }
+    } else {
+        hash_all()
+    };
 
     // Built through a side struct so the distinct-inode count can be
     // computed while files are still arriving, then folded into the
@@ -306,11 +336,22 @@ fn collect_by_size(
     }
 }
 
-fn hash_file(path: &std::path::Path) -> std::io::Result<blake3::Hash> {
+/// Hashes one candidate, and recovers its filesystem identity where the
+/// scan could not.
+///
+/// On Windows the scanner leaves `file_id` as `None` because identity
+/// there costs a handle per file — but the hasher *already holds* the
+/// file open, so `file_id_from_handle` reads the volume serial + file
+/// index off that same handle for free, and hard-link detection works
+/// on Windows for exactly the files duplicate detection cares about.
+/// On Unix this returns `None` and the scan-time `stat()` identity is
+/// used instead.
+fn hash_file(path: &std::path::Path) -> std::io::Result<(blake3::Hash, Option<FileId>)> {
     let mut hasher = blake3::Hasher::new();
     let mut file = std::fs::File::open(path)?;
+    let handle_id = crate::platform::file_id_from_handle(&file);
     std::io::copy(&mut file, &mut hasher)?;
-    Ok(hasher.finalize())
+    Ok((hasher.finalize(), handle_id))
 }
 
 #[cfg(test)]
@@ -382,7 +423,11 @@ mod tests {
     /// last link goes, so calling the pair "reclaimable copies" would be
     /// a lie. The same-content group must be dropped, while a genuine
     /// duplicate pair beside it still reports its real reclaimable bytes.
-    #[cfg(unix)]
+    ///
+    /// Deliberately not platform-gated: on Unix the identity comes from
+    /// the scan-time `stat()`, on Windows from the handle the hasher
+    /// already holds open — this test proves both paths reach the same
+    /// verdict.
     #[test]
     fn hard_links_are_not_reported_as_reclaimable_duplicates() -> anyhow::Result<()> {
         let root = scratch_dir("hardlink", "two_names");
@@ -415,6 +460,52 @@ mod tests {
             "one spare copy of the duplicated file is reclaimable"
         );
 
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// Safe leaf wrapper over `geteuid(2)`.
+    #[cfg(unix)]
+    fn effective_uid() -> u32 {
+        // SAFETY: `geteuid` takes no arguments and cannot fail.
+        unsafe { libc::geteuid() }
+    }
+
+    /// A candidate that cannot be read is counted, not silently absent:
+    /// "no duplicates found" and "a file could not be checked" are very
+    /// different answers to give someone deciding what to delete.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_candidate_is_counted_as_a_read_failure() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch_dir("dupes", "unreadable");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root)?;
+        // Same length, different content: both survive the size
+        // bucketing, so both are opened for hashing.
+        fs::write(root.join("readable.bin"), b"same size!")?;
+        fs::write(root.join("locked.bin"), b"same size?")?;
+        fs::set_permissions(root.join("locked.bin"), fs::Permissions::from_mode(0o000))?;
+
+        let tree = crate::scanner::scan(&root, None)?;
+        let scan = find_duplicates(&tree, None);
+        // Root reads straight through file permissions, so the failure
+        // this test needs cannot be produced there (some CI containers
+        // run everything as root) — the setup still runs, the
+        // assertions are what need the permission to bite.
+        if effective_uid() != 0 {
+            assert_eq!(
+                scan.read_failures, 1,
+                "the unreadable candidate must be counted"
+            );
+            assert!(
+                scan.groups.is_empty(),
+                "one hashed file cannot form a duplicate group"
+            );
+        }
+
+        fs::set_permissions(root.join("locked.bin"), fs::Permissions::from_mode(0o644))?;
         fs::remove_dir_all(&root)?;
         Ok(())
     }
