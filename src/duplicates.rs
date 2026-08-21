@@ -19,7 +19,7 @@ use crate::platform::FileId;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Default)]
 pub struct DupProgress {
@@ -72,6 +72,11 @@ pub struct DupScan {
     /// and "we stopped looking" are very different answers to give
     /// someone deciding what to delete.
     pub skipped: usize,
+    /// Files that could not be hashed at all — they disappeared, became
+    /// unreadable, or errored mid-read. Like `skipped`, they are counted
+    /// rather than silently absent, so the result is not presented as
+    /// complete when it was not.
+    pub read_failures: usize,
 }
 
 /// Caps how many same-size candidates get hashed — a pathological tree
@@ -135,6 +140,9 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
             .store(candidates.len() as u64, Ordering::Relaxed);
     }
 
+    // Failures are rare (a race with a delete, a permission edge case), so
+    // one shared atomic is fine even with hashing parallel across workers.
+    let read_failures = AtomicUsize::new(0);
     let hashed: Vec<(blake3::Hash, Vec<usize>, u64, Option<FileId>)> = candidates
         .into_par_iter()
         .filter_map(|(idx, path, size, file_id)| {
@@ -143,7 +151,13 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
                     return None;
                 }
             }
-            let result = hash_file(&path).ok().map(|h| (h, idx, size, file_id));
+            let result = match hash_file(&path) {
+                Ok(h) => Some((h, idx, size, file_id)),
+                Err(_) => {
+                    read_failures.fetch_add(1, Ordering::Relaxed);
+                    None
+                }
+            };
             if let Some(p) = progress {
                 p.hashed.fetch_add(1, Ordering::Relaxed);
             }
@@ -222,7 +236,11 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
                     .cmp(&b.files.first().map(|f| &f.index_path))
             })
     });
-    DupScan { groups, skipped }
+    DupScan {
+        groups,
+        skipped,
+        read_failures: read_failures.load(Ordering::Relaxed),
+    }
 }
 
 /// Buckets every file in the tree by size, iteratively.

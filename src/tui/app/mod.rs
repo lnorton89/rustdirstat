@@ -167,6 +167,9 @@ pub(in crate::tui) struct DuplicatesState {
     /// Shown, so "no more duplicates" is not confused with "we stopped
     /// looking".
     pub skipped: usize,
+    /// Files that could not be hashed at all (disappeared, unreadable,
+    /// mid-read error). Shown for the same reason as `skipped`.
+    pub read_failures: usize,
 }
 
 pub(in crate::tui) struct App {

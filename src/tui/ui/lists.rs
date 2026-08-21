@@ -152,6 +152,12 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
             thousands(app.duplicates.skipped as u64)
         ));
     }
+    if app.duplicates.read_failures > 0 {
+        title.push_str(&format!(
+            " ({} files could not be read)",
+            thousands(app.duplicates.read_failures as u64)
+        ));
+    }
     title.push_str(" — u to close ");
     pane_list(f, app, area, items, title, Action::ToggleDuplicates);
 }

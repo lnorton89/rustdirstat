@@ -360,16 +360,23 @@ impl GuiApp {
                 Ok(scan) => {
                     self.duplicate_groups = scan.groups;
                     let groups = self.duplicate_groups.len();
-                    // Says so when the search was cut short. "12
-                    // duplicate group(s)" reads as the whole answer.
-                    self.status = Some(if scan.skipped > 0 {
-                        format!(
-                            "{groups} duplicate group(s) — {} file(s) not checked,                              the candidate limit was reached",
+                    // Says so when the search was cut short or files could
+                    // not be read. "N duplicate group(s)" reads as the
+                    // whole answer when it was not.
+                    let mut message = format!("{groups} duplicate group(s)");
+                    if scan.skipped > 0 {
+                        message.push_str(&format!(
+                            " — {} file(s) not checked, the candidate limit was reached",
                             scan.skipped
-                        )
-                    } else {
-                        format!("{groups} duplicate group(s)")
-                    });
+                        ));
+                    }
+                    if scan.read_failures > 0 {
+                        message.push_str(&format!(
+                            " — {} file(s) could not be read",
+                            scan.read_failures
+                        ));
+                    }
+                    self.status = Some(message);
                 }
                 Err(error) => self.status = Some(error),
             }

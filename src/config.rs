@@ -69,14 +69,30 @@ pub fn save(cfg: &Config) {
     let Some(path) = config_path() else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
+    let Ok(s) = toml::to_string_pretty(cfg) else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
     }
-    if let Ok(s) = toml::to_string_pretty(cfg) {
-        let _ = std::fs::write(path, s);
+    // Written to a temp file and renamed over the real one, so a crash
+    // or a kill mid-write cannot leave the config half-written — the
+    // rename is atomic on the filesystems this targets, and either the
+    // old config or the new one survives, never a torn mixture. (The
+    // old spelling wrote the final file directly, so an interrupted
+    // save could silently produce a config that parses as empty on the
+    // next launch.)
+    // A pid suffix keeps a lingering tmp from a crashed previous run
+    // from being overwritten under a running app — harmless either way,
+    // but uniqueness is one less interleaving to reason about.
+    let tmp = parent.join(format!(".config.toml.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, &s).is_err() {
+        return;
     }
+    let _ = std::fs::rename(&tmp, &path);
 }
 
 #[cfg(test)]

@@ -36,6 +36,7 @@ impl App {
     pub(in crate::tui) fn set_duplicate_results(&mut self, scan: crate::duplicates::DupScan) {
         let groups = scan.groups;
         self.duplicates.skipped = scan.skipped;
+        self.duplicates.read_failures = scan.read_failures;
         self.duplicates.group_count = groups.len();
         self.duplicates.truncated = groups.len() > Self::MAX_DUPLICATE_DISPLAY_GROUPS;
         self.duplicates.total_wasted = groups
