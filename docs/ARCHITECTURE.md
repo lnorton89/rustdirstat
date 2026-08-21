@@ -186,4 +186,44 @@ group it belongs to rather than to the top level.
 | The tiling math itself | `treemap.rs` (shared with the TUI — check both) |
 | Anything scanned or aggregated | `scanner.rs` + `model.rs` |
 | A shared TUI pane, popup frame, or list | `tui/ui/widgets.rs` |
+| A new constant | Beside the code it governs — see *Where constants live* below |
 | A new persisted preference | `config.rs`, then both halves of `ViewOptions::from_config`/`to_config` (or `GuiApp::new`/`save_preferences` for anything outside the view toggles) |
+
+## Where constants live
+
+There is no `constants.rs`, and adding one would be a regression. A
+constant sits at the narrowest scope that can see it:
+
+| Scope | When | Examples |
+| --- | --- | --- |
+| Function-local `const` | One function uses it | `nav_row`'s `ICON` / `GAP` / `HEIGHT` in `gui/ui/modal.rs` |
+| Module-private `const` | Several functions in one module | `MIN_TILE_AREA_PX` (`gui/treemap_layout.rs`), `PAR_THRESHOLD` (`scanner.rs`), `MAX_CANDIDATES` (`duplicates.rs`) |
+| `pub` / `pub(super)` from the owning module | Two modules genuinely need it | `SPACE_*` and `PAD` (`gui/ui/theme.rs`), `Category::ALL` (`color.rs`), `TOOLS` (`wintools.rs`), `DEEP_CHAIN_DEPTH` (`model::fixtures`) |
+
+The reasoning is the same one that keeps the two front ends apart. A
+central bucket is a file every change touches; it groups unrelated values
+by the accident of both being numbers; and it separates a number from the
+paragraph explaining why it is that number, which in this codebase is
+where the real content is. `MIN_TILE_AREA_PX` means nothing without the
+comment above it about what a treemap tile smaller than six pixels looks
+like.
+
+Two consequences worth stating:
+
+- **Cross-front-end constants follow cross-front-end code.** Anything the
+  GUI and the TUI both need lives at the crate root, never in `gui/` or
+  `tui/`. The deliberate near-duplicates — `MAX_DEPTH` and
+  `MAX_CHILDREN_PER_LEVEL`, which exist in both `gui/treemap_layout.rs`
+  and `tui/nested.rs` with different values — are not candidates for
+  merging: a terminal cell and a pixel differ by orders of magnitude in
+  area, so they need different floors.
+- **Duplication across modules is the signal to promote one.**
+  `DEEP_CHAIN_DEPTH` was `const DEEP: usize = 60_000` in both `search.rs`
+  and `top_files.rs`, each under its own copy of the same explanation.
+
+Names taken from `gui/ui/theme.rs` are reserved. Every module in
+`gui::ui` glob-imports it, and a glob import loses silently to a local
+declaration of the same name, so a local `const PAD` would mean 10.0 in
+one function while the identifier meant 12.0 everywhere else.
+`no_local_const_shadows_the_theme_scale` in `gui/ui/tests.rs` derives the
+reserved list from `theme.rs` itself and fails the build on a collision.

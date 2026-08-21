@@ -85,7 +85,19 @@ rather than getting caught in review:
 - **Spacing comes from the shared scale.** Margins and insets are one of
   `SPACE_XS` / `SPACE_SM` / `SPACE_MD` / `SPACE_LG`. All five `ScrollArea`s
   take their look from `scroll_style()`. There is one modal (an
-  `Option<ModalPage>`), not ad-hoc `egui::Window`s.
+  `Option<ModalPage>`), not ad-hoc `egui::Window`s. There is no literal
+  spacing left in `src/gui` — if you want a value between two steps, the
+  answer is one of the two steps.
+- **Constants live with what they govern.** Function-local when one
+  function uses it, module-private when one module does, and `pub` from
+  the module that owns the concept when two modules do. There is
+  deliberately no `constants.rs`: it would be a file every change touches,
+  and it separates each value from the paragraph that justifies it. A
+  constant duplicated across modules is the signal to promote it, not to
+  copy it again. Nothing in `gui::ui` may declare a `const` whose name the
+  theme already exports — every module there glob-imports `theme`, so a
+  local `const PAD` shadows the scale's own silently.
+  `no_local_const_shadows_the_theme_scale` fails the build for it.
 
 ## Platform notes
 
@@ -102,6 +114,91 @@ wsl -e bash -lc "cd /mnt/c/path/to/repo && CARGO_TARGET_DIR=\$HOME/rds-target ca
 
 Use a separate `CARGO_TARGET_DIR` so the two toolchains don't fight over
 `target/`.
+
+## Dependency updates
+
+Dependabot opens version-update PRs weekly for both crates and GitHub
+Actions (`.github/dependabot.yml`). CI and `cargo deny check` run against
+every one of them, so the check marks are the first thing to read.
+
+Two things about that config are deliberate, and worth knowing before you
+move a version by hand:
+
+- **Only patch bumps are grouped.** Dependabot classifies an update by its
+  literal version segments, so egui `0.29 -> 0.30` reaches it as a *minor* —
+  while under cargo that is exactly the breaking one, and most of this
+  tree is still `0.x`. Anything above patch therefore arrives as its own
+  PR by design. If you are batching upgrades by hand, batch them the same
+  way.
+- **The egui stack does not move.** `eframe`, `egui`, and `egui_extras`
+  are ignored above patch, because leaving 0.29 behind is a project with
+  its own branch rather than a dependency bump — CLAUDE.md has the
+  specifics, and `deny.toml` carries the four advisories that stay ignored
+  until it happens. Don't raise those three in a PR that is about
+  something else.
+
+`rust-toolchain.toml`, `flake.lock`, and the `dtolnay/rust-toolchain`
+action pin are all outside what Dependabot can see. Those move by hand, in
+their own commit.
+
+## Changelog
+
+`CHANGELOG.md` is generated, not written. It is rebuilt from the git history
+by an example, the same way `assets/brand/` is:
+
+```bash
+cargo run --example changelog
+```
+
+Every entry is a conventional-commit subject, grouped under the release tag
+that shipped it. That is the other reason the `fix:` / `feat:` / `refactor:`
+prefixes below matter — a subject that does not parse still appears, but in
+a catch-all `Other` section rather than the right one.
+
+CI runs the check form on Linux:
+
+```bash
+cargo run --example changelog -- --check
+```
+
+It compares the **released** sections only. `Unreleased` is exempt on
+purpose: it moves with every merge, and a squash or rebase rewrites the very
+hashes it pins, so gating pull requests on it would fail all of them for no
+signal.
+
+Don't hand-edit a released section — the next run overwrites it. A release
+that wants a human summary gets one in the GitHub release body, which
+`.github/workflows/release.yml` owns.
+
+Cutting a release, in this order:
+
+1. Bump `version` in `Cargo.toml` and commit.
+2. Tag it locally, annotated to match the existing tags:
+   `git tag -a v0.3.0 -m "rustdirstat v0.3.0"`.
+3. Regenerate the changelog and commit the result.
+4. Push the branch and the tag together.
+
+Step 3 follows the tag because the generator reads tags — the section for a
+release cannot exist before the release does. Pushing both at once in step 4
+means CI never sees the in-between state, where the tag exists but the
+changelog has not caught up yet. The changelog commit itself lands in the
+*next* release's `Internal` section, which is correct: it is not part of
+what was released.
+
+**Never amend or rebase a commit after tagging it.** The tag keeps pointing
+at the copy you discarded, which then sits on no branch at all — and since
+each release is computed as `<previous>..<tag>`, every range from that point
+on is wrong. `v0.2.0` spent a while in exactly that state; the symptom was
+its own release commit showing up under `Unreleased`. The changelog check
+now fails on any version tag no branch can reach, so it cannot go unnoticed
+again.
+
+Repairing one means re-pointing the tag and force-pushing it. Be aware that
+pushing a `v*` tag re-triggers `.github/workflows/release.yml`, which ends in
+`gh release upload --clobber` — so a *published* release will have its assets
+rebuilt and its checksums changed. If that is not what you want, cancel the
+run (`gh run cancel <id>`); the existing assets stay valid, since re-pointing
+a tag does not change the tree it describes.
 
 ## Commit hygiene
 
