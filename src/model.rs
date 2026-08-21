@@ -102,6 +102,14 @@ pub struct Node {
     /// tell "this subtree is 40 KB" from "this subtree is 40 KB *and we
     /// couldn't read some of it*" — the two look identical otherwise.
     pub unreadable_count: u64,
+    /// True for an entry that sits on a different filesystem than the
+    /// scan root — a mount point, mostly. The scanner keeps it as a
+    /// childless, zero-byte marker rather than descending: its bytes
+    /// belong to another volume, and this scan's totals are compared
+    /// against the *root* volume's free space. The marker exists so the
+    /// place stays visible — the alternative, dropping the entry, made a
+    /// mount point silently vanish from the tree.
+    pub other_filesystem: bool,
     /// The file's filesystem identity — (device, inode) on Unix, where it
     /// comes free out of the scan's `stat()`. Every hard link to the
     /// same file shares one, which is what lets duplicate detection
@@ -316,10 +324,13 @@ impl Tree {
     /// the first scan is still running, and what a scanned tree is swapped
     /// out for when it is being retired.
     pub fn placeholder(root_path: PathBuf) -> Self {
+        // The fallback (a path with no final component, like `/` or
+        // `C:\`) keeps the raw `OsString` rather than going through
+        // `display()`, which is lossy.
         let name = root_path
             .file_name()
             .map(OsString::from)
-            .unwrap_or_else(|| OsString::from(root_path.display().to_string()));
+            .unwrap_or_else(|| root_path.as_os_str().to_os_string());
         let is_dir = root_path.is_dir();
         Self {
             root: Node {
@@ -341,6 +352,7 @@ impl Tree {
                 },
                 unreadable_count: 0,
                 file_id: None,
+                other_filesystem: false,
             },
             root_path,
             volume_free: None,
@@ -485,6 +497,7 @@ pub mod fixtures {
             ext_totals: Vec::new(),
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         }
     }
 
@@ -508,6 +521,7 @@ pub mod fixtures {
             ext_totals: vec![(0, 0, 0); Category::COUNT],
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         }
     }
 

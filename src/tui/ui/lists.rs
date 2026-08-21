@@ -205,6 +205,14 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ""
             };
             let err = if node.error { " <access denied>" } else { "" };
+            // A mount point kept as a zero-byte marker: without the
+            // label a scan boundary reads as an inexplicably empty
+            // directory.
+            let boundary = if node.other_filesystem {
+                " <other filesystem>"
+            } else {
+                ""
+            };
             // Only shown when the directory itself was readable but
             // something inside it wasn't — `error` above already covers
             // "couldn't read this one at all".
@@ -228,6 +236,7 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     name_style,
                 ),
                 Span::styled(err, Style::default().fg(theme::DANGER)),
+                Span::styled(boundary, Style::default().fg(theme::MUTED)),
                 Span::styled(warn, Style::default().fg(theme::WARNING)),
             ]);
             if show_details {

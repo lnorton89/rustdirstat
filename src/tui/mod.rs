@@ -125,7 +125,12 @@ pub fn run(root: PathBuf, options: crate::scanner::ScanOptions) -> Result<()> {
 
     restore_terminal();
 
-    result
+    // Printed only now: the terminal is back to normal, so the message
+    // is not garbled by raw mode or wiped with the alternate screen.
+    if let Ok(Some(save_error)) = &result {
+        eprintln!("rustdirstat: preferences were not saved: {save_error}");
+    }
+    result.map(|_| ())
 }
 
 enum BrowseOutcome {
@@ -133,18 +138,22 @@ enum BrowseOutcome {
     Refresh,
 }
 
+/// Runs the scan/browse loop. `Ok(Some(_))` is a normal quit whose
+/// preference save failed — reported by [`run`] once the terminal is
+/// restored, since nothing printed from in here would survive the
+/// alternate screen.
 fn run_app<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
     root: PathBuf,
     options: crate::scanner::ScanOptions,
-) -> Result<()> {
+) -> Result<Option<std::io::Error>> {
     let mut restore_to: Option<PathBuf> = None;
     let config = crate::config::load();
 
     loop {
         let tree = match scan_with_progress(terminal, &root, options)? {
             Some(t) => t,
-            None => return Ok(()), // cancelled during scan
+            None => return Ok(None), // cancelled during scan
         };
 
         let mut app = App::new(tree);
@@ -155,8 +164,7 @@ fn run_app<B: TerminalBackend>(
 
         match browse(terminal, &mut app)? {
             BrowseOutcome::Quit => {
-                crate::config::save(&app.to_config());
-                return Ok(());
+                return Ok(crate::config::save(&app.to_config()).err());
             }
             BrowseOutcome::Refresh => {
                 restore_to = Some(app.current_path());

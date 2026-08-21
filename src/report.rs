@@ -151,6 +151,7 @@ mod tests {
             ext_totals: Vec::new(),
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         }
     }
 
@@ -177,6 +178,7 @@ mod tests {
             ext_totals: totals,
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         }
     }
 

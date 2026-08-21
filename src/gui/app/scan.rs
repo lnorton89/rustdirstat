@@ -285,8 +285,9 @@ impl GuiApp {
         self.search.results = Vec::new();
         self.search_rx = None;
         // A zoom-time extension worker would answer about the tree just
-        // retired; the scan recomputes rows for the new one.
-        self.extensions_rx = None;
+        // retired; the scan recomputes rows for the new one, and the
+        // worker is told to stop walking rather than left to finish.
+        self.cancel_extension_worker();
         let root_path = self.tree.root_path.clone();
         drop_in_background(std::mem::replace(
             &mut self.tree,
@@ -335,6 +336,22 @@ impl GuiApp {
                                 .map(|identity| resolve_identity(&self.tree, identity))
                                 .collect();
                             self.expanded.insert(Vec::new());
+                        } else {
+                            // Capture can only fail when the view was
+                            // already stale against the old tree — but
+                            // stale index paths still must not be carried
+                            // onto a brand-new tree unvalidated, which is
+                            // the very bug restore-by-name replaced. Same
+                            // semantics as the restore above: placement
+                            // truncates, selection is exact or dropped.
+                            self.zoom_path = self.tree.valid_prefix(&self.zoom_path);
+                            self.selected_path = self
+                                .selected_path
+                                .take()
+                                .filter(|path| self.tree.node_for(path).is_some());
+                            self.expanded
+                                .retain(|path| self.tree.node_for(path).is_some());
+                            self.expanded.insert(Vec::new());
                         }
                     }
                     // Already computed on the scan thread; see
@@ -351,8 +368,9 @@ impl GuiApp {
                     self.search.results.clear();
                     // Same for a zoom-time extension worker: the rows
                     // below are the new tree's, and a late delivery must
-                    // not clobber them.
-                    self.extensions_rx = None;
+                    // not clobber them — and the worker itself is walking
+                    // a retired tree, so it is stopped, not just ignored.
+                    self.cancel_extension_worker();
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
                 }
@@ -393,6 +411,9 @@ impl GuiApp {
             });
         if let Some(result) = extension_result {
             self.extensions_rx = None;
+            // The worker is done, one way or the other; its stop flag
+            // has nothing left to stop.
+            self.extensions_cancel = None;
             // A disconnected worker sent nothing; keep the rows already
             // showing rather than blanking the pane.
             if let Ok(rows) = result {

@@ -3,21 +3,22 @@
 // Description:  The few operations that genuinely need a platform syscall: on-
 //               disk (physical) file size, and volume free/total space.
 //
-// Dependencies: windows-sys (GetDiskFreeSpaceExW) on Windows; std::os::unix
-//               (st_blocks, statvfs) elsewhere
+// Dependencies: windows-sys (GetDiskFreeSpaceExW, GetCompressedFileSizeW)
+//               on Windows; std::os::unix (st_blocks, statvfs) elsewhere
 // ============================================================================
 
 //! The handful of things that genuinely need a platform-specific syscall:
-//! on-disk (physical) file size, and volume free/total space.
+//! on-disk (physical) file size, file identity, and volume free/total
+//! space.
 //!
-//! Physical size is only computed for real on Unix, where it comes for
-//! free out of the `stat()` call the scanner already makes (`st_blocks`).
-//! On Windows, the true on-disk size (accounting for NTFS compression or
-//! sparse files) requires a *separate* per-file syscall
-//! (`GetCompressedFileSizeW`) — paying that for every file would meaningfully
-//! slow down scanning on exactly the large trees this tool is tuned for, so
-//! it deliberately isn't paid by default. Windows physical size falls back
-//! to the logical size instead of guessing.
+//! Physical size comes for free on Unix out of the `stat()` the scanner
+//! already makes (`st_blocks`). On Windows it needs a *separate* per-file
+//! syscall (`GetCompressedFileSizeW`), so that call is paid only for the
+//! files whose attributes say the answer can differ from the logical
+//! size — NTFS-compressed and sparse files — and everything else reports
+//! its logical size, which is what the syscall would have said anyway.
+//! Note what "physical" means here: compression- and sparse-aware, not
+//! rounded up to the allocation cluster.
 
 /// The filesystem identity of a file — every hard link to the same
 /// object shares one.
@@ -64,24 +65,49 @@ pub fn physical_size(meta: &std::fs::Metadata, _path: &std::path::Path) -> u64 {
 
 #[cfg(windows)]
 pub fn physical_size(meta: &std::fs::Metadata, path: &std::path::Path) -> u64 {
-    // True on-disk size: for an NTFS compressed or sparse file this is
-    // less than the logical size, which is the whole point of the
-    // toggle. The scanner already has `path`, so the extra syscall is
-    // the only cost. Falls back to the logical size when the call
-    // fails (a file that cannot be opened, a directory) — the failure
-    // path may not be exact, but the normal path no longer lies about
-    // being physical.
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_COMPRESSED, FILE_ATTRIBUTE_SPARSE_FILE,
+    };
+    // The directory listing already delivered the attributes for free,
+    // and only a compressed or sparse file can occupy less than its
+    // logical size — so the extra syscall is paid exactly for the files
+    // where the answer can differ, not once per file on the whole scan.
+    // For everything else `GetCompressedFileSizeW` would return the
+    // logical size anyway. (Which is also this platform's definition of
+    // "physical": sparse- and compression-aware, not rounded up to the
+    // cluster — a 1-byte plain file reports 1 byte, not one 4 KB
+    // cluster. True allocation size would need
+    // `GetFileInformationByHandleEx(FileStandardInfo)` and a handle per
+    // file.)
+    if meta.file_attributes() & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE) == 0 {
+        return meta.len();
+    }
+    // Falls back to the logical size when the call fails (a file that
+    // cannot be opened, a path past the legacy length limit) — the
+    // failure path may not be exact, but the normal path no longer lies
+    // about being physical.
     win_compressed_size(path).unwrap_or(meta.len())
 }
 
-/// Safe leaf wrapper over `GetCompressedFileSizeW`, and the only
-/// `unsafe` this physical-size path carries.
+/// Safe leaf wrapper over `SetLastError(NO_ERROR)`, so the check after
+/// `GetCompressedFileSizeW` reads a value that call actually produced
+/// rather than a stale error from something earlier on the thread.
+#[cfg(windows)]
+fn clear_last_error() {
+    use windows_sys::Win32::Foundation::{SetLastError, NO_ERROR};
+    // SAFETY: `SetLastError` writes the calling thread's own last-error
+    // slot and reads nothing; there are no argument-validity conditions.
+    unsafe { SetLastError(NO_ERROR) };
+}
+
+/// Safe leaf wrapper over `GetCompressedFileSizeW`.
 ///
 /// Returns the actual on-disk byte count for `path` — the compressed
 /// size of an NTFS compressed file, the allocated size of a sparse one,
 /// the logical size otherwise — or `None` when the call fails (a file
 /// that cannot be opened, a directory). Marshalling is entirely outside
-/// the `unsafe` block, which holds the call and nothing else.
+/// the `unsafe` blocks, which hold one call each and nothing else.
 #[cfg(windows)]
 fn win_compressed_size(path: &std::path::Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
@@ -90,13 +116,18 @@ fn win_compressed_size(path: &std::path::Path) -> Option<u64> {
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     wide.push(0);
     let mut high: u32 = 0;
+    clear_last_error();
     // SAFETY: `wide` is a NUL-terminated wide string valid for the
     // duration of the call, and `high` is a live `u32` the callee writes
     // only when the call succeeds.
     let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
-    // `INVALID_FILE_SIZE` marks failure; the high part is undefined
-    // then, so the combined value is only meaningful on success.
-    if low == u32::MAX {
+    // `INVALID_FILE_SIZE` (0xFFFFFFFF) is ambiguous: it marks failure,
+    // but it is also a legitimate low doubleword for a file whose size
+    // happens to end in those 32 bits. The documented disambiguation is
+    // the thread's last error — still `NO_ERROR` means the value is
+    // real. The read must happen before any other syscall can overwrite
+    // it, which is why nothing sits between the call and this check.
+    if low == u32::MAX && std::io::Error::last_os_error().raw_os_error() != Some(0) {
         return None;
     }
     Some(((high as u64) << 32) | low as u64)

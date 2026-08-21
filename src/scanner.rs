@@ -85,10 +85,13 @@ pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
 }
 
 fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) -> Result<Tree> {
+    // The fallback (a path with no final component, like `/` or `C:\`)
+    // keeps the raw `OsString` rather than going through `display()`,
+    // which is lossy.
     let name = root
         .file_name()
         .map(OsString::from)
-        .unwrap_or_else(|| OsString::from(root.display().to_string()));
+        .unwrap_or_else(|| root.as_os_str().to_os_string());
 
     let meta = std::fs::symlink_metadata(root)?;
     // The device the root lives on. A scan is one filesystem's worth of
@@ -131,6 +134,7 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
             ext_totals: vec![],
             unreadable_count: 0,
             file_id: crate::platform::file_id(&meta),
+            other_filesystem: false,
         }
     };
 
@@ -207,23 +211,24 @@ fn scan_dir(
     }
 
     let dir_meta = std::fs::symlink_metadata(path).ok();
-    let Some((mut entries, own_unreadable)) = read_entries(path) else {
+    let Some((raw, listing_unreadable)) = read_entries(path) else {
         return unreadable_dir(name, dir_meta, progress);
     };
-    if let Some(dev) = root_dev {
-        entries.retain(|entry| same_filesystem(dev, &entry.metadata));
-    }
+    let wide = raw.len() >= PAR_THRESHOLD;
+    let (entries, meta_unreadable) = materialize(raw, wide);
+    let own_unreadable = listing_unreadable + meta_unreadable;
+    let (entries, stubs) = split_other_filesystem(entries, root_dev);
 
     let mut local_files = 0u64;
     let mut local_bytes = 0u64;
 
-    // [`read_entries`] has already materialized each entry's name, path,
-    // and metadata, so a `DirEntry` never survives into a child scan —
-    // holding one keeps the directory's file descriptor open on Unix,
-    // and a deep or wide tree of open descriptors can exhaust
+    // [`materialize`] has already turned each entry into an owned name,
+    // path, and metadata, so a `DirEntry` never survives into a child
+    // scan — holding one keeps the directory's file descriptor open on
+    // Unix, and a deep or wide tree of open descriptors can exhaust
     // `RLIMIT_NOFILE`. The only failures left to count here are a
-    // directory that cannot be opened at all (handled above) and a
-    // per-entry metadata lookup, which `read_entries` counts.
+    // directory that cannot be opened at all (handled above) and the
+    // per-entry lookups `read_entries`/`materialize` already counted.
     let scan_one = |entry: EntryInfo, local_files: &mut u64, local_bytes: &mut u64| -> Node {
         let ename = entry.name;
         if entry.metadata.file_type().is_dir() {
@@ -284,7 +289,13 @@ fn scan_dir(
         nodes
     };
 
-    finish_dir(name, dir_meta, children, own_unreadable, progress)
+    // Other-filesystem markers lead, then the scanned children — the
+    // same order the deep walk produces, so the two walks stay
+    // interchangeable. Every view sorts before showing, so the order is
+    // an invariant for the walks, not for the user.
+    let mut all_children = stubs;
+    all_children.extend(children);
+    finish_dir(name, dir_meta, all_children, own_unreadable, progress)
 }
 
 /// The same walk as [`scan_dir`], iteratively and on one thread.
@@ -321,16 +332,20 @@ fn scan_dir_deep(
     ) -> Result2 {
         let dir_meta = std::fs::symlink_metadata(&path).ok();
         match read_entries(&path) {
-            Some((mut entries, own_unreadable)) => {
-                if let Some(dev) = root_dev {
-                    entries.retain(|entry| same_filesystem(dev, &entry.metadata));
-                }
+            Some((raw, listing_unreadable)) => {
+                // Sequential materialization: this walk only runs past
+                // `MAX_PARALLEL_DEPTH`, on the narrow tail of a deep
+                // chain, where there is no breadth to parallelise.
+                let (entries, meta_unreadable) = materialize(raw, false);
+                let (entries, stubs) = split_other_filesystem(entries, root_dev);
                 Result2::Frame(Box::new(Frame {
                     name,
                     dir_meta,
                     entries: entries.into_iter(),
-                    children: Vec::new(),
-                    own_unreadable,
+                    // Markers first, scanned children appended after —
+                    // the same order `scan_dir` produces.
+                    children: stubs,
+                    own_unreadable: listing_unreadable + meta_unreadable,
                     local_files: 0,
                     local_bytes: 0,
                 }))
@@ -419,7 +434,8 @@ fn same_filesystem(_root_dev: u64, _meta: &std::fs::Metadata) -> bool {
 /// so retaining entries while recursively scanning their siblings keeps
 /// one directory file descriptor open per entry — a deep or wide tree can
 /// exhaust `RLIMIT_NOFILE`. The name, path, and metadata are materialized
-/// here and the `DirEntry` is dropped before any child scan begins.
+/// by [`materialize`] and the `DirEntry` is dropped before any child scan
+/// begins.
 struct EntryInfo {
     name: OsString,
     path: PathBuf,
@@ -435,30 +451,115 @@ struct EntryInfo {
 /// flaky mount) without the whole listing failing. Silently dropping
 /// those via `.filter_map(|e| e.ok())` would make a partial listing look
 /// identical to a complete one, so they're counted instead of discarded.
-/// The same applies to an entry whose metadata cannot be fetched — it too
-/// is counted rather than dropped.
-fn read_entries(path: &Path) -> Option<(Vec<EntryInfo>, u64)> {
+/// Metadata failures are counted the same way, by [`materialize`].
+fn read_entries(path: &Path) -> Option<(Vec<std::fs::DirEntry>, u64)> {
     let read_dir = std::fs::read_dir(path).ok()?;
     let mut entries = Vec::new();
     let mut unreadable = 0u64;
     for entry in read_dir {
-        let Ok(e) = entry else {
-            unreadable += 1;
-            continue;
-        };
-        // `DirEntry::metadata` does not follow symlinks, matching what
-        // the scan has always assumed of a directory entry.
-        let Ok(metadata) = e.metadata() else {
-            unreadable += 1;
-            continue;
-        };
-        entries.push(EntryInfo {
-            name: e.file_name(),
-            path: e.path(),
-            metadata,
-        });
+        match entry {
+            Ok(e) => entries.push(e),
+            Err(_) => unreadable += 1,
+        }
     }
     Some((entries, unreadable))
+}
+
+/// Turns raw `DirEntry`s into owned [`EntryInfo`] records, plus a count
+/// of the ones whose metadata could not be fetched.
+///
+/// Every `DirEntry` is consumed here, before any child scan begins —
+/// see [`EntryInfo`] for why holding one across recursion matters. The
+/// lookup is a real `stat` per entry on Unix, so a directory wide
+/// enough for the parallel walk fetches in parallel; an earlier version
+/// fetched sequentially inside `read_entries`, which serialized the
+/// syscalls the walk used to overlap and slowed exactly the huge flat
+/// directories a scan spends most of its time in.
+fn materialize(raw: Vec<std::fs::DirEntry>, parallel: bool) -> (Vec<EntryInfo>, u64) {
+    // `DirEntry::metadata` does not follow symlinks, matching what the
+    // scan has always assumed of a directory entry.
+    fn one(entry: std::fs::DirEntry) -> Option<EntryInfo> {
+        let metadata = entry.metadata().ok()?;
+        Some(EntryInfo {
+            name: entry.file_name(),
+            path: entry.path(),
+            metadata,
+        })
+    }
+
+    let materialized: Vec<Option<EntryInfo>> = if parallel {
+        raw.into_par_iter().map(one).collect()
+    } else {
+        raw.into_iter().map(one).collect()
+    };
+    let mut entries = Vec::with_capacity(materialized.len());
+    let mut unreadable = 0u64;
+    for entry in materialized {
+        match entry {
+            Some(e) => entries.push(e),
+            None => unreadable += 1,
+        }
+    }
+    (entries, unreadable)
+}
+
+/// Splits a directory's entries into the ones on the scan's own
+/// filesystem and childless marker nodes for the ones that are not.
+///
+/// With no `root_dev` — cross-filesystem scans, platforms without
+/// device identity — everything is kept and no markers are made. The
+/// markers replace what used to be a silent `retain`: dropping a mount
+/// point entirely made it vanish from the tree, which read as the
+/// scanner having lost it rather than as a deliberate boundary.
+fn split_other_filesystem(
+    entries: Vec<EntryInfo>,
+    root_dev: Option<u64>,
+) -> (Vec<EntryInfo>, Vec<Node>) {
+    let Some(dev) = root_dev else {
+        return (entries, Vec::new());
+    };
+    let mut kept = Vec::with_capacity(entries.len());
+    let mut stubs = Vec::new();
+    for entry in entries {
+        if same_filesystem(dev, &entry.metadata) {
+            kept.push(entry);
+        } else {
+            stubs.push(other_filesystem_stub(entry));
+        }
+    }
+    (kept, stubs)
+}
+
+/// The childless marker standing in for an entry on another filesystem.
+///
+/// Zero bytes on purpose: the entry's contents live on a different
+/// volume, and this scan's totals answer "what is filling *this*
+/// volume" against its free space. The marker keeps the place visible
+/// while keeping the accounting honest.
+fn other_filesystem_stub(entry: EntryInfo) -> Node {
+    let meta = &entry.metadata;
+    let is_dir = meta.file_type().is_dir();
+    Node {
+        name: entry.name,
+        is_dir,
+        is_symlink: meta.file_type().is_symlink(),
+        size: 0,
+        physical_size: 0,
+        file_count: 0,
+        dir_count: 0,
+        modified: meta.modified().ok(),
+        children: vec![],
+        error: false,
+        category: None,
+        ext_totals: if is_dir {
+            vec![(0u64, 0u64, 0u64); Category::COUNT]
+        } else {
+            vec![]
+        },
+        unreadable_count: 0,
+        file_id: crate::platform::file_id(meta),
+        other_filesystem: true,
+    }
 }
 
 /// The node standing in for a directory that could not be opened at all.
@@ -485,6 +586,7 @@ fn unreadable_dir(
         ext_totals: vec![(0u64, 0u64, 0u64); Category::COUNT],
         unreadable_count: 1,
         file_id: None,
+        other_filesystem: false,
     }
 }
 
@@ -510,6 +612,7 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
                 ext_totals: vec![],
                 unreadable_count: 0,
                 file_id: crate::platform::file_id(meta),
+                other_filesystem: false,
             },
             1,
             0,
@@ -531,6 +634,7 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
             ext_totals: vec![],
             unreadable_count: 0,
             file_id: crate::platform::file_id(meta),
+            other_filesystem: false,
         },
         1,
         meta.len(),
@@ -594,6 +698,7 @@ fn finish_dir(
         ext_totals,
         unreadable_count,
         file_id: None,
+        other_filesystem: false,
     }
 }
 
@@ -817,6 +922,55 @@ mod tests {
         assert_ne!(first, second, "each path must reach its own file");
         assert!(first.exists(), "the first path must be real");
         assert!(second.exists(), "the second path must be real");
+
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// An entry on a different device than the scan root stays visible
+    /// as a childless zero-byte marker rather than vanishing from the
+    /// tree — and contributes nothing to any total.
+    ///
+    /// A real mount boundary cannot be conjured inside a test
+    /// environment, so this drives the boundary with a fabricated root
+    /// device that matches nothing: relative to it, everything in the
+    /// fixture is "another filesystem".
+    #[cfg(unix)]
+    #[test]
+    fn entries_on_another_filesystem_become_markers_not_omissions() -> std::io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = scratch_dir("scan", "otherfs");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("mounted"))?;
+        fs::write(root.join("mounted").join("inside.bin"), vec![b'x'; 128])?;
+        fs::write(root.join("local.txt"), b"stay")?;
+
+        let real_dev = std::fs::symlink_metadata(&root)?.dev();
+        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev + 1));
+        assert_eq!(
+            node.children.len(),
+            2,
+            "both entries must stay visible as markers"
+        );
+        for child in &node.children {
+            assert!(child.other_filesystem, "each entry is marked");
+            assert!(
+                child.children.is_empty(),
+                "a marker is never descended into"
+            );
+            assert_eq!(child.size, 0, "another volume's bytes are not counted");
+        }
+        assert_eq!(node.size, 0, "the parent totals exclude the markers");
+        assert_eq!(node.file_count, 0);
+
+        // With the true device the same scan keeps everything.
+        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev));
+        assert!(
+            node.children.iter().all(|c| !c.other_filesystem),
+            "nothing on the root's own device is marked"
+        );
+        assert_eq!(node.file_count, 2, "both files are scanned for real");
 
         fs::remove_dir_all(&root)?;
         Ok(())

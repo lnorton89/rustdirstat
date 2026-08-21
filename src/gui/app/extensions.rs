@@ -116,30 +116,60 @@ pub(in crate::gui) fn extension_label(name: &str) -> String {
 /// Free of `GuiApp` so the scan thread can call it before the tree is
 /// ever handed over — see [`ScanOutcome`].
 pub(in crate::gui) fn collect_extension_rows(node: &Node, physical: bool) -> Vec<ExtensionRow> {
+    // Never cancelled, so the walk always completes and this is `Some`;
+    // the fallback keeps the function total rather than being reachable.
+    collect_extension_rows_unless(node, physical, None).unwrap_or_default()
+}
+
+/// [`collect_extension_rows`] for the zoom worker: `None` — no partial
+/// answer — if `cancel` was raised mid-walk.
+pub(in crate::gui) fn collect_extension_rows_unless(
+    node: &Node,
+    physical: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<Vec<ExtensionRow>> {
     let mut by_ext: HashMap<String, (Category, u64, u64)> = HashMap::new();
-    collect_extensions(node, physical, &mut by_ext);
-    by_ext
-        .into_iter()
-        .map(|(extension, (category, size, count))| ExtensionRow {
-            extension,
-            category,
-            size,
-            count,
-        })
-        .collect()
+    if !collect_extensions(node, physical, cancel, &mut by_ext) {
+        return None;
+    }
+    Some(
+        by_ext
+            .into_iter()
+            .map(|(extension, (category, size, count))| ExtensionRow {
+                extension,
+                category,
+                size,
+                count,
+            })
+            .collect(),
+    )
 }
 /// Aggregates every file in `node`'s subtree into the extension table.
 ///
 /// Iterative for the reason every walk here is: this runs when the zoom
 /// changes, and a zoomed subtree is as deep as the user's filesystem, so
 /// a recursion would put a user-chosen depth on the call stack.
+///
+/// Returns `false` if `cancel` was raised mid-walk — the walk quits on
+/// the spot and `out` is partial, so a cancelled aggregation must be
+/// discarded, not displayed. Cancellation exists because each zoom
+/// spawns a worker walking the whole zoomed subtree; without it, zooming
+/// rapidly through a drive-sized tree stacks a full multi-million-node
+/// walk per superseded zoom, all running to completion for answers
+/// nobody will see.
 pub(in crate::gui) fn collect_extensions(
     node: &Node,
     physical: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
     out: &mut HashMap<String, (Category, u64, u64)>,
-) {
+) -> bool {
     let mut pending = vec![node];
     while let Some(current) = pending.pop() {
+        if let Some(flag) = cancel {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                return false;
+            }
+        }
         for child in &current.children {
             if child.is_dir {
                 pending.push(child);
@@ -157,6 +187,7 @@ pub(in crate::gui) fn collect_extensions(
             }
         }
     }
+    true
 }
 
 pub(in crate::gui) fn size_label(bytes: u64, physical: bool) -> String {
@@ -178,6 +209,14 @@ impl GuiApp {
         // safe alongside a rescan; `poll_background` drops the receiver
         // when the tree is replaced, so a stale result cannot clobber
         // the fresh scan-time rows.
+        //
+        // A superseded worker is told to stop, not just ignored: its
+        // receiver is replaced below, so its answer could never land,
+        // and letting it walk millions of nodes to completion anyway is
+        // a full scan's worth of CPU per rapid zoom click.
+        self.cancel_extension_worker();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.extensions_cancel = Some(Arc::clone(&cancel));
         let tree = Arc::clone(&self.tree);
         let zoom_path = self.zoom_path.clone();
         let physical = self.use_physical;
@@ -186,9 +225,21 @@ impl GuiApp {
             // Forgiving: a slightly stale zoom path (the tree changed
             // under us) still has a nearest node to describe.
             let node = tree.deepest_valid_node(&zoom_path);
-            let _ = tx.send(collect_extension_rows(node, physical));
+            if let Some(rows) = collect_extension_rows_unless(node, physical, Some(&cancel)) {
+                let _ = tx.send(rows);
+            }
         });
         self.extensions_rx = Some(rx);
+    }
+
+    /// Stops any zoom-time extension worker still walking and forgets
+    /// its receiver, so a superseded or obsolete answer neither arrives
+    /// nor keeps burning a core.
+    pub(in crate::gui) fn cancel_extension_worker(&mut self) {
+        if let Some(flag) = self.extensions_cancel.take() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.extensions_rx = None;
     }
 
     /// Whether a zoom-time extension recomputation is still running —
@@ -282,6 +333,10 @@ impl GuiApp {
             self.search.error = None;
             self.search_rx = None;
             self.file_view = FileView::SearchResults;
+            // Not left at whatever it was: an in-flight search set
+            // "Searching…", and with its receiver dropped nothing else
+            // would ever overwrite that.
+            self.status = None;
             return;
         }
         // Off the frame thread, like the scan and duplicate workers: a

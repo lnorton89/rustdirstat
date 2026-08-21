@@ -65,19 +65,26 @@ pub fn load() -> Config {
         .unwrap_or_default()
 }
 
-pub fn save(cfg: &Config) {
+/// Writes `cfg` to the platform config location, atomically.
+///
+/// Failures are returned rather than swallowed: both front ends save on
+/// exit, and "your preferences were not saved" is the caller's to
+/// surface — the old `()` return made saying so impossible, so every
+/// failed save looked identical to a successful one.
+pub fn save(cfg: &Config) -> std::io::Result<()> {
     let Some(path) = config_path() else {
-        return;
+        return Err(std::io::Error::other(
+            "no configuration directory could be determined",
+        ));
     };
-    let Ok(s) = toml::to_string_pretty(cfg) else {
-        return;
-    };
+    let s = toml::to_string_pretty(cfg).map_err(std::io::Error::other)?;
     let Some(parent) = path.parent() else {
-        return;
+        return Err(std::io::Error::other(format!(
+            "{} has no parent directory",
+            path.display()
+        )));
     };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
+    std::fs::create_dir_all(parent)?;
     // Written to a temp file and renamed over the real one, so a crash
     // or a kill mid-write cannot leave the config half-written — the
     // rename is atomic on the filesystems this targets, and either the
@@ -89,10 +96,14 @@ pub fn save(cfg: &Config) {
     // from being overwritten under a running app — harmless either way,
     // but uniqueness is one less interleaving to reason about.
     let tmp = parent.join(format!(".config.toml.{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, &s).is_err() {
-        return;
+    std::fs::write(&tmp, &s)?;
+    if let Err(error) = std::fs::rename(&tmp, &path) {
+        // The temp file is orphaned at this point — best effort not to
+        // litter the config directory with one per failed save.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
     }
-    let _ = std::fs::rename(&tmp, &path);
+    Ok(())
 }
 
 #[cfg(test)]

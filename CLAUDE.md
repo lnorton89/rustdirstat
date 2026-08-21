@@ -346,9 +346,13 @@ captured at scan time. Duplicates use it to tell two hard links to one
 file from two real copies: a same-content group whose names all share
 one inode is not reclaimable space, and `DupGroup::reclaimable` counts
 `distinct_inodes - 1`, not `files.len() - 1`. The scanner stays on the
-root's filesystem by default (`--cross-filesystems` opts out); bytes on
-other devices compared against the root volume's free space would be a
-category error. And scan-time identity is why a rescan restores the
+root's filesystem by default (`--cross-filesystems` opts out; Unix only —
+Windows reports no device identity to the scanner); bytes on other
+devices compared against the root volume's free space would be a
+category error, so a mount point is kept as a childless zero-byte marker
+(`Node.other_filesystem`) rather than descended into — and rather than
+dropped, which made it look like the scanner had lost it. And scan-time
+identity is why a rescan restores the
 GUI's zoom/selection/expansion by *name* components rather than by the
 `Vec<usize>` indices, which only mean anything against the tree they
 were taken from. Tree lookups are exact by default — `node_for` /

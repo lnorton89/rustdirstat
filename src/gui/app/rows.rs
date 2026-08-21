@@ -112,6 +112,18 @@ pub(in crate::gui) fn expanded_fingerprint(expanded: &HashSet<Vec<usize>>) -> u6
     xor ^ sum.rotate_left(17) ^ (expanded.len() as u64)
 }
 
+/// A child row's label: the lossy display of the node's name, annotated
+/// when the entry is a scan-boundary marker — a mount point kept as a
+/// zero-byte stub reads as an inexplicably empty directory without it.
+fn child_label(node: &Node) -> String {
+    let name = node.name.to_string_lossy();
+    if node.other_filesystem {
+        format!("{name}  (other filesystem — not scanned)")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Flattens the expanded subtree rooted at `node` into `out`, in the
 /// same pre-order the recursive form produced.
 ///
@@ -174,7 +186,7 @@ pub(in crate::gui) fn push_tree_rows(
                 path: child_path,
                 depth: frame.depth + 1,
                 parent_size: node_size,
-                display_name: child.name.to_string_lossy().to_string(),
+                display_name: child_label(child),
             });
         }
     }
@@ -202,6 +214,11 @@ impl GuiApp {
         self.expand_ancestors(&path);
         self.selected_path = Some(path.clone());
         let Some(selected) = self.tree.node_for(&path) else {
+            // A selection that does not resolve highlights nothing —
+            // leaving the previous selection's extension lit would tie
+            // the highlight to a thing that is no longer selected.
+            self.highlighted_extension = None;
+            self.highlighted_category = None;
             return;
         };
         if !selected.is_dir {

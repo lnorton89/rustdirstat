@@ -244,10 +244,15 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             for (group_idx, group) in app.duplicate_groups.iter().enumerate() {
                 let wasted = group.reclaimable();
+                // `files.len()`, not `distinct_inodes`: the header
+                // counts the rows listed under it (every pathname), the
+                // same number the TUI shows — the hard-link awareness is
+                // carried by the reclaimable figure, which already
+                // counts aliases as nothing.
                 egui::CollapsingHeader::new(format!(
                     "Group {} · {} copies · {} each · {} reclaimable",
                     group_idx + 1,
-                    group.distinct_inodes,
+                    group.files.len(),
                     human_bytes(group.size),
                     human_bytes(wasted)
                 ))

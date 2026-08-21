@@ -176,7 +176,10 @@ jobs:
       - name: Download archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-assets-*
+          # `pattern`, not `name`: `name` is an exact artifact name with
+          # no glob semantics, so `name: release-assets-*` would look for
+          # an artifact literally called that and fail the job.
+          pattern: release-assets-*
           path: dist
           merge-multiple: true
       - name: Upload and undraft

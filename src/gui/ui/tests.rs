@@ -65,6 +65,7 @@ fn file(name: &str, size: u64) -> Node {
         ext_totals: Vec::new(),
         unreadable_count: 0,
         file_id: None,
+        other_filesystem: false,
     }
 }
 
@@ -90,6 +91,7 @@ fn app_with_one_file() -> GuiApp {
             ext_totals: totals,
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         },
         volume_free: None,
         volume_total: None,
@@ -116,6 +118,7 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
         ext_totals: Vec::new(),
         unreadable_count: 0,
         file_id: None,
+        other_filesystem: false,
     };
     let sibling = file("beside.txt", 128);
     let mut totals = vec![(0, 0, 0); Category::COUNT];
@@ -138,6 +141,7 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
             ext_totals: totals,
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         },
         volume_free: None,
         volume_total: None,
@@ -219,6 +223,7 @@ fn app_with_sortable_files() -> GuiApp {
             ext_totals: totals,
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         },
         volume_free: None,
         volume_total: None,
@@ -2825,6 +2830,7 @@ fn app_with_many_extensions() -> GuiApp {
             ext_totals: totals,
             unreadable_count: 0,
             file_id: None,
+            other_filesystem: false,
         },
     })
 }

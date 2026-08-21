@@ -50,7 +50,10 @@ struct Cli {
     csv: Option<PathBuf>,
 
     /// Descend into other filesystems (mount points, /proc, network
-    /// shares) instead of staying on the scanned path's own filesystem
+    /// shares) instead of staying on the scanned path's own filesystem.
+    /// Unix only: Windows reports no device identity to the scanner, so
+    /// there the walk always crosses volume boundaries (junctions) and
+    /// this flag changes nothing
     #[arg(long = "cross-filesystems")]
     cross_filesystems: bool,
 }

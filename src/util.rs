@@ -431,13 +431,9 @@ mod move_path_tests {
         std::fs::write(a.join("existing").join("file.txt"), b"x")?;
 
         for dest in [a.join("b"), a.join("b").join("c")] {
-            let result = move_path(&a, &dest);
-            assert!(
-                result.is_err(),
-                "moving {a:?} to {:?} must be refused",
-                dest
-            );
-            let error = result.expect_err("checked above");
+            let Err(error) = move_path(&a, &dest) else {
+                anyhow::bail!("moving {a:?} to {dest:?} must be refused");
+            };
             assert!(
                 !error.to_string().contains("already exists"),
                 "the refusal is about nesting, not an existing destination"
@@ -487,7 +483,9 @@ mod move_path_tests {
         std::fs::write(source.join("file.txt"), b"x")?;
 
         let dest = root.join("no/such/parent").join("target");
-        let error = move_path(&source, &dest).expect_err("rename must fail");
+        let Err(error) = move_path(&source, &dest) else {
+            anyhow::bail!("rename to a destination without a parent must fail");
+        };
         assert_eq!(
             error.kind(),
             std::io::ErrorKind::NotFound,
@@ -515,7 +513,9 @@ mod move_path_tests {
         std::fs::create_dir_all(root.join("taken"))?;
 
         let dest = root.join("taken");
-        let error = move_path(&source, &dest).expect_err("the destination exists");
+        let Err(error) = move_path(&source, &dest) else {
+            anyhow::bail!("moving onto an existing destination must fail");
+        };
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(
             source.join("file.txt").exists(),

@@ -275,6 +275,10 @@ pub(in crate::gui) struct GuiApp {
     /// the size of the zoomed region, which on a drive-sized scan is
     /// millions of nodes. Same worker pattern as the search.
     extensions_rx: Option<mpsc::Receiver<Vec<ExtensionRow>>>,
+    /// Raised to stop the worker behind `extensions_rx` mid-walk when
+    /// its answer became obsolete — a newer zoom superseded it, or a
+    /// rescan retired the tree it was walking.
+    extensions_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub tools: ToolsState,
 }
 
@@ -323,6 +327,7 @@ impl GuiApp {
             duplicate_rx: None,
             search_rx: None,
             extensions_rx: None,
+            extensions_cancel: None,
             tools: ToolsState::default(),
         };
         app.refresh_extensions();
@@ -370,12 +375,19 @@ impl GuiApp {
     }
 
     fn save_preferences(&self) {
-        crate::config::save(&crate::config::Config {
+        let result = crate::config::save(&crate::config::Config {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),
             ..self.view.to_config()
         });
+        // This runs from `on_exit` — the window is already going away,
+        // so stderr is the only channel left. A quiet stderr line beats
+        // the old behavior, which was every failed save looking exactly
+        // like a successful one.
+        if let Err(error) = result {
+            eprintln!("rustdirstat: preferences were not saved: {error}");
+        }
     }
 }
 
@@ -432,6 +444,7 @@ mod tests {
                 ext_totals: Vec::new(),
                 unreadable_count: 0,
                 file_id: None,
+                other_filesystem: false,
             }
         }
         let mut totals = vec![(0, 0, 0); Category::COUNT];
@@ -455,6 +468,7 @@ mod tests {
                 ext_totals: totals,
                 unreadable_count: 0,
                 file_id: None,
+                other_filesystem: false,
             },
         })
     }
@@ -853,6 +867,45 @@ mod tests {
             dir.join("alpha").exists(),
             "the parent still exists — the test must prove the selection \
              was dropped rather than moved to it"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    /// A refresh that starts while the view is already stale — the zoom
+    /// path no longer resolves, so no name identity can be captured —
+    /// must still not carry raw index paths onto the new tree
+    /// unvalidated. Same semantics as the restore itself: placement
+    /// truncates to what exists, selection is exact or dropped.
+    #[test]
+    fn a_stale_view_is_still_validated_when_no_identity_could_be_captured() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        // Point the view somewhere the current tree cannot resolve, so
+        // the capture step has nothing to capture.
+        app.zoom_path = vec![97, 98];
+        app.selected_path = Some(vec![97, 98, 99]);
+        app.expanded.insert(vec![97]);
+
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+
+        assert_eq!(
+            app.zoom_path,
+            Vec::<usize>::new(),
+            "a stale zoom truncates to the deepest place that exists"
+        );
+        assert!(
+            app.selected_path.is_none(),
+            "a stale selection is dropped, not carried onto the new tree"
+        );
+        assert!(
+            app.expanded
+                .iter()
+                .all(|path| app.tree.node_for(path).is_some()),
+            "no expanded path may dangle into the new tree"
         );
 
         std::fs::remove_dir_all(dir)?;
