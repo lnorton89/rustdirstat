@@ -60,7 +60,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
+      # fetch-depth: 0 for the changelog check below, which reads `git tag`
+      # and walks the whole history. The default checkout is shallow and
+      # fetches no tags at all, so every release would come back missing —
+      # the check would fail for a reason that has nothing to do with the
+      # changelog. 119 commits; the extra fetch is not measurable.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08
         with:
@@ -93,6 +100,18 @@ jobs:
 
       - name: Test
         run: cargo test --all-features
+
+      # CHANGELOG.md is generated from the git history by
+      # `examples/changelog.rs`, so a released section that disagrees with
+      # the tags is a mistake, not a style choice. Released sections only:
+      # the `Unreleased` section moves with every merge, and a squash or
+      # rebase rewrites the very hashes it pins, so gating pull requests on
+      # it would fail all of them for no signal. One platform is enough —
+      # git history does not vary by OS — and the build is already warm
+      # from the two steps above.
+      - name: Changelog
+        if: runner.os == 'Linux'
+        run: cargo run --example changelog -- --check
 
       # tests/quit_stress.rs drives the real binary inside a pty and is
       # cfg(unix), so it compiles to nothing on Windows. Building the
