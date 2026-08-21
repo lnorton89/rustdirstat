@@ -340,13 +340,59 @@ impl App {
 
         let removed = Removed::emptying(target);
 
-        let children: Vec<std::path::PathBuf> = std::fs::read_dir(&path)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
+        // Enumerate every direct child before deleting anything: an
+        // incomplete listing must not be acted on as if it were complete.
+        // The scanner counts partial listings rather than pretending they
+        // are whole, and a destructive path cannot be looser than the
+        // read-only one.
+        let mut children = Vec::new();
+        let mut unreadable = 0usize;
+        for entry in std::fs::read_dir(&path)? {
+            match entry {
+                Ok(e) => children.push(e.path()),
+                Err(_) => unreadable += 1,
+            }
+        }
+        if unreadable > 0 {
+            self.message = Some(format!(
+                "Nothing was emptied: {unreadable} entr{} could not be read",
+                if unreadable == 1 { "y" } else { "ies" }
+            ));
+            // The tree no longer matches the disk, and by how much is
+            // unknown — rescan rather than subtract in place.
+            self.refresh_requested = true;
+            return Ok(());
+        }
+
+        // Then each child individually, reporting partial failure. Once
+        // the first child is in the trash the disk has changed, so a
+        // mid-way failure is "partially emptied", not an error implying
+        // nothing happened — and the in-place subtraction below would be
+        // wrong by exactly however many failed, so the tree is rescanned.
+        let total = children.len();
+        let mut failed = 0usize;
+        let mut first_error: Option<String> = None;
         for child_path in children {
-            trash::delete(&child_path)
-                .map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+            if let Err(e) = trash::delete(&child_path) {
+                failed += 1;
+                if first_error.is_none() {
+                    first_error = Some(e.to_string());
+                }
+            }
+        }
+        if failed > 0 {
+            let done = total - failed;
+            self.message = Some(match first_error {
+                Some(error) => format!(
+                    "Emptied {done} of {total} items; {failed} could not be moved \
+                     to trash ({error})"
+                ),
+                None => {
+                    format!("Emptied {done} of {total} items; {failed} could not be moved to trash")
+                }
+            });
+            self.refresh_requested = true;
+            return Ok(());
         }
 
         let parent = self.subtract_along_current_path(&removed);

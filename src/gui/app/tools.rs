@@ -184,9 +184,61 @@ impl GuiApp {
             return Ok(());
         }
         let path = self.tree.path_for(&pending.index_path);
-        for child in std::fs::read_dir(&path)?.filter_map(Result::ok) {
-            trash::delete(child.path())
-                .map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+        // Enumerate every direct child *before* deleting anything. A
+        // listing missing entries (a race with something deleting them, a
+        // flaky mount) must not be acted on as if it were complete — the
+        // scanner counts exactly this kind of partial failure rather than
+        // pretending, and the destructive path cannot be looser than the
+        // read-only one.
+        let mut children = Vec::new();
+        let mut unreadable = 0usize;
+        for entry in std::fs::read_dir(&path)? {
+            match entry {
+                Ok(e) => children.push(e),
+                Err(_) => unreadable += 1,
+            }
+        }
+        if unreadable > 0 {
+            self.status = Some(format!(
+                "Nothing was emptied: {unreadable} entr{} could not be read ({})",
+                if unreadable == 1 { "y" } else { "ies" },
+                path.display()
+            ));
+            self.refresh_scan()?;
+            return Ok(());
+        }
+        // Then each child individually. A failure partway through has
+        // already changed the disk, so it is reported as the partial
+        // emptying it is rather than as an error that implies nothing
+        // happened, and the folder is rescanned so the tree matches what
+        // actually went to the trash.
+        let total = children.len();
+        let mut failed = 0usize;
+        let mut first_error: Option<String> = None;
+        for child in children {
+            if let Err(e) = trash::delete(child.path()) {
+                failed += 1;
+                if first_error.is_none() {
+                    first_error = Some(e.to_string());
+                }
+            }
+        }
+        if failed > 0 {
+            let done = total - failed;
+            self.status = Some(match first_error {
+                Some(error) => format!(
+                    "Emptied {done} of {total} items in {}; {failed} could not be \
+                     moved to trash ({error})",
+                    path.display()
+                ),
+                None => format!(
+                    "Emptied {done} of {total} items in {}; {failed} could not be \
+                     moved to trash",
+                    path.display()
+                ),
+            });
+            self.refresh_scan()?;
+            return Ok(());
         }
         self.status = Some(format!("Emptied: {}", path.display()));
         self.refresh_scan()

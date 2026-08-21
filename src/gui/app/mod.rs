@@ -258,6 +258,11 @@ pub(in crate::gui) struct GuiApp {
     treemap_key: Option<TreemapKey>,
     scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
     scan_resets_workspace: bool,
+    /// The user's zoom/selection/expansion captured as name identities
+    /// when a refresh scan started, to be re-derived against the new
+    /// tree when it lands. `None` for a fresh-folder scan, which resets
+    /// the workspace anyway.
+    restore: Option<scan::RestoreState>,
     duplicate_rx: Option<mpsc::Receiver<crate::duplicates::DupScan>>,
     pub tools: ToolsState,
 }
@@ -303,6 +308,7 @@ impl GuiApp {
             treemap_key: None,
             scan_rx: None,
             scan_resets_workspace: false,
+            restore: None,
             duplicate_rx: None,
             tools: ToolsState::default(),
         };
@@ -782,6 +788,43 @@ mod tests {
 
         std::fs::remove_dir_all(first)?;
         std::fs::remove_dir_all(second)?;
+        Ok(())
+    }
+
+    /// A refresh scan restores the browsing location by name identity,
+    /// through the whole scan/poll pipeline, so the user stays where
+    /// they were.
+    #[test]
+    fn a_refresh_scan_restores_selection_and_zoom() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.toggle_expanded(&alpha);
+        app.select_path(alpha.clone());
+        app.zoom_path = alpha.clone();
+
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+
+        let selected = app
+            .selected_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("the selection should have been restored"))?;
+        assert_eq!(
+            selected, alpha,
+            "the selection should survive a refresh scan"
+        );
+        assert_eq!(
+            app.zoom_path, alpha,
+            "the zoom should survive a refresh scan"
+        );
+        assert!(
+            app.expanded.contains(&alpha),
+            "the expansion should survive a refresh scan"
+        );
+
+        std::fs::remove_dir_all(dir)?;
         Ok(())
     }
 

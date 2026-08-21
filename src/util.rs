@@ -180,9 +180,19 @@ pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
 
 /// Moves `source` to `dest`. Tries a plain rename first (atomic, cheap —
 /// works whenever both paths are on the same filesystem); falls back to a
-/// recursive copy-then-delete when that fails, most commonly because
-/// source and dest are on different volumes, which `rename(2)`/`MoveFile`
-/// can't do atomically. Refuses to silently overwrite an existing `dest`.
+/// recursive copy-then-delete only when the rename failed for the one
+/// reason copy can fix: source and dest on different volumes
+/// (`rename(2)`/`MoveFile` cannot bridge a device boundary).
+///
+/// Two things are deliberately *not* done here. Moving a directory into
+/// its own descendant is rejected up front: the copy fallback would
+/// enumerate the destination it just created and recurse forever
+/// (`/data/archive/moved/moved/...` until the filesystem gives up). And
+/// every other rename failure is returned as-is rather than treated as a
+/// cross-device signal — a permission error or an invalid name is not
+/// evidence the source lives on another volume, and copying for it would
+/// mask the real error while doing exactly the wrong thing. Refuses to
+/// silently overwrite an existing `dest`.
 pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     if dest.exists() {
         return Err(std::io::Error::new(
@@ -190,18 +200,39 @@ pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::R
             format!("{} already exists", dest.display()),
         ));
     }
-    if std::fs::rename(source, dest).is_ok() {
-        return Ok(());
+    // A destination inside the source is the one case where the copy
+    // fallback is not merely unhelpful but self-amplifying: once `dest`
+    // exists the walk of `source` can discover it and start nesting
+    // copies inside itself. Canonicalizing both sides first (so `a/../a`
+    // cannot sneak past on spelling) and comparing components catches it
+    // before anything touches the disk. If canonicalization fails the
+    // rename below will simply error and be reported, which is safe.
+    if let (Ok(canon_source), Some(parent)) = (source.canonicalize(), dest.parent()) {
+        if let Ok(canon_parent) = parent.canonicalize() {
+            if canon_parent.starts_with(&canon_source) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "cannot move {} into itself ({})",
+                        source.display(),
+                        dest.display()
+                    ),
+                ));
+            }
+        }
     }
-    // rename failed — most commonly because source and dest are on
-    // different volumes, which rename can never bridge — so fall back to
-    // copy-then-remove. `symlink_metadata` (never follows the link
-    // itself) so a symlink is recreated as a symlink at `dest` rather
-    // than silently resolved and copied as if it were its target
-    // (potentially huge, or entirely outside the scanned tree) —
-    // `copy_dir_recursive` below already makes this same distinction for
-    // a symlink nested *inside* a moved directory; this is the top-level
-    // single-item case that was missed.
+    match std::fs::rename(source, dest) {
+        Ok(()) => return Ok(()),
+        Err(error) if is_cross_device(&error) => {}
+        Err(error) => return Err(error),
+    }
+    // Cross-device, and only cross-device, reaches the copy fallback:
+    // `symlink_metadata` (never follows the link itself) so a symlink is
+    // recreated as a symlink at `dest` rather than silently resolved and
+    // copied as if it were its target (potentially huge, or entirely
+    // outside the scanned tree) — `copy_dir_recursive` below already
+    // makes this same distinction for a symlink nested *inside* a moved
+    // directory; this is the top-level single-item case that was missed.
     let meta = std::fs::symlink_metadata(source)?;
     let is_symlink = meta.file_type().is_symlink();
     let is_dir = meta.is_dir();
@@ -224,6 +255,22 @@ pub fn move_path(source: &std::path::Path, dest: &std::path::Path) -> std::io::R
     }
 
     remove_path(source, is_dir, is_symlink)
+}
+
+/// Whether a rename failed because the two paths are on different
+/// filesystems — the only rename failure the copy fallback can fix.
+///
+/// Every other error is returned to the caller rather than triggering a
+/// copy: a permission denial or invalid name is not evidence of a device
+/// boundary, and a copy would paper over it.
+#[cfg(unix)]
+fn is_cross_device(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EXDEV)
+}
+
+#[cfg(windows)]
+fn is_cross_device(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(17) // ERROR_NOT_SAME_DEVICE
 }
 
 /// Recreates `source` (a symlink) at `dest` rather than following it — see
@@ -342,6 +389,134 @@ mod tests {
         Ok(())
     }
 }
+/// The move-hardening regressions: a move must never be allowed to recurse
+/// into its own output, and only a genuine cross-device rename may trigger
+/// the copy fallback. Unix-only: forcing a real `EXDEV` needs two
+/// filesystems, which a test environment can't assume, but the *other*
+/// half of the fix — refusing everything that is not a device boundary —
+/// is exactly what these exercise.
+#[cfg(all(test, unix))]
+mod move_path_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "rustdirstat_move_{}_{name}_{unique}",
+            std::process::id()
+        ))
+    }
+
+    /// `a -> a/b`: the copy fallback would enumerate the destination it
+    /// just created and nest copies inside itself (`a/b/b/b/...`) until
+    /// the filesystem gave up. The move must be refused before anything
+    /// touches the disk.
+    #[test]
+    fn moving_a_directory_into_its_own_descendant_is_rejected() -> anyhow::Result<()> {
+        let root = scratch("into_descendant");
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("a");
+        std::fs::create_dir_all(a.join("existing"))?;
+        std::fs::write(a.join("existing").join("file.txt"), b"x")?;
+
+        for dest in [a.join("b"), a.join("b").join("c")] {
+            let result = move_path(&a, &dest);
+            assert!(
+                result.is_err(),
+                "moving {a:?} to {:?} must be refused",
+                dest
+            );
+            let error = result.expect_err("checked above");
+            assert!(
+                !error.to_string().contains("already exists"),
+                "the refusal is about nesting, not an existing destination"
+            );
+        }
+
+        // Nothing was created or destroyed.
+        assert!(
+            a.join("existing").join("file.txt").exists(),
+            "the source must be untouched"
+        );
+        assert!(!a.join("b").exists(), "no destination may be created");
+
+        std::fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// `a -> a` is caught by the existing-destination check: the source
+    /// exists, so the destination already exists.
+    #[test]
+    fn moving_a_directory_onto_itself_is_rejected() -> anyhow::Result<()> {
+        let root = scratch("onto_itself");
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("a");
+        std::fs::create_dir_all(&a)?;
+        std::fs::write(a.join("file.txt"), b"x")?;
+
+        assert!(move_path(&a, &a).is_err(), "a -> a must be refused");
+        assert!(a.join("file.txt").exists(), "the source must be untouched");
+
+        std::fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// A rename failure that has nothing to do with a device boundary
+    /// must be returned, not turned into a copy. (The destination's
+    /// parent does not exist, so `rename` fails with ENOENT.) The copy
+    /// fallback used to run on *any* rename error, which would mask this
+    /// as a copy failure while copying a directory that should never
+    /// have been copied.
+    #[test]
+    fn a_non_cross_device_rename_failure_is_returned_not_copied() -> anyhow::Result<()> {
+        let root = scratch("rename_error");
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("source");
+        std::fs::create_dir_all(&source)?;
+        std::fs::write(source.join("file.txt"), b"x")?;
+
+        let dest = root.join("no/such/parent").join("target");
+        let error = move_path(&source, &dest).expect_err("rename must fail");
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "the original rename error must be returned as-is, got {error}"
+        );
+        assert!(!dest.exists(), "no copy may exist");
+        assert!(
+            source.join("file.txt").exists(),
+            "the source must be intact"
+        );
+
+        std::fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// An existing destination is refused before anything else, whether
+    /// or not the source would nest inside it.
+    #[test]
+    fn moving_onto_an_existing_destination_is_refused() -> anyhow::Result<()> {
+        let root = scratch("existing_dest");
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("source");
+        std::fs::create_dir_all(&source)?;
+        std::fs::write(source.join("file.txt"), b"x")?;
+        std::fs::create_dir_all(root.join("taken"))?;
+
+        let dest = root.join("taken");
+        let error = move_path(&source, &dest).expect_err("the destination exists");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(
+            source.join("file.txt").exists(),
+            "the source must be intact"
+        );
+
+        std::fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+}
+
 /// Cross-platform, unlike the symlink tests above: nothing here needs
 /// privileges to create.
 #[cfg(test)]
