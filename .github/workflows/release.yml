@@ -114,7 +114,6 @@ jobs:
       # GUI are two front ends over one scanner, and someone who wants one
       # usually wants the other available.
       - name: Package
-        id: package
         shell: bash
         env:
           TAG: ${{ needs.draft.outputs.tag }}
@@ -149,14 +148,22 @@ jobs:
           else
             shasum -a 256 "$asset" > "${asset}.sha256"
           fi
-          echo "artifact=dist/${asset}" >> "$GITHUB_OUTPUT"
-          echo "checksum=dist/${asset}.sha256" >> "$GITHUB_OUTPUT"
 
+      # One artifact per target: with upload-artifact@v4 a second matrix
+      # job uploading to the same name fails outright, and even when it
+      # didn't, a shared name is how one platform's files get mixed into
+      # another's release. The name is what makes the glob below stay
+      # distinct, and only the finished archives and checksums are
+      # uploaded — the staging directory with the raw binaries, README,
+      # and LICENSE stays inside the build job where it belongs.
       - name: Upload build artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-assets
-          path: dist/
+          name: release-assets-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
 
   publish:
     name: Publish release
@@ -169,8 +176,9 @@ jobs:
       - name: Download archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-assets
+          name: release-assets-*
           path: dist
+          merge-multiple: true
       - name: Upload and undraft
         shell: bash
         env:

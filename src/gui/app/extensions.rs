@@ -169,8 +169,33 @@ pub(in crate::gui) fn size_label(bytes: u64, physical: bool) -> String {
 
 impl GuiApp {
     pub(in crate::gui) fn refresh_extensions(&mut self) {
-        self.extensions = collect_extension_rows(self.zoom_node(), self.use_physical);
-        self.sort_extensions();
+        // Off the frame thread: this walks the whole zoom subtree, which
+        // on a drive-sized scan is millions of nodes. The previous rows
+        // stay on screen until the new ones land — percentages are
+        // computed against the displayed rows, so a stale set is still
+        // self-consistent — rather than freezing the window for the
+        // walk. The worker holds its own `Arc` to the tree, so it is
+        // safe alongside a rescan; `poll_background` drops the receiver
+        // when the tree is replaced, so a stale result cannot clobber
+        // the fresh scan-time rows.
+        let tree = Arc::clone(&self.tree);
+        let zoom_path = self.zoom_path.clone();
+        let physical = self.use_physical;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // Forgiving: a slightly stale zoom path (the tree changed
+            // under us) still has a nearest node to describe.
+            let node = tree.deepest_valid_node(&zoom_path);
+            let _ = tx.send(collect_extension_rows(node, physical));
+        });
+        self.extensions_rx = Some(rx);
+    }
+
+    /// Whether a zoom-time extension recomputation is still running —
+    /// used by tests to wait for the worker.
+    #[cfg(test)]
+    pub(in crate::gui) fn extensions_pending(&self) -> bool {
+        self.extensions_rx.is_some()
     }
 
     pub(in crate::gui) fn sort_extensions(&mut self) {

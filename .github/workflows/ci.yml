@@ -33,6 +33,24 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    # The dependency surface is the same for every platform, so one run
+    # suffices. Reads only — the `cargo-deny` action downloads the
+    # advisory database and scans the lockfile.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Runs `cargo deny check` with `deny.toml` in the repo root. The
+      # four ignored advisories and their justification live in that
+      # file; anything new fails here.
+      - uses: EmbarkStudios/cargo-deny-action@c3bbe7e4e3f7baeee1a3dd9aec0a3b2aded580fb # v2.1.1
+        with:
+          command: check
+          arguments: --all-features
+
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

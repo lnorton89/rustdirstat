@@ -269,6 +269,12 @@ pub(in crate::gui) struct GuiApp {
     /// froze the window — so it runs on a worker like scanning and
     /// duplicates do, and `poll_background` applies the result.
     search_rx: Option<mpsc::Receiver<crate::search::SearchOutcome>>,
+    /// A zoom-time extension recomputation in flight. The scan already
+    /// computes the *root* extension rows off the frame thread, but
+    /// zooming into a subtree recomputes them for that subtree — a walk
+    /// the size of the zoomed region, which on a drive-sized scan is
+    /// millions of nodes. Same worker pattern as the search.
+    extensions_rx: Option<mpsc::Receiver<Vec<ExtensionRow>>>,
     pub tools: ToolsState,
 }
 
@@ -316,6 +322,7 @@ impl GuiApp {
             restore: None,
             duplicate_rx: None,
             search_rx: None,
+            extensions_rx: None,
             tools: ToolsState::default(),
         };
         app.refresh_extensions();
@@ -811,6 +818,82 @@ mod tests {
         assert!(
             app.expanded.contains(&alpha),
             "the expansion should survive a refresh scan"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    /// A selection is an exact claim about a specific item, so one whose
+    /// file vanished between scans must be dropped, not silently moved to
+    /// its parent directory — landing on the parent would make the
+    /// selection point at a different thing than the user chose.
+    #[test]
+    fn a_selection_whose_file_vanished_is_dropped_not_moved_to_its_parent() -> anyhow::Result<()> {
+        let dir = nested_test_tree()?;
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.toggle_expanded(&alpha);
+        app.refresh_visible_rows();
+        let small = row_path(&app, "small.bin")?;
+        app.select_path(small.clone());
+        assert_eq!(app.selected_path.as_deref(), Some(&small[..]));
+
+        // The file disappears from disk before the refresh scan runs.
+        std::fs::remove_file(dir.join("alpha").join("small.bin"))?;
+        app.refresh_scan()?;
+        wait_for_background(&mut app);
+
+        assert!(
+            app.selected_path.is_none(),
+            "a vanished selection must not resolve to its parent directory"
+        );
+        assert!(
+            dir.join("alpha").exists(),
+            "the parent still exists — the test must prove the selection \
+             was dropped rather than moved to it"
+        );
+
+        std::fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    /// Zooming recomputes the extension breakdown for the zoomed subtree
+    /// — on a worker, so zooming into a drive-sized subtree cannot freeze
+    /// the window, and the rows that arrive describe the subtree the
+    /// user actually zoomed into.
+    #[test]
+    fn zoom_recomputes_extensions_for_the_zoomed_subtree() -> anyhow::Result<()> {
+        let dir = scratch_dir("gui", "ext_zoom");
+        std::fs::create_dir_all(dir.join("alpha"))?;
+        std::fs::create_dir_all(dir.join("beta"))?;
+        std::fs::write(dir.join("alpha/one.bin"), vec![1_u8; 8])?;
+        std::fs::write(dir.join("beta/two.txt"), vec![2_u8; 8])?;
+
+        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        app.refresh_visible_rows();
+        let alpha = row_path(&app, "alpha")?;
+        app.zoom_path = alpha;
+        app.refresh_extensions();
+
+        // The rows arrive on a worker; wait for them through the same
+        // poll path the frame update uses.
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.extensions_pending() && Instant::now() < deadline {
+            app.poll_background(&ctx);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !app.extensions_pending(),
+            "the extension worker should finish"
+        );
+        let exts: Vec<String> = app.extensions.iter().map(|e| e.extension.clone()).collect();
+        assert_eq!(
+            exts,
+            [".bin".to_string()],
+            "zoomed into alpha — only its extension should remain"
         );
 
         std::fs::remove_dir_all(dir)?;

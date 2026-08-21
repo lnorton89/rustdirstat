@@ -1684,6 +1684,18 @@ fn clicking_a_rendered_extension_row_changes_highlight() -> anyhow::Result<()> {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
+    // The extension rows are computed on a worker since the zoom-time
+    // recomputation moved off the frame thread; wait for them through
+    // the same poll path the frame update uses.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.extensions_pending() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !app.extensions_pending(),
+        "the extension worker should finish"
+    );
     probe(&TEST_EXTENSION_ROW_RECTS).clear();
     probe(&TEST_EXTENSION_TEXT_RECTS).clear();
     for _ in 0..4 {

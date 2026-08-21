@@ -9,9 +9,32 @@
 # silently-ignored footnote.
 yanked = "warn"
 
+# Four advisories with no practical fix, all in the egui 0.29 stack this
+# crate holds at deliberately (see CLAUDE.md):
+#
+# - RUSTSEC-2026-0192: ttf-parser is unmaintained, no successor release
+#   (upstream points at skrifa); drawn in by ab_glyph for font shaping.
+#   Input is the OS's own fonts, not untrusted data.
+# - RUSTSEC-2024-0436: paste is unmaintained, no fix; a trivial macro
+#   crate in accesskit_winit and metal.
+# - RUSTSEC-2026-0194/0195: quick-xml vulnerabilities in the Linux
+#   accessibility stack (zbus_xml via atspi). The fixed quick-xml is a
+#   breaking release, so clearing them means bumping the accesskit stack
+#   — the egui upgrade this repo is deliberately not doing yet.
+#
+# Revisit all four when egui 0.29 is left behind.
+ignore = [
+    "RUSTSEC-2026-0192",
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
+
 [licenses]
-# MIT-only codebase today; anything new must prove itself rather than
-# being assumed fine.
+# MIT-led, but the GUI's font and platform stack brings in a few more
+# permissive licenses: BSL-1.0 (error-code), MPL-2.0 (option-ext), and
+# OFL-1.1 + the Ubuntu Font Licence for egui's bundled fonts. Anything
+# new must prove itself rather than being assumed fine.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -23,6 +46,10 @@ allow = [
     "CC0-1.0",
     "0BSD",
     "Unlicense",
+    "BSL-1.0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "LicenseRef-UFL-1.0",
 ]
 
 [bans]

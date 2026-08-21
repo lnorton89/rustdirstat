@@ -90,6 +90,13 @@ fn capture_identity(tree: &Tree, index_path: &[usize]) -> Option<Vec<std::ffi::O
 /// Matching is by name, not position — sibling *order* is exactly what
 /// is not stable between scans, and position is what a stale `Vec<usize>`
 /// would have answered about.
+///
+/// Forgiving by design: a place that vanished resolves to the place that
+/// still exists nearest it. That is the right answer for the *zoom*
+/// level — the user is looking at a region, and the region's nearest
+/// surviving ancestor is still that region's neighborhood — and for
+/// `expanded` directories. It is the wrong answer for a *selection*:
+/// see [`resolve_identity_exact`].
 fn resolve_identity(tree: &Tree, identity: &[std::ffi::OsString]) -> Vec<usize> {
     let mut resolved = Vec::new();
     let mut node = &tree.root;
@@ -106,6 +113,28 @@ fn resolve_identity(tree: &Tree, identity: &[std::ffi::OsString]) -> Vec<usize> 
         node = &node.children[idx];
     }
     resolved
+}
+
+/// [`resolve_identity`] that refuses to shorten: `None` unless every
+/// component still exists.
+///
+/// Selection is an exact claim — "this item" — so a file that vanished
+/// between scans must not silently become its parent directory, which is
+/// what the forgiving form would do. Landing on the parent looks like
+/// the selection surviving when the item it named is gone.
+fn resolve_identity_exact(tree: &Tree, identity: &[std::ffi::OsString]) -> Option<Vec<usize>> {
+    let mut resolved = Vec::new();
+    let mut node = &tree.root;
+    for component in identity {
+        let (idx, child) = node
+            .children
+            .iter()
+            .enumerate()
+            .find(|(_, child)| child.name == *component)?;
+        resolved.push(idx);
+        node = child;
+    }
+    Some(resolved)
 }
 
 impl GuiApp {
@@ -255,6 +284,9 @@ impl GuiApp {
         self.duplicate_groups = Vec::new();
         self.search.results = Vec::new();
         self.search_rx = None;
+        // A zoom-time extension worker would answer about the tree just
+        // retired; the scan recomputes rows for the new one.
+        self.extensions_rx = None;
         let root_path = self.tree.root_path.clone();
         drop_in_background(std::mem::replace(
             &mut self.tree,
@@ -291,9 +323,12 @@ impl GuiApp {
                         // were taken from, and this is a different tree.
                         if let Some(state) = self.restore.take() {
                             self.zoom_path = resolve_identity(&self.tree, &state.zoom);
+                            // Selection is exact: a vanished item must not
+                            // silently become its parent directory. If it
+                            // is gone, it is gone.
                             self.selected_path = state
                                 .selected
-                                .map(|identity| resolve_identity(&self.tree, &identity));
+                                .and_then(|identity| resolve_identity_exact(&self.tree, &identity));
                             self.expanded = state
                                 .expanded
                                 .iter()
@@ -314,6 +349,10 @@ impl GuiApp {
                     // just retired; its result is stale by construction.
                     self.search_rx = None;
                     self.search.results.clear();
+                    // Same for a zoom-time extension worker: the rows
+                    // below are the new tree's, and a late delivery must
+                    // not clobber them.
+                    self.extensions_rx = None;
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
                 }
@@ -342,6 +381,24 @@ impl GuiApp {
             } else {
                 format!("{} search result(s)", self.search.results.len())
             });
+        }
+
+        let extension_result = self
+            .extensions_rx
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(rows) => Some(Ok(rows)),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(())),
+            });
+        if let Some(result) = extension_result {
+            self.extensions_rx = None;
+            // A disconnected worker sent nothing; keep the rows already
+            // showing rather than blanking the pane.
+            if let Ok(rows) = result {
+                self.extensions = rows;
+                self.sort_extensions();
+            }
         }
 
         let duplicate_result = self
@@ -491,7 +548,9 @@ mod tests {
 
     /// An identity whose name is gone entirely resolves to the deepest
     /// ancestor that still exists rather than to whatever now occupies
-    /// the old index.
+    /// the old index — for *placement* (zoom, expansion). A selection,
+    /// which is an exact claim about a specific item, must instead be
+    /// dropped: see the assertions on [`resolve_identity_exact`] below.
     #[test]
     fn a_vanished_name_restores_to_its_ancestor_not_the_index() -> anyhow::Result<()> {
         let before = Tree {
@@ -524,6 +583,8 @@ mod tests {
                 ],
             ),
         };
+        // Zoom/expansion placement resolves to the nearest surviving
+        // ancestor.
         let restored = resolve_identity(&after, &captured);
         assert_eq!(
             restored,
@@ -532,6 +593,23 @@ mod tests {
              to index 0 would have selected 'replacement'"
         );
         assert_ne!(restored, vec![0, 0]);
+
+        // A selection, though, is exact: `alpha/inner` is gone, so there
+        // is nothing to select. Falling back to the parent would make the
+        // selection silently point at a different thing.
+        assert_eq!(
+            resolve_identity_exact(&after, &captured),
+            None,
+            "a vanished item must not resolve to its parent"
+        );
+        // A still-present identity resolves exactly, of course.
+        let still_there = capture_identity(&before, &[1])
+            .ok_or_else(|| anyhow::anyhow!("the path should exist"))?;
+        assert_eq!(
+            resolve_identity_exact(&after, &still_there).as_deref(),
+            Some(&[1][..]),
+            "beta is in the same place in both trees"
+        );
         Ok(())
     }
 }
