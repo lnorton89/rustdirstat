@@ -11,8 +11,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+Nothing yet — the latest release is the tip of `main`.
+
+## [0.2.1] - 2026-08-21
+
+### Added
+
+- finish the 0.2.0 review — every remaining finding implemented ([`924b1c4`](https://github.com/lnorton89/rustdirstat/commit/924b1c4c07b2e04a9247f82fc4b00685c44dcd75))
+
 ### Fixed
 
+- skip the non-UTF-8 name tests where the filesystem forbids the name ([`82749b8`](https://github.com/lnorton89/rustdirstat/commit/82749b8e326109103f0f54f0868756def3cbc3c4))
 - address the second branch review end to end ([`8f278c8`](https://github.com/lnorton89/rustdirstat/commit/8f278c8d4dc069eec87c088c2858f00925e48a52))
 - address the branch review — release artifacts, exact selection, async zoom extensions, deny CI ([`ec4a98a`](https://github.com/lnorton89/rustdirstat/commit/ec4a98a168b34ed41a9e49784a417537be1d5b3e))
 - exact tree lookups by default, and real physical size on Windows ([`0044619`](https://github.com/lnorton89/rustdirstat/commit/00446190fb3bfc66a72b80fa463cc196796ed935))
@@ -24,14 +33,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- one home per constant, and every GUI spacing on the scale ([`5f97375`](https://github.com/lnorton89/rustdirstat/commit/5f97375e9bb909d9d221e382bb4e10d0b0030f1b))
 - dedupe the pre-order walk and test scratch dirs; doc the new invariants ([`c6e076b`](https://github.com/lnorton89/rustdirstat/commit/c6e076b97616577a9458a600d34dcf2705a60b10))
 
 ### Documentation
 
+- record the constants, changelog, and dependency conventions ([`9c8415c`](https://github.com/lnorton89/rustdirstat/commit/9c8415ce93234097bbf97bd44dc50c6879107c69))
 - add contribution guides, issue/PR templates, and CODEOWNERS ([`27ba022`](https://github.com/lnorton89/rustdirstat/commit/27ba022077a9fa1f5a201aa332f37723b4a833e8))
 
 ### Internal
 
+- bump version to 0.2.1 ([`3d07710`](https://github.com/lnorton89/rustdirstat/commit/3d07710c0a975d872059a83927e0573eb4b00b69))
+- generate CHANGELOG.md from the git history ([`4652cc2`](https://github.com/lnorton89/rustdirstat/commit/4652cc2c6b0c940123353b943fce2d0c3573be19))
+- group Dependabot by patch only, and freeze the egui stack ([`c457327`](https://github.com/lnorton89/rustdirstat/commit/c457327f85e466bebfa0555be7f5436a2dde1164))
 - pin the Nix dev shell to rust-toolchain.toml via fenix ([`38031eb`](https://github.com/lnorton89/rustdirstat/commit/38031ebda8e3510e83085aae7b84b248d141a088))
 
 ## [0.2.0] - 2026-08-20
@@ -191,6 +205,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Recursive nested treemap + full mouse support ([`7c6f176`](https://github.com/lnorton89/rustdirstat/commit/7c6f176be72fac3e76a0264b8519890b5c202406))
 - Add rustdirstat: cross-platform terminal clone of WinDirStat ([`79c6d06`](https://github.com/lnorton89/rustdirstat/commit/79c6d0697c7cad167dbe1ca6bf7ccfcded8df75f))
 
-[Unreleased]: https://github.com/lnorton89/rustdirstat/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lnorton89/rustdirstat/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/lnorton89/rustdirstat/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lnorton89/rustdirstat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lnorton89/rustdirstat/releases/tag/v0.1.0
