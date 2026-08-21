@@ -101,7 +101,10 @@ pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
             app.select_path(path);
         }
         if let Some(path) = app.selected_path.clone() {
-            let is_dir = app.tree.node_for(&path).is_dir;
+            let Some(node) = app.tree.node_for(&path) else {
+                return;
+            };
+            let is_dir = node.is_dir;
             if right && is_dir && !app.expanded.contains(&path) {
                 app.toggle_expanded(&path);
             }

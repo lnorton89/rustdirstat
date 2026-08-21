@@ -211,12 +211,16 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
 /// size comes from the node rather than from the tile because a tile
 /// carries only its geometry.
 fn tile_hover_text(app: &GuiApp, tile: &Tile) -> String {
-    let Some(node) = app.tree.try_node_for(&tile.index_path) else {
+    let Some(node) = app.tree.node_for(&tile.index_path) else {
+        return tile.name.clone();
+    };
+    // `node_for` just proved the path resolves, so this is `Some` too.
+    let Some(path) = app.tree.path_for(&tile.index_path) else {
         return tile.name.clone();
     };
     format!(
         "{}\n{}",
-        crate::util::display_path(&app.tree.path_for(&tile.index_path)),
+        crate::util::display_path(&path),
         crate::util::human_bytes(node.effective_size(app.use_physical)),
     )
 }

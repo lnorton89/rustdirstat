@@ -187,17 +187,23 @@ pub(in crate::gui) use crate::model::sort_nodes;
 
 impl GuiApp {
     pub(in crate::gui) fn selected_node(&self) -> Option<&Node> {
-        self.selected_path.as_deref().map(|p| self.tree.node_for(p))
+        self.selected_path
+            .as_deref()
+            .map(|p| self.tree.deepest_valid_node(p))
     }
 
     pub(in crate::gui) fn selected_fs_path(&self) -> Option<PathBuf> {
-        self.selected_path.as_deref().map(|p| self.tree.path_for(p))
+        self.selected_path
+            .as_deref()
+            .map(|p| self.tree.deepest_valid_path(p))
     }
 
     pub(in crate::gui) fn select_path(&mut self, path: Vec<usize>) {
         self.expand_ancestors(&path);
         self.selected_path = Some(path.clone());
-        let selected = self.tree.node_for(&path);
+        let Some(selected) = self.tree.node_for(&path) else {
+            return;
+        };
         if !selected.is_dir {
             self.highlighted_extension = Some(extension_label(&selected.name.to_string_lossy()));
             self.highlighted_category = selected.category;

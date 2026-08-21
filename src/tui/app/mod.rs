@@ -713,10 +713,11 @@ mod tests {
     /// A delete queued against a tree that no longer has that entry is
     /// refused, not applied to whatever now sits at those indices.
     ///
-    /// `node_for` answers about the deepest node that exists, so a stale
-    /// index path resolves to the target's *parent*. For a delete that
-    /// is worse than a crash: the confirmation would read the parent
-    /// directory's size and then remove it.
+    /// Resolution is exact (`node_for`), so a stale index path yields
+    /// nothing to act on. If it resolved forgivingly instead, it would
+    /// land on the target's *parent* — and for a delete that is worse
+    /// than a crash: the confirmation would read the parent directory's
+    /// size and then remove it.
     #[test]
     fn a_delete_queued_against_a_vanished_entry_is_refused() -> Result<()> {
         let mut app = App::new(Tree::placeholder(PathBuf::from("root")));

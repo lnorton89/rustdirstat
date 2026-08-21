@@ -121,7 +121,12 @@ impl GuiApp {
             self.status = Some("The scan root cannot be deleted from this view".to_string());
             return;
         }
-        let node = self.tree.node_for(&index_path);
+        // Exact: a delete queued against a path that no longer resolves
+        // must not silently describe whatever now sits at those indices.
+        let Some(node) = self.tree.node_for(&index_path) else {
+            self.status = Some("That item is no longer there".to_string());
+            return;
+        };
         self.pending_delete = Some(PendingDelete {
             index_path,
             name: node.name.clone(),
@@ -139,7 +144,7 @@ impl GuiApp {
         // before handing a path to `remove_dir_all`. Deleting the wrong
         // thing is not an error worth being clever about recovering
         // from.
-        let Some(node) = self.tree.try_node_for(&pending.index_path) else {
+        let Some(node) = self.tree.node_for(&pending.index_path) else {
             self.status = Some(format!(
                 "{} is no longer where it was; nothing was deleted",
                 pending.name.to_string_lossy()
@@ -153,7 +158,13 @@ impl GuiApp {
             ));
             return Ok(());
         }
-        let path = self.tree.path_for(&pending.index_path);
+        let Some(path) = self.tree.path_for(&pending.index_path) else {
+            self.status = Some(format!(
+                "{} is no longer where it was; nothing was deleted",
+                pending.name.to_string_lossy()
+            ));
+            return Ok(());
+        };
         if pending.permanent {
             if pending.is_dir {
                 std::fs::remove_dir_all(&path)?;
@@ -183,7 +194,13 @@ impl GuiApp {
         if !pending.is_dir {
             return Ok(());
         }
-        let path = self.tree.path_for(&pending.index_path);
+        let Some(path) = self.tree.path_for(&pending.index_path) else {
+            self.status = Some(format!(
+                "{} is no longer where it was; nothing was emptied",
+                pending.name.to_string_lossy()
+            ));
+            return Ok(());
+        };
         // Enumerate every direct child *before* deleting anything. A
         // listing missing entries (a race with something deleting them, a
         // flaky mount) must not be acted on as if it were complete — the

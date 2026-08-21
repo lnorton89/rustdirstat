@@ -44,7 +44,7 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
 
             let mut full_idx = base.clone();
             full_idx.extend(&hit.index_path);
-            let full_path = app.tree.path_for(&full_idx);
+            let full_path = app.tree.deepest_valid_path(&full_idx);
             let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
             let suffix = if hit.is_dir { "/" } else { "" };
 
@@ -124,7 +124,7 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
                 )))
             }
             DupRow::Member { index_path } => {
-                let full_path = app.tree.path_for(index_path);
+                let full_path = app.tree.deepest_valid_path(index_path);
                 let rel = full_path.strip_prefix(&root_path).unwrap_or(&full_path);
                 ListItem::new(Line::from(vec![
                     Span::raw("    "),
@@ -287,7 +287,7 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
 
             let mut full_idx = base.clone();
             full_idx.extend(&tf.index_path);
-            let full_path = app.tree.path_for(&full_idx);
+            let full_path = app.tree.deepest_valid_path(&full_idx);
             let rel = full_path.strip_prefix(&base_path).unwrap_or(&full_path);
 
             let mut spans = size_bar(shown_size, max_size, BAR_WIDTH, color);

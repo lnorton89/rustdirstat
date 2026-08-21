@@ -33,7 +33,7 @@ this design.
 | File | What it owns |
 | --- | --- |
 | `src/scanner.rs` | The parallel filesystem walk. Falls back to single-threaded below `PAR_THRESHOLD` entries per directory. Reports live counts through a lock-free `Progress`. Materializes owned `EntryInfo` records and drops each `DirEntry` before scanning its children, so a deep tree cannot exhaust Unix `RLIMIT_NOFILE`. Stays on the root's filesystem by default — crossing a mount point needs `--cross-filesystems`. |
-| `src/model.rs` | `Node`, `Tree`, and `SortMode`/`sort_nodes` — the order siblings are listed in, which lives here because both front ends and the persisted config need it. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` stop at the deepest node that exists rather than indexing off the end. `Node.file_id` is the filesystem object identity captured at scan time (`(st_dev, st_ino)` on Unix, volume serial + file ID on Windows) — what makes hard-link aliases distinguishable from real duplicate content. |
+| `src/model.rs` | `Node`, `Tree`, and `SortMode`/`sort_nodes` — the order siblings are listed in, which lives here because both front ends and the persisted config need it. Aggregates (`size`, `file_count`, `dir_count`, `ext_totals`) are computed bottom-up at scan time so browsing never re-walks a subtree. `Node`'s `Drop` is iterative: the derived one recurses per level, so freeing a deep tree overflowed the stack. `path_for`/`node_for` are exact (`None` on a stale path) with forgiving `deepest_valid_node`/`deepest_valid_path`/`valid_prefix` for display. `Node.file_id` is the filesystem object identity captured at scan time (`(st_dev, st_ino)` on Unix, volume serial + file ID on Windows) — what makes hard-link aliases distinguishable from real duplicate content. |
 | `src/treemap.rs` | The squarified treemap algorithm (Bruls/Huizing/van Wijk), on an abstract integer grid. Rounds rectangle *edges*, not width/height, so siblings cannot round into a gap or an overlap. |
 | `src/color.rs` | Extension → `Category` mapping, the category palette, and `extension_hue` — the one place an extension's colour is decided, so a file is the same colour in the terminal and in the window. It normalises its input, since the GUI holds `.mkv` and the TUI holds `mkv`. |
 | `src/duplicates.rs` | Size-bucketed, blake3-hashed duplicate detection, hard-link aware: two names for one inode are never reported as reclaimable duplicates. |
@@ -66,8 +66,13 @@ pointing somewhere else entirely — sibling order is not stable between
 scans — so the GUI restores zoom/selection/expansion by *name*: it
 captures the lossless `OsString` components before replacing the tree and
 resolves them against the new one, landing on the same directory rather
-than the same index. `path_for`/`node_for` still stop at the deepest node
-that exists, for the few callers holding a path that may have gone stale.
+than the same index. Lookups are exact by default — `path_for` returns
+`Option<PathBuf>` and `node_for` returns `Option<&Node>`, `None` when the
+path runs off the end of the tree — because a destructive operation that
+resolved forgivingly would act on a *different* directory than the one
+the user pointed at. The forgiving forms (`deepest_valid_node`,
+`deepest_valid_path`, `valid_prefix`) exist for display and navigation,
+and are named so no one reaches for them in mutation code by accident.
 
 ## GUI (`src/gui/`)
 

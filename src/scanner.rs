@@ -121,7 +121,7 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
             is_dir: false,
             is_symlink: meta.file_type().is_symlink(),
             size: meta.len(),
-            physical_size: crate::platform::physical_size(&meta),
+            physical_size: crate::platform::physical_size(&meta, root),
             file_count: 1,
             dir_count: 0,
             modified: meta.modified().ok(),
@@ -229,7 +229,7 @@ fn scan_dir(
         if entry.metadata.file_type().is_dir() {
             return scan_dir(&entry.path, ename, progress, depth + 1, root_dev);
         }
-        let (node, files, bytes) = leaf_node(&entry.metadata, ename);
+        let (node, files, bytes) = leaf_node(&entry.metadata, ename, &entry.path);
         *local_files += files;
         *local_bytes += bytes;
         node
@@ -388,7 +388,7 @@ fn scan_dir_deep(
             }
             continue;
         }
-        let (node, files, bytes) = leaf_node(&entry.metadata, ename);
+        let (node, files, bytes) = leaf_node(&entry.metadata, ename, &entry.path);
         frame.local_files += files;
         frame.local_bytes += bytes;
         frame.children.push(node);
@@ -489,8 +489,10 @@ fn unreadable_dir(
 }
 
 /// A non-directory entry, with what it contributes to its parent's
-/// running file and byte counts.
-fn leaf_node(meta: &std::fs::Metadata, name: OsString) -> (Node, u64, u64) {
+/// running file and byte counts. `path` is only for platforms whose
+/// physical size needs the real path (Windows) — Unix reads it straight
+/// off the metadata.
+fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u64, u64) {
     if meta.file_type().is_symlink() {
         return (
             Node {
@@ -520,7 +522,7 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString) -> (Node, u64, u64) {
             is_dir: false,
             is_symlink: false,
             size: meta.len(),
-            physical_size: crate::platform::physical_size(meta),
+            physical_size: crate::platform::physical_size(meta, path),
             file_count: 1,
             dir_count: 0,
             modified: meta.modified().ok(),
@@ -753,7 +755,7 @@ mod tests {
         };
         assert_eq!(
             tree.path_for(&[0]),
-            root.join(bad_name),
+            Some(root.join(bad_name)),
             "the reconstructed path must be the exact real path"
         );
 
@@ -806,8 +808,12 @@ mod tests {
             volume_free: None,
             volume_total: None,
         };
-        let first = tree.path_for(&[0]);
-        let second = tree.path_for(&[1]);
+        let first = tree
+            .path_for(&[0])
+            .ok_or_else(|| std::io::Error::other("the first path must resolve"))?;
+        let second = tree
+            .path_for(&[1])
+            .ok_or_else(|| std::io::Error::other("the second path must resolve"))?;
         assert_ne!(first, second, "each path must reach its own file");
         assert!(first.exists(), "the first path must be real");
         assert!(second.exists(), "the second path must be real");

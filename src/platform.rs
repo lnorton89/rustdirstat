@@ -52,7 +52,7 @@ pub fn file_id(_meta: &std::fs::Metadata) -> Option<FileId> {
 }
 
 #[cfg(unix)]
-pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
+pub fn physical_size(meta: &std::fs::Metadata, _path: &std::path::Path) -> u64 {
     use std::os::unix::fs::MetadataExt;
     // st_blocks is always in 512-byte units regardless of the filesystem's
     // actual block size (POSIX convention, not configurable). Saturating
@@ -62,8 +62,48 @@ pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
     meta.blocks().saturating_mul(512)
 }
 
-#[cfg(not(unix))]
-pub fn physical_size(meta: &std::fs::Metadata) -> u64 {
+#[cfg(windows)]
+pub fn physical_size(meta: &std::fs::Metadata, path: &std::path::Path) -> u64 {
+    // True on-disk size: for an NTFS compressed or sparse file this is
+    // less than the logical size, which is the whole point of the
+    // toggle. The scanner already has `path`, so the extra syscall is
+    // the only cost. Falls back to the logical size when the call
+    // fails (a file that cannot be opened, a directory) — the failure
+    // path may not be exact, but the normal path no longer lies about
+    // being physical.
+    win_compressed_size(path).unwrap_or(meta.len())
+}
+
+/// Safe leaf wrapper over `GetCompressedFileSizeW`, and the only
+/// `unsafe` this physical-size path carries.
+///
+/// Returns the actual on-disk byte count for `path` — the compressed
+/// size of an NTFS compressed file, the allocated size of a sparse one,
+/// the logical size otherwise — or `None` when the call fails (a file
+/// that cannot be opened, a directory). Marshalling is entirely outside
+/// the `unsafe` block, which holds the call and nothing else.
+#[cfg(windows)]
+fn win_compressed_size(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetCompressedFileSizeW;
+
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let mut high: u32 = 0;
+    // SAFETY: `wide` is a NUL-terminated wide string valid for the
+    // duration of the call, and `high` is a live `u32` the callee writes
+    // only when the call succeeds.
+    let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
+    // `INVALID_FILE_SIZE` marks failure; the high part is undefined
+    // then, so the combined value is only meaningful on success.
+    if low == u32::MAX {
+        return None;
+    }
+    Some(((high as u64) << 32) | low as u64)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn physical_size(meta: &std::fs::Metadata, _path: &std::path::Path) -> u64 {
     meta.len()
 }
 
@@ -169,5 +209,80 @@ mod imp {
 mod imp {
     pub(super) fn volume_space(_path: &std::path::Path) -> (Option<u64>, Option<u64>) {
         (None, None)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// The FFI plumbing: a freshly written, uncompressed file reports
+    /// its own logical size (the documented behavior of
+    /// `GetCompressedFileSizeW` for files that are neither compressed
+    /// nor sparse), and the wrapper comes back with a real number
+    /// rather than `0` or garbage from a mistyped signature.
+    #[test]
+    fn a_normal_file_reports_its_logical_size_as_physical() -> std::io::Result<()> {
+        let dir = crate::util::scratch_dir("physsize", "normal");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let file = dir.join("plain.bin");
+        std::fs::write(&file, vec![0u8; 4096])?;
+        let meta = std::fs::metadata(&file)?;
+        assert_eq!(
+            physical_size(&meta, &file),
+            meta.len(),
+            "a non-compressed, non-sparse file occupies its logical size"
+        );
+        assert!(win_compressed_size(&file).is_some());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// A sparse file reports less than its logical size — the assertion
+    /// that actually distinguishes the real implementation from the old
+    /// `meta.len()` one, which would report the full 64 MB either way.
+    ///
+    /// Best-effort: making a file sparse needs `fsutil` and an NTFS
+    /// volume, which a CI temp dir is not guaranteed to be. If the
+    /// sparse marking fails the test passes without asserting, so it
+    /// cannot be flaky — only blind on non-NTFS.
+    #[test]
+    fn a_sparse_file_reports_less_than_its_logical_size() -> std::io::Result<()> {
+        use std::process::Command;
+        let dir = crate::util::scratch_dir("physsize", "sparse");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let file = dir.join("sparse.bin");
+        let f = std::fs::File::create(&file)?;
+        f.set_len(64 * 1024 * 1024)?;
+        drop(f);
+        let marked = Command::new("fsutil")
+            .args(["sparse", "setflag"])
+            .arg(&file)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if marked {
+            let ranged = Command::new("fsutil")
+                .args(["sparse", "setrange"])
+                .arg(&file)
+                .args(["0", "67108864"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ranged {
+                let meta = std::fs::metadata(&file)?;
+                let physical = physical_size(&meta, &file);
+                assert!(
+                    physical < meta.len(),
+                    "a fully sparse file must occupy far less than its \
+                     logical size: logical {}, physical {physical}",
+                    meta.len()
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 }

@@ -9,9 +9,9 @@
 //! Everything that reaches outside the app: deleting, emptying,
 //! moving, exporting, and running a Windows maintenance tool.
 //!
-//! A queued deletion is resolved through `try_node_for` before anything
+//! A queued deletion is resolved exactly (`node_for`) before anything
 //! is removed. An index path only means something against the tree it
-//! came from, and the infallible lookup answers about the deepest node
+//! came from, and the forgiving lookup answers about the deepest node
 //! that exists — which for a delete would mean acting on the parent.
 
 use super::*;
@@ -249,7 +249,9 @@ impl App {
 
         let mut full_index_path = self.path_indices.clone();
         full_index_path.push(orig_idx);
-        let source = self.tree.path_for(&full_index_path);
+        let Some(source) = self.tree.path_for(&full_index_path) else {
+            return;
+        };
 
         let dest_base = std::path::PathBuf::from(&dest_input);
         let dest = if dest_base.is_dir() {
@@ -275,16 +277,19 @@ impl App {
 
         let mut full_index_path = self.path_indices.clone();
         full_index_path.push(pending.orig_idx);
-        // Resolved fallibly, before anything is deleted. An index path
+        // Resolved exactly, before anything is deleted. An index path
         // only means something against the tree it was taken from, and
-        // `node_for` answers about the deepest node that does exist —
-        // which for a delete would mean confirming against the *parent*
-        // directory and removing that instead.
-        let Some(target) = self.tree.try_node_for(&full_index_path) else {
+        // the forgiving form would answer about the deepest node that
+        // does exist — which for a delete would mean confirming against
+        // the *parent* directory and removing that instead.
+        let Some(target) = self.tree.node_for(&full_index_path) else {
             self.message = Some(STALE_TARGET.to_string());
             return Ok(());
         };
-        let path = self.tree.path_for(&full_index_path);
+        let Some(path) = self.tree.path_for(&full_index_path) else {
+            self.message = Some(STALE_TARGET.to_string());
+            return Ok(());
+        };
 
         let is_dir = target.is_dir;
         let removed = Removed::deleting(target);
@@ -332,11 +337,14 @@ impl App {
         full_index_path.push(pending.orig_idx);
         // Same as `confirm_delete`: a stale path must not resolve to the
         // nearest surviving ancestor and empty *that*.
-        let Some(target) = self.tree.try_node_for(&full_index_path) else {
+        let Some(target) = self.tree.node_for(&full_index_path) else {
             self.message = Some(STALE_TARGET.to_string());
             return Ok(());
         };
-        let path = self.tree.path_for(&full_index_path);
+        let Some(path) = self.tree.path_for(&full_index_path) else {
+            self.message = Some(STALE_TARGET.to_string());
+            return Ok(());
+        };
 
         let removed = Removed::emptying(target);
 

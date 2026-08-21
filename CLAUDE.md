@@ -351,7 +351,12 @@ other devices compared against the root volume's free space would be a
 category error. And scan-time identity is why a rescan restores the
 GUI's zoom/selection/expansion by *name* components rather than by the
 `Vec<usize>` indices, which only mean anything against the tree they
-were taken from.
+were taken from. Tree lookups are exact by default — `node_for` /
+`path_for` return `Option`, `None` on a stale path — and the forgiving
+`deepest_valid_node` / `deepest_valid_path` / `valid_prefix` exist for
+display and navigation only. A destructive operation that resolved
+forgivingly would act on a *different* directory than the one the user
+pointed at.
 
 **Neither front end may reach into the other.** Anything both need
 lives at the crate root: `search`, `top_files`, `color`, `stats`,

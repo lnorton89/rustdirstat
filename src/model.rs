@@ -351,52 +351,77 @@ impl Tree {
     /// Reconstruct the absolute path of the node reached by following
     /// `index_path` (child indices, root to leaf) from the root.
     ///
-    /// An index path that runs off the end of the tree stops at the
-    /// deepest node that does exist. It used to index `children`
+    /// Exact: `None` if the path runs off the end of the tree. An index
+    /// path only means anything against the tree it was taken from, and
+    /// the tree can be replaced under a held path by a rescan — the
+    /// exact form is the one a destructive operation can trust, because
+    /// the alternative (truncating to the deepest node that exists) is
+    /// how a stale path used to resolve to a *different directory* than
+    /// the one the user pointed at. Display code that would rather show
+    /// the deepest reachable place than nothing uses
+    /// [`Self::deepest_valid_path`]. It used to index `children`
     /// directly and panic instead — the crate denies `panic!`, but `[]`
-    /// walks straight past that, and a stale path outliving a rescan is
-    /// the ordinary way to get one. Use [`Self::try_node_for`] where
-    /// telling a stale path from a live one actually matters.
-    pub fn path_for(&self, index_path: &[usize]) -> PathBuf {
+    /// walks straight past that.
+    pub fn path_for(&self, index_path: &[usize]) -> Option<PathBuf> {
         let mut path = self.root_path.clone();
         let mut node = &self.root;
         for &idx in index_path {
-            let Some(child) = node.children.get(idx) else {
-                break;
-            };
+            let child = node.children.get(idx)?;
             node = child;
             path.push(&node.name);
         }
-        path
+        Some(path)
     }
 
-    /// The node `index_path` leads to, or the deepest one that exists if
-    /// it leads past the end. See [`Self::path_for`].
-    pub fn node_for(&self, index_path: &[usize]) -> &Node {
-        let mut node = &self.root;
-        for &idx in index_path {
-            let Some(child) = node.children.get(idx) else {
-                break;
-            };
-            node = child;
-        }
-        node
-    }
-
-    /// [`Self::node_for`] for index paths that may no longer be valid.
-    ///
-    /// An index path only means anything against the tree it was taken
-    /// from. Anything that held one across a rescan — a queued deletion,
-    /// a restored selection — is asking about a tree that no longer
-    /// exists, and indexing straight into `children` would either panic
-    /// or, worse, silently answer about whatever now occupies those
-    /// indices.
-    pub fn try_node_for(&self, index_path: &[usize]) -> Option<&Node> {
+    /// The node `index_path` leads to, or `None` if it runs off the end
+    /// of the tree. Exact, like [`Self::path_for`] — see its doc for why
+    /// the forgiving form lives under an awkward name instead.
+    pub fn node_for(&self, index_path: &[usize]) -> Option<&Node> {
         let mut node = &self.root;
         for &idx in index_path {
             node = node.children.get(idx)?;
         }
         Some(node)
+    }
+
+    /// The longest prefix of `index_path` that exists in this tree.
+    ///
+    /// The forgiving primitive the exact lookups refuse to be: where
+    /// [`Self::node_for`]/[`Self::path_for`] answer `None`, this answers
+    /// the deepest place the path still reaches. Display code uses it so
+    /// a stale path shows the thing it now points at rather than
+    /// nothing; mutation code must not, for exactly the reason
+    /// [`Self::path_for`] spells out.
+    pub fn valid_prefix(&self, index_path: &[usize]) -> Vec<usize> {
+        let mut valid = Vec::new();
+        let mut node = &self.root;
+        for &idx in index_path {
+            let Some(child) = node.children.get(idx) else {
+                break;
+            };
+            valid.push(idx);
+            node = child;
+        }
+        valid
+    }
+
+    /// Forgiving: the node `index_path` leads to, or the deepest one
+    /// that exists. Display and navigation only — a mutation that
+    /// resolved through this would act on a different directory than the
+    /// one the user pointed at. See [`Self::valid_prefix`].
+    pub fn deepest_valid_node(&self, index_path: &[usize]) -> &Node {
+        let prefix = self.valid_prefix(index_path);
+        // The prefix is valid by construction, so this is always `Some`;
+        // the fallback exists to keep the function total, not because it
+        // can be reached.
+        self.node_for(&prefix).unwrap_or(&self.root)
+    }
+
+    /// Forgiving: the path of the deepest node `index_path` reaches.
+    pub fn deepest_valid_path(&self, index_path: &[usize]) -> PathBuf {
+        let prefix = self.valid_prefix(index_path);
+        self.path_for(&prefix)
+            .unwrap_or_else(|| self.root_path.clone())
     }
 
     /// True only when the scan root is an actual filesystem/volume root
@@ -582,7 +607,8 @@ mod tests {
     use super::*;
 
     /// An index path outliving the tree it was taken from must not take
-    /// the process down with it.
+    /// the process down with it, and must not quietly answer about a
+    /// different directory.
     ///
     /// Both helpers used to index `children` directly. The crate denies
     /// `panic!`, but `[]` is not a `panic!` call and slipped past the
@@ -593,15 +619,19 @@ mod tests {
         let tree = Tree::placeholder(PathBuf::from("root"));
 
         // The root has no children at all, so every one of these indices
-        // is past the end.
-        assert_eq!(tree.path_for(&[0]), PathBuf::from("root"));
-        assert_eq!(tree.path_for(&[3, 7, 11]), PathBuf::from("root"));
-        assert_eq!(tree.node_for(&[0]).name, tree.root.name);
-        assert_eq!(tree.node_for(&[3, 7, 11]).name, tree.root.name);
+        // is past the end. The exact forms say so rather than inventing
+        // an answer about the root or anything else.
+        assert_eq!(tree.path_for(&[0]), None);
+        assert_eq!(tree.path_for(&[3, 7, 11]), None);
+        assert!(tree.node_for(&[0]).is_none());
+        assert!(tree.node_for(&[3, 7, 11]).is_none());
+        assert!(tree.node_for(&[]).is_some());
 
-        // And the fallible form still reports the path as gone rather
-        // than quietly answering about the root.
-        assert!(tree.try_node_for(&[0]).is_none());
-        assert!(tree.try_node_for(&[]).is_some());
+        // The forgiving forms exist, and are explicit about being
+        // forgiving: the deepest node the stale path reaches is the
+        // root.
+        assert_eq!(tree.valid_prefix(&[0]), Vec::<usize>::new());
+        assert_eq!(tree.deepest_valid_node(&[3, 7, 11]).name, tree.root.name);
+        assert_eq!(tree.deepest_valid_path(&[3, 7, 11]), PathBuf::from("root"));
     }
 }
