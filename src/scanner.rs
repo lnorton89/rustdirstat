@@ -823,6 +823,20 @@ mod tests {
         Ok(())
     }
 
+    /// `Ok(true)` if the filesystem refused the name outright. APFS
+    /// (macOS) enforces UTF-8 filenames and fails such a create with
+    /// `EILSEQ` — on a filesystem that cannot *hold* a non-UTF-8 name,
+    /// the collision the non-UTF-8 tests guard against cannot exist, so
+    /// they skip rather than fail. Any other error is a real failure.
+    #[cfg(unix)]
+    fn filesystem_rejected_name(result: std::io::Result<()>) -> std::io::Result<bool> {
+        match result {
+            Ok(()) => Ok(false),
+            Err(error) if error.raw_os_error() == Some(libc::EILSEQ) => Ok(true),
+            Err(error) => Err(error),
+        }
+    }
+
     /// A name that is not valid UTF-8 survives the scan and reconstructs
     /// to the exact bytes — the whole point of `OsString` names.
     ///
@@ -840,7 +854,10 @@ mod tests {
         fs::create_dir_all(&root)?;
         // The literal bytes a\xFFb — a name no UTF-8 string can express.
         let bad_name = std::ffi::OsStr::from_bytes(b"a\xFFb");
-        fs::write(root.join(bad_name), b"payload")?;
+        if filesystem_rejected_name(fs::write(root.join(bad_name), b"payload"))? {
+            fs::remove_dir_all(&root)?;
+            return Ok(());
+        }
 
         let node = scan_dir(&root, OsString::from("root"), None, 0, None);
         let Some(child) = node.children.first() else {
@@ -882,7 +899,10 @@ mod tests {
         // character in a valid name) are different files that print
         // identically after a lossy conversion.
         let invalid = std::ffi::OsStr::from_bytes(b"a\xFF");
-        fs::write(root.join(invalid), b"one")?;
+        if filesystem_rejected_name(fs::write(root.join(invalid), b"one"))? {
+            fs::remove_dir_all(&root)?;
+            return Ok(());
+        }
         fs::write(root.join("a\u{FFFD}"), b"two")?;
 
         let node = scan_dir(&root, OsString::from("root"), None, 0, None);
