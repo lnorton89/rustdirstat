@@ -344,7 +344,14 @@ blocked during a confirmation.
 The exception is **Properties** (`src/gui/ui/properties.rs`), which is an
 `egui::Window` on purpose: it describes the current selection, and the
 way people use it is to leave it open while clicking through the tree,
-which a modal forbids. It lives in `app.properties`, separate from
+which a modal forbids. It also has to *earn* that place — an inspector
+that repeats the columns is a second copy of the highlighted row. What it
+shows is what a grid cannot: the full path, both sizes at once with the
+gap between them named, the share of the volume, a folder's own category
+breakdown, and the things nobody can store per node because there are
+nine million of them — link count, created and accessed times,
+attributes, asked of the filesystem once per selection and cached against
+it. It lives in `app.properties`, separate from
 `app.modal`, so `modal_is_open` stays false and every shortcut keeps
 working while it is up — `shortcuts_still_work_while_the_inspector_is_open`
 and `the_properties_window_leaves_the_app_usable` pin both halves.

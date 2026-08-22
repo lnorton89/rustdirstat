@@ -4281,3 +4281,91 @@ fn a_cleanup_refuses_a_selection_that_no_longer_resolves() {
         "a path that does not resolve is not a target"
     );
 }
+
+/// The inspector shows things the grid does not.
+///
+/// Its reason to exist. The directory columns already carry name, size,
+/// files, subfolders, last change and two percentages; an inspector that
+/// repeated them would be a second copy of the highlighted row. This
+/// pins the parts that are only here: the full path, both sizes at once
+/// with the gap between them named, the share of the volume, and what
+/// the filesystem says about the item right now.
+#[test]
+fn the_inspector_shows_what_the_columns_cannot() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "inspector_facts");
+    std::fs::create_dir_all(&root)?;
+    std::fs::write(root.join("one.bin"), vec![b'x'; 3_000])?;
+
+    let tree = crate::scanner::scan_to_completion(&root)?;
+    let mut app = GuiApp::new(tree);
+    app.selected_path = Some(vec![0]);
+
+    // Facts from the filesystem, not from the scan.
+    let facts = app.selected_item_facts();
+    assert!(
+        facts.link_count.is_some(),
+        "an inspector can afford to ask how many names a file has"
+    );
+    assert!(
+        facts.created.is_some() || facts.accessed.is_some(),
+        "and when it was created or last read — neither is stored per node"
+    );
+
+    // Shares the grid does not offer: of the folder, of the scan, and —
+    // where the volume is known — of the volume.
+    let shares = app.selection_shares();
+    assert!(
+        shares.iter().any(|(label, _)| *label == "Of the scan"),
+        "expected a share of the scan, got {shares:?}"
+    );
+
+    // And the sizes side by side, which is what makes the gap visible.
+    let Some(node) = app.selected_node() else {
+        anyhow::bail!("the selection should resolve");
+    };
+    assert_eq!(node.size, 3_000, "logical size is what was written");
+    assert!(
+        node.physical_size > 0,
+        "and the on-disk size is known alongside it"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// Asking the filesystem happens when the selection moves, not per frame.
+///
+/// A draw path that stats the selected item every frame is file I/O
+/// inside an 8.33 ms budget. The cache is keyed by the path it describes.
+#[test]
+fn the_inspector_asks_the_filesystem_once_per_selection() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "inspector_cache");
+    std::fs::create_dir_all(&root)?;
+    std::fs::write(root.join("one.bin"), vec![b'x'; 10])?;
+    std::fs::write(root.join("two.bin"), vec![b'y'; 20])?;
+
+    let tree = crate::scanner::scan_to_completion(&root)?;
+    let mut app = GuiApp::new(tree);
+    app.selected_path = Some(vec![0]);
+    let first = app.selected_item_facts();
+    let again = app.selected_item_facts();
+    assert_eq!(first, again, "the same selection gives the same answer");
+
+    // Deleting the file behind the selection does not change the cached
+    // answer — which is the observable proof that nothing was re-read.
+    let name = app
+        .selected_node()
+        .map(|node| node.name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    std::fs::remove_file(root.join(&name))?;
+    let cached = app.selected_item_facts();
+    assert_eq!(
+        cached, first,
+        "a still selection re-reads nothing, so the answer is the cached one"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}

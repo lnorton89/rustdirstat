@@ -268,6 +268,11 @@ pub(in crate::gui) struct GuiApp {
     /// opened. See [`crate::cleanups`].
     pub(in crate::gui) cleanups: Vec<crate::cleanups::Cleanup>,
     pub properties: PropertiesWindow,
+    /// The filesystem's own answer about the selected item, kept until
+    /// the selection moves. `RefCell` because the inspector reads it from
+    /// a draw path that holds `&GuiApp`, and the alternative — asking on
+    /// every frame — is file I/O inside the frame budget.
+    item_facts: std::cell::RefCell<Option<(PathBuf, crate::platform::ItemFacts)>>,
     pub backdrop: Backdrop,
     pub theme_id: String,
     /// Resolved from `theme_id`. Cached rather than looked up per frame
@@ -368,6 +373,7 @@ impl GuiApp {
             modal: None,
             cleanups: config.cleanups.clone(),
             properties: PropertiesWindow::from_config(&config),
+            item_facts: std::cell::RefCell::new(None),
             backdrop: Backdrop::Idle,
             theme_id: theme_id.clone(),
             palette: super::ui::palette_for(&theme_id),

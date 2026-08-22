@@ -180,6 +180,105 @@ pub fn physical_size(meta: &std::fs::Metadata, _path: &std::path::Path) -> u64 {
 }
 
 /// Free and total bytes on the volume containing `path`, if determinable.
+/// What one *selected* item is worth asking the filesystem directly.
+///
+/// None of this is stored per node, and none of it could be: a scan holds
+/// nine million of them and a byte per node is megabytes. An inspector
+/// looks at one item at a time and changes only when the selection does,
+/// so it can afford a syscall the scan cannot — which is most of what
+/// makes an inspector worth having rather than a second copy of the
+/// columns already on screen.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ItemFacts {
+    /// How many names this file has. `Some(1)` is the ordinary answer;
+    /// anything higher means its bytes are reachable through another
+    /// path, and are counted again under it.
+    pub link_count: Option<u64>,
+    pub created: Option<std::time::SystemTime>,
+    pub accessed: Option<std::time::SystemTime>,
+    pub read_only: bool,
+    /// Windows file attributes worth naming: hidden, system, compressed,
+    /// encrypted, sparse. Empty elsewhere.
+    pub attributes: Vec<&'static str>,
+}
+
+/// Asks the filesystem about one item.
+///
+/// Best-effort by design: a file that vanished between being scanned and
+/// being selected returns the default rather than an error, because an
+/// inspector reporting nothing is better than an inspector refusing to
+/// draw.
+pub fn item_facts(path: &std::path::Path) -> ItemFacts {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return ItemFacts::default();
+    };
+    let mut facts = ItemFacts {
+        created: meta.created().ok(),
+        accessed: meta.accessed().ok(),
+        read_only: meta.permissions().readonly(),
+        ..ItemFacts::default()
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        facts.link_count = Some(meta.nlink());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_COMPRESSED, FILE_ATTRIBUTE_ENCRYPTED, FILE_ATTRIBUTE_HIDDEN,
+            FILE_ATTRIBUTE_SPARSE_FILE, FILE_ATTRIBUTE_SYSTEM,
+        };
+        let bits = meta.file_attributes();
+        for (flag, label) in [
+            (FILE_ATTRIBUTE_HIDDEN, "hidden"),
+            (FILE_ATTRIBUTE_SYSTEM, "system"),
+            (FILE_ATTRIBUTE_COMPRESSED, "compressed"),
+            (FILE_ATTRIBUTE_ENCRYPTED, "encrypted"),
+            (FILE_ATTRIBUTE_SPARSE_FILE, "sparse"),
+        ] {
+            if bits & flag != 0 {
+                facts.attributes.push(label);
+            }
+        }
+        // The link count needs a handle, which is why the *scan* never
+        // asks for it — but one open for one selected file is nothing.
+        facts.link_count = win_link_count(path);
+    }
+    facts
+}
+
+/// Safe leaf wrapper: how many names an open file has.
+#[cfg(windows)]
+fn win_link_count(path: &std::path::Path) -> Option<u64> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    // A directory needs backup semantics to open at all; a file does not
+    // mind them, so one path serves both.
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .ok()?;
+    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: the handle comes from a live `File`, so it is open for the
+    // duration of the call, and `info` is a live out-parameter the callee
+    // writes only on success.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+    if ok == 0 {
+        return None;
+    }
+    // SAFETY: the callee reported success, so the struct is initialized.
+    let info = unsafe { info.assume_init() };
+    Some(u64::from(info.nNumberOfLinks))
+}
+
 /// A place a scan can be pointed at, as offered by the picker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Volume {

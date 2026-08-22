@@ -207,6 +207,69 @@ impl GuiApp {
             .map(|p| self.tree.deepest_valid_node(p))
     }
 
+    /// What the filesystem says about the selected item, asked once per
+    /// selection rather than once per frame.
+    ///
+    /// An inspector can afford a syscall the scan cannot: it looks at one
+    /// item, and only when that item changes. Cached against the path it
+    /// describes so a still window does no I/O at all — the same rule the
+    /// row and tile caches follow, for the same reason.
+    pub(in crate::gui) fn selected_item_facts(&self) -> crate::platform::ItemFacts {
+        let Some(path) = self.selected_fs_path() else {
+            return crate::platform::ItemFacts::default();
+        };
+        let mut cache = self.item_facts.borrow_mut();
+        if cache
+            .as_ref()
+            .map(|(seen, _)| seen != &path)
+            .unwrap_or(true)
+        {
+            *cache = Some((path.clone(), crate::platform::item_facts(&path)));
+        }
+        cache
+            .as_ref()
+            .map(|(_, facts)| facts.clone())
+            .unwrap_or_default()
+    }
+
+    /// What share of its parent, the scan, and the volume the selection
+    /// is.
+    ///
+    /// The grid shows the first two; the third is the one an inspector
+    /// can add, and it is the one that answers "is this worth deleting".
+    pub(in crate::gui) fn selection_shares(&self) -> Vec<(&'static str, f64)> {
+        let Some(path) = self.selected_path.as_deref() else {
+            return Vec::new();
+        };
+        let Some(node) = self.tree.node_for(path) else {
+            return Vec::new();
+        };
+        let size = node.effective_size(self.use_physical) as f64;
+        let mut shares = Vec::new();
+        if let Some(parent) = path
+            .split_last()
+            .and_then(|(_, rest)| self.tree.node_for(rest))
+        {
+            let whole = parent.effective_size(self.use_physical) as f64;
+            if whole > 0.0 {
+                shares.push(("Of its folder", size / whole * 100.0));
+            }
+        }
+        let scanned = self.tree.root.effective_size(self.use_physical) as f64;
+        if scanned > 0.0 {
+            shares.push(("Of the scan", size / scanned * 100.0));
+        }
+        if let Some(total) = self
+            .tree
+            .root_for(path)
+            .and_then(|root| root.volume_total)
+            .filter(|total| *total > 0)
+        {
+            shares.push(("Of the volume", size / total as f64 * 100.0));
+        }
+        shares
+    }
+
     pub(in crate::gui) fn selected_fs_path(&self) -> Option<PathBuf> {
         self.selected_path
             .as_deref()
