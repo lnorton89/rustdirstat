@@ -261,6 +261,30 @@ exact command, after substitution.
 The reasoning, including what a hostile file name can and cannot do here,
 is in [`docs/CLEANUPS_THREAT_MODEL.md`](docs/CLEANUPS_THREAT_MODEL.md).
 
+## Language
+
+The window reads its text from a message catalogue. English ships
+compiled in; anything else is a file you drop into `lang/` beside the
+config, named for its language tag:
+
+```
+<config>/rustdirstat/lang/de.toml
+```
+
+A translation is a copy of [`assets/lang/en.toml`](assets/lang/en.toml)
+with the right-hand sides replaced. **Partial translations are useful**:
+any key a catalogue does not define falls back to English, so ten
+translated lines are ten translated lines rather than a broken UI. Pick
+the language under *Appearance*; the choice is remembered.
+
+`assets/lang/de.toml` is a deliberately partial German catalogue — enough
+to see the mechanism working end to end, and a starting point for anyone
+who wants to finish it.
+
+Coverage today is the menus, the view names, the status bar, the settings
+pages and the Properties inspector. The rest of the app is still English
+literals; `docs/ROADMAP.md` names the modules that remain.
+
 ## Preferences
 
 Sort order, the treemap panel's visibility and width, the detail-row

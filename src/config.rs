@@ -56,6 +56,13 @@ pub struct Config {
     pub gui_properties_open: Option<bool>,
     #[serde(default)]
     pub gui_properties_pos: Option<Vec<f32>>,
+    /// The language tag the UI was last set to (`en`, `de`, …).
+    ///
+    /// A tag with no catalogue selects English rather than failing, which
+    /// is what a removed translation should look like from the user's
+    /// side. See [`crate::i18n`].
+    #[serde(default)]
+    pub language: Option<String>,
     /// User-defined cleanup commands.
     ///
     /// Empty unless the user wrote some: shipping defaults would be
@@ -119,6 +126,7 @@ fn parse(text: &str) -> Config {
         // not discard the rest of a config, and a malformed *list* means
         // no cleanups rather than no preferences.
         cleanups: field(&table, "cleanups").unwrap_or_default(),
+        language: field(&table, "language"),
         gui_theme: field(&table, "gui_theme"),
     }
 }

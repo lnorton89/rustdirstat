@@ -31,6 +31,8 @@ use crate::gui::icons::Icon;
 use crate::util::{format_modified, human_bytes, thousands};
 use eframe::egui::{self, RichText, Vec2};
 
+use crate::i18n::tr;
+
 use super::theme::*;
 use super::widgets::*;
 
@@ -65,7 +67,7 @@ pub(super) fn draw_properties_window(app: &mut GuiApp, ctx: &egui::Context) {
             color: egui::Color32::from_black_alpha(if palette.mode.is_dark() { 140 } else { 50 }),
         });
 
-    let mut window = egui::Window::new("Properties")
+    let mut window = egui::Window::new(crate::i18n::tr("properties.title"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
@@ -125,53 +127,65 @@ fn draw_details(app: &GuiApp, ui: &mut egui::Ui) {
         empty_state(
             ui,
             Icon::Info,
-            "Nothing selected",
-            "Pick an item in the file list or the treemap, and its details appear here.",
+            &tr("properties.empty.title"),
+            &tr("properties.empty.body"),
         );
         return;
     };
     let facts = app.selected_item_facts();
 
-    section(ui, "Identity", |ui| {
-        row(ui, "Name", node.name.to_string_lossy().to_string());
-        row(ui, "Path", crate::util::display_path(&path));
+    section(ui, "properties.identity", |ui| {
         row(
             ui,
-            "Type",
+            "properties.name",
+            node.name.to_string_lossy().to_string(),
+        );
+        row(ui, "properties.path", crate::util::display_path(&path));
+        row(
+            ui,
+            "properties.type",
             if node.is_symlink {
-                "Link".to_string()
+                tr("properties.type.link")
             } else if node.is_dir {
-                "Folder".to_string()
+                tr("properties.type.folder")
             } else {
                 node.category
                     .map(|category| category.label().to_string())
-                    .unwrap_or_else(|| "File".to_string())
+                    .unwrap_or_else(|| tr("properties.type.file"))
             },
         );
         if let Some(links) = facts.link_count.filter(|count| *count > 1) {
             // The one fact that changes what a size *means*: these bytes
             // are reachable through another path, and counted again
             // under it.
-            row(ui, "Names", format!("{links} hard links to this file"));
+            row(
+                ui,
+                "properties.names",
+                crate::i18n::tr_with("properties.names.value", &[("count", &links.to_string())]),
+            );
         }
         if !facts.attributes.is_empty() {
-            row(ui, "Attributes", facts.attributes.join(", "));
+            row(ui, "properties.attributes", facts.attributes.join(", "));
         } else if facts.read_only {
-            row(ui, "Attributes", "read-only".to_string());
+            row(
+                ui,
+                "properties.attributes",
+                tr("properties.attributes.read_only"),
+            );
         }
     });
 
-    section(ui, "Size", |ui| {
-        row(ui, "Logical", human_bytes(node.size));
-        row(ui, "On disk", human_bytes(node.physical_size));
+    section(ui, "properties.size", |ui| {
+        row(ui, "properties.logical", human_bytes(node.size));
+        row(ui, "properties.on_disk", human_bytes(node.physical_size));
         // The gap, named. Positive is slack — the tail of the last
         // cluster, which a folder of tiny files can double; negative
         // means the filesystem is storing it in less space than it
         // occupies logically, which is compression or a sparse file.
         let (label, value) = if node.physical_size >= node.size {
-            ("Slack", node.physical_size - node.size)
+            ("properties.slack", node.physical_size - node.size)
         } else {
-            ("Saved", node.size - node.physical_size)
+            ("properties.saved", node.size - node.physical_size)
         };
         if value > 0 {
             row(ui, label, human_bytes(value));
@@ -182,16 +196,20 @@ fn draw_details(app: &GuiApp, ui: &mut egui::Ui) {
     });
 
     if node.is_dir {
-        section(ui, "Contents", |ui| {
-            row(ui, "Files", thousands(node.file_count));
-            row(ui, "Subfolders", thousands(node.dir_count));
+        section(ui, "properties.contents", |ui| {
+            row(ui, "properties.files", thousands(node.file_count));
+            row(ui, "properties.subfolders", thousands(node.dir_count));
             if node.unreadable_count > 0 {
-                row(ui, "Unreadable", thousands(node.unreadable_count));
+                row(
+                    ui,
+                    "properties.unreadable",
+                    thousands(node.unreadable_count),
+                );
             }
             if node.file_count > 0 {
                 row(
                     ui,
-                    "Average file",
+                    "properties.average_file",
                     human_bytes(node.size / node.file_count.max(1)),
                 );
             }
@@ -205,19 +223,19 @@ fn draw_details(app: &GuiApp, ui: &mut egui::Ui) {
         });
     }
 
-    section(ui, "Times", |ui| {
-        row(ui, "Modified", format_modified(node.modified));
+    section(ui, "properties.times", |ui| {
+        row(ui, "properties.modified", format_modified(node.modified));
         if let Some(created) = facts.created {
-            row(ui, "Created", format_modified(Some(created)));
+            row(ui, "properties.created", format_modified(Some(created)));
         }
         if let Some(accessed) = facts.accessed {
-            row(ui, "Accessed", format_modified(Some(accessed)));
+            row(ui, "properties.accessed", format_modified(Some(accessed)));
         }
     });
 
     ui.add_space(SPACE_XS);
     ui.label(
-        RichText::new("Times and attributes are read from disk when the selection changes.")
+        RichText::new(tr("properties.footnote"))
             .color(palette.secondary_text)
             .small(),
     );
@@ -239,20 +257,20 @@ fn top_categories(node: &crate::model::Node, physical: bool) -> Vec<(&'static st
 }
 
 /// A titled block, matching the modal's own grouping.
-fn section(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn section(ui: &mut egui::Ui, title_key: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(SPACE_SM);
-    ui.label(RichText::new(title).strong());
+    ui.label(RichText::new(tr(title_key)).strong());
     section_rule(ui);
     ui.add_space(SPACE_XS);
-    egui::Grid::new(egui::Id::new("properties_grid").with(title))
+    egui::Grid::new(egui::Id::new("properties_grid").with(title_key))
         .num_columns(2)
         .spacing(Vec2::new(SPACE_LG, SPACE_SM))
         .show(ui, add_contents);
 }
 
 /// One label/value pair inside a section.
-fn row(ui: &mut egui::Ui, label: &str, value: String) {
-    ui.label(RichText::new(label).color(palette().secondary_text));
+fn row(ui: &mut egui::Ui, label_key: &str, value: String) {
+    ui.label(RichText::new(tr(label_key)).color(palette().secondary_text));
     ui.label(value);
     ui.end_row();
 }

@@ -84,7 +84,49 @@ fn see_also(ui: &mut egui::Ui, app: &mut GuiApp, lead: &str, page: ModalPage) {
 /// Visible height of the theme list before it scrolls on its own.
 const THEME_LIST_HEIGHT: f32 = 330.0;
 
+/// The language picker.
+///
+/// English is compiled in; everything else is a file the user dropped
+/// into `lang/` beside the config, which is why the list is read from
+/// disk rather than from a table in the binary — a translation is content
+/// and content that needs a compiler is a translation nobody writes.
+fn draw_language(ui: &mut egui::Ui) {
+    let palette = palette();
+    let available = crate::i18n::available();
+    let current = crate::i18n::language();
+    group(ui, Icon::Info, "Language", |ui| {
+        if available.len() == 1 {
+            ui.label(
+                RichText::new(crate::i18n::tr("settings.language.only_english"))
+                    .color(palette.secondary_text),
+            );
+        }
+        ui.horizontal_wrapped(|ui| {
+            for tag in &available {
+                if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
+                    crate::i18n::set_language(tag);
+                }
+            }
+        });
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(crate::i18n::tr_with(
+                "settings.language.folder",
+                &[(
+                    "path",
+                    &crate::i18n::catalog_dir()
+                        .map(|dir| crate::util::display_path(&dir))
+                        .unwrap_or_default(),
+                )],
+            ))
+            .color(palette.secondary_text),
+        );
+    });
+}
+
 fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
+    draw_language(ui);
+    ui.add_space(SPACE_MD);
     let mut chosen: Option<&'static str> = None;
     group(ui, Icon::Palette, "Theme", |ui| {
         ui.label(

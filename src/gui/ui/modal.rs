@@ -73,17 +73,17 @@ impl ModalPage {
         Self::About,
     ];
 
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Locations => "Locations",
-            Self::Appearance => "Appearance",
-            Self::Layout => "Layout",
-            Self::Views => "Views",
-            Self::Cleanups => "Cleanups",
-            Self::Maintenance => "Maintenance",
-            Self::Guide => "View guide",
-            Self::About => "About",
-        }
+    pub(crate) fn label(self) -> String {
+        crate::i18n::tr(match self {
+            Self::Locations => "page.locations",
+            Self::Appearance => "page.appearance",
+            Self::Layout => "page.layout",
+            Self::Views => "page.views",
+            Self::Cleanups => "page.cleanups",
+            Self::Maintenance => "page.maintenance",
+            Self::Guide => "page.guide",
+            Self::About => "page.about",
+        })
     }
 
     pub(crate) fn icon(self) -> Icon {
@@ -102,17 +102,17 @@ impl ModalPage {
     /// The line under the page title. Every page gets one — a heading
     /// with nothing under it was most of what made the old dialogs read
     /// as unfinished.
-    pub(crate) fn blurb(self) -> &'static str {
-        match self {
-            Self::Locations => "Which drives and folders this scan covers.",
-            Self::Appearance => "Theme, and how the treemap is drawn.",
-            Self::Layout => "Where the treemap and the lists sit relative to each other.",
-            Self::Views => "Which parts of the window are shown.",
-            Self::Cleanups => "Your own commands, run against the selected item.",
-            Self::Maintenance => "Built-in Windows tools for the volume holding this scan.",
-            Self::Guide => "What each of the coupled views does.",
-            Self::About => "RustDirStat, and where its behaviour comes from.",
-        }
+    pub(crate) fn blurb(self) -> String {
+        crate::i18n::tr(match self {
+            Self::Locations => "page.locations.blurb",
+            Self::Appearance => "page.appearance.blurb",
+            Self::Layout => "page.layout.blurb",
+            Self::Views => "page.views.blurb",
+            Self::Cleanups => "page.cleanups.blurb",
+            Self::Maintenance => "page.maintenance.blurb",
+            Self::Guide => "page.guide.blurb",
+            Self::About => "page.about.blurb",
+        })
     }
 }
 
@@ -491,7 +491,7 @@ fn nav_row(ui: &mut egui::Ui, selected: bool, page: ModalPage) -> egui::Response
     const ICON_INSET: f32 = 10.0;
     const HEIGHT: f32 = 34.0;
     let palette = palette();
-    let galley = egui::WidgetText::from(page.label()).into_galley(
+    let galley = egui::WidgetText::from(&page.label()).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,
@@ -708,7 +708,7 @@ pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
 /// separate windows could not offer.
 pub(super) fn page_link(ui: &mut egui::Ui, page: ModalPage) -> bool {
     let palette = palette();
-    let galley = egui::WidgetText::from(page.label()).into_galley(
+    let galley = egui::WidgetText::from(&page.label()).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,

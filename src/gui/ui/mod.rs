@@ -138,18 +138,18 @@ pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
                     // is published the previous scan is still what is on
                     // screen, and after it the window is showing the new
                     // one filling in.
-                    let note = if app.live_scan {
-                        "Folders appear as they finish."
+                    let note = crate::i18n::tr(if app.live_scan {
+                        "status.filling_in"
                     } else {
-                        "You can keep browsing the current scan."
-                    };
+                        "status.keep_browsing"
+                    });
                     ui.label(RichText::new(note).color(palette().secondary_text));
                     // Only a scan can be cancelled, so the button appears
                     // only for one. Duplicate hashing has its own control
                     // and the maintenance tools are someone else's
                     // process, which this app does not get to kill.
                     if app.scan_is_running() {
-                        let cancel = ui.button("Cancel scan");
+                        let cancel = ui.button(crate::i18n::tr("status.cancel_scan"));
                         #[cfg(test)]
                         probes::probe(&probes::TEST_SCAN_CANCEL_RECTS).push(cancel.rect);
                         if cancel.clicked() {

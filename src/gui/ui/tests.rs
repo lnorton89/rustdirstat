@@ -4316,7 +4316,9 @@ fn the_inspector_shows_what_the_columns_cannot() -> anyhow::Result<()> {
     // where the volume is known — of the volume.
     let shares = app.selection_shares();
     assert!(
-        shares.iter().any(|(label, _)| *label == "Of the scan"),
+        shares
+            .iter()
+            .any(|(key, _)| *key == "properties.share.scan"),
         "expected a share of the scan, got {shares:?}"
     );
 

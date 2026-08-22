@@ -1,0 +1,77 @@
+# German catalogue — a partial translation, on purpose.
+#
+# It exists to prove the mechanism end to end: a real file, in the real
+# format, with real coverage of the strings a user meets first. Every key
+# it does not define falls back to English, which is what makes a partial
+# translation useful rather than broken — and what lets a translator add
+# ten lines and see them.
+#
+# Contributions welcome; copy assets/lang/en.toml, translate what you
+# know, and drop it in <config>/rustdirstat/lang/<tag>.toml to try it.
+
+"menu.file" = "Datei"
+"menu.file.select_folder" = "Ordner wählen…"
+"menu.file.rescan" = "Neu einlesen"
+"menu.file.export_csv" = "CSV exportieren…"
+"menu.file.exit" = "Beenden"
+"menu.edit" = "Bearbeiten"
+"menu.edit.copy_path" = "Pfad kopieren"
+"menu.edit.search" = "Suchen…"
+"menu.cleanup" = "Aufräumen"
+"menu.cleanup.open" = "Öffnen"
+"menu.cleanup.reveal" = "Im Explorer zeigen"
+"menu.cleanup.properties" = "Eigenschaften"
+"menu.cleanup.delete" = "In den Papierkorb"
+"menu.cleanup.delete_permanent" = "Endgültig löschen"
+"menu.treemap" = "Treemap"
+"menu.treemap.logical" = "Logische Größe"
+"menu.treemap.physical" = "Größe auf Datenträger"
+"menu.treemap.grid" = "Gitterlinien"
+"menu.treemap.labels" = "Dateinamen"
+"menu.treemap.free_space" = "Freier Speicher"
+"menu.treemap.zoom_in" = "Vergrößern"
+"menu.treemap.zoom_out" = "Verkleinern"
+"menu.treemap.reset_zoom" = "Zoom zurücksetzen"
+"menu.view" = "Ansicht"
+"menu.view.extensions" = "Dateitypen"
+"menu.view.treemap" = "Treemap"
+"menu.view.toolbar" = "Symbolleiste"
+"menu.view.status_bar" = "Statusleiste"
+"menu.view.appearance" = "Darstellung…"
+"menu.view.settings" = "Einstellungen…"
+"menu.tools" = "Werkzeuge"
+"menu.tools.duplicates" = "Doppelte Dateien suchen"
+"menu.help" = "Hilfe"
+"menu.help.guide" = "Anleitung"
+"menu.help.about" = "Über RustDirStat"
+
+"view.all_files" = "Alle Dateien"
+"view.largest_files" = "Größte Dateien"
+"view.duplicate_files" = "Doppelte Dateien"
+"view.search_results" = "Suchergebnisse"
+
+"status.ready" = "Bereit"
+"status.scan_counts" = "{files} Dateien · {folders} Ordner · {size}"
+"status.scan_complete" = "Einlesen abgeschlossen"
+"status.scan_cancelled" = "Einlesen abgebrochen"
+"status.cancel_scan" = "Einlesen abbrechen"
+"status.filling_in" = "Ordner erscheinen, sobald sie fertig sind."
+
+"properties.title" = "Eigenschaften"
+"properties.identity" = "Identität"
+"properties.size" = "Größe"
+"properties.contents" = "Inhalt"
+"properties.times" = "Zeiten"
+"properties.name" = "Name"
+"properties.path" = "Pfad"
+"properties.type" = "Typ"
+"properties.type.folder" = "Ordner"
+"properties.type.file" = "Datei"
+"properties.type.link" = "Verknüpfung"
+"properties.logical" = "Logisch"
+"properties.on_disk" = "Auf Datenträger"
+"properties.files" = "Dateien"
+"properties.subfolders" = "Unterordner"
+"properties.modified" = "Geändert"
+"properties.created" = "Erstellt"
+"properties.accessed" = "Zugegriffen"

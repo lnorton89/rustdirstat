@@ -252,12 +252,12 @@ impl GuiApp {
         {
             let whole = parent.effective_size(self.use_physical) as f64;
             if whole > 0.0 {
-                shares.push(("Of its folder", size / whole * 100.0));
+                shares.push(("properties.share.folder", size / whole * 100.0));
             }
         }
         let scanned = self.tree.root.effective_size(self.use_physical) as f64;
         if scanned > 0.0 {
-            shares.push(("Of the scan", size / scanned * 100.0));
+            shares.push(("properties.share.scan", size / scanned * 100.0));
         }
         if let Some(total) = self
             .tree
@@ -265,7 +265,7 @@ impl GuiApp {
             .and_then(|root| root.volume_total)
             .filter(|total| *total > 0)
         {
-            shares.push(("Of the volume", size / total as f64 * 100.0));
+            shares.push(("properties.share.volume", size / total as f64 * 100.0));
         }
         shares
     }

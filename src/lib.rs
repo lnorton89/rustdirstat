@@ -30,6 +30,7 @@ pub mod config;
 pub mod csv_export;
 pub mod duplicates;
 pub mod gui;
+pub mod i18n;
 pub mod model;
 pub mod platform;
 pub mod report;

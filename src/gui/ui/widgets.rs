@@ -194,7 +194,10 @@ pub(super) fn view_tab(ui: &mut egui::Ui, selected: bool, view: FileView) -> egu
     }
     #[cfg(test)]
     probe(&TEST_VIEW_TAB_RECTS).push((view, rect));
-    response.on_hover_text(format!("Show {}", view.label()))
+    response.on_hover_text(crate::i18n::tr_with(
+        "tooltip.show_view",
+        &[("view", &view.label())],
+    ))
 }
 
 pub(super) fn tool(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {

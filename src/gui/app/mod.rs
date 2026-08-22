@@ -131,13 +131,22 @@ pub(in crate::gui) enum FileView {
 }
 
 impl FileView {
-    pub(in crate::gui) fn label(self) -> &'static str {
+    /// The key its name lives under, and the name itself.
+    ///
+    /// Two functions because one caller needs a `&'static str` for an
+    /// egui id and the other needs the translated text; a single
+    /// `String`-returning `label` would make every id allocate.
+    pub(in crate::gui) fn key(self) -> &'static str {
         match self {
-            Self::AllFiles => "All Files",
-            Self::LargestFiles => "Largest Files",
-            Self::DuplicateFiles => "Duplicate Files",
-            Self::SearchResults => "Search Results",
+            Self::AllFiles => "view.all_files",
+            Self::LargestFiles => "view.largest_files",
+            Self::DuplicateFiles => "view.duplicate_files",
+            Self::SearchResults => "view.search_results",
         }
+    }
+
+    pub(in crate::gui) fn label(self) -> String {
+        crate::i18n::tr(self.key())
     }
 }
 
@@ -351,6 +360,9 @@ impl GuiApp {
         let mut expanded = HashSet::new();
         expanded.insert(Vec::new());
         let config = crate::config::load();
+        // Before anything is built, because every label below asks the
+        // catalogue for its text.
+        crate::i18n::set_language(config.language.as_deref().unwrap_or("en"));
         let theme_id = config
             .gui_theme
             .clone()
@@ -485,6 +497,7 @@ impl GuiApp {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),
+            language: Some(crate::i18n::language()),
             gui_properties_open: Some(self.properties.open),
             gui_properties_pos: self.properties.pos.map(|pos| vec![pos[0], pos[1]]),
             ..self.view.to_config()

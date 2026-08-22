@@ -27,6 +27,7 @@ they are its deferred list, being worked through.
 | 8 | A tree that fills in while the scan runs | done |
 | 9 | Hard-link overlap measured and reported | done |
 | 10 | User-defined cleanups, with a written threat model | done |
+| 11 | Localization: catalogue, fallback, language picker, chrome migrated | done |
 | 1 | Leave egui 0.29 behind (0.36) | done |
 | 2 | A scan you can stop (cancellation) | done |
 | 3 | Windows: one handle per directory (allocation size, scan-time file id) | done |
@@ -56,7 +57,7 @@ existing now that the plan is finished with.
 
 | Item | Why not now | Earliest |
 |---|---|---|
-| **Localization** | Both front ends are English-only and nothing is wired for translation; the TUI additionally assumes width-1 glyphs in places `unicode-width` does not cover. | unscheduled |
+| **Localization: the rest of the strings** | The mechanism ships and the chrome is migrated — menus, view names, status bar, settings pages, inspector. Still English literals: the guide and about pages, the maintenance and duplicates pages, the treemap and list column headers, and the whole TUI (which additionally assumes width-1 glyphs in places `unicode-width` does not cover). Each is a mechanical pass now that `every_key_the_code_uses_is_in_the_catalogue` guards the result. | incremental |
 | **Signed installers** (Authenticode, macOS notarization) | Needs paid certificates that cannot live in the repository. Provenance and SBOM attestations are the substitute a certificate-less project can offer, and they ship today. | blocked, not deferred |
 | **AppImage** | The one packaging format in the 0.3.0 plan that did not land. Building one is easy; *verifying* one is not — it bundles a GUI's runtime and only a real desktop can say whether the bundle works, which is exactly the check nothing in this project can run. The `.deb`, the `.rpm` and the Nix flake already cover the distributions an AppImage would target. | when someone can test one |
 | **Publishing to crates.io** | Decided against for 0.3.0: `cargo install rustdirstat` would work, but it would build the GUI from source on every machine that ran it — pulling the whole egui/wgpu stack and the Linux windowing headers — to produce what the release archives already ship prebuilt. The package-manager manifests are the better answer to the same want. | unscheduled |
