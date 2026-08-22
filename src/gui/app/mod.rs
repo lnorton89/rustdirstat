@@ -404,6 +404,17 @@ impl GuiApp {
         self.palette = super::ui::palette_for(id);
     }
 
+    /// Bytes the scan counted more than once because of hard links, if
+    /// it measured and there were any.
+    ///
+    /// `None` covers both "not measured" and "none found", because the
+    /// status bar has the same answer for each: say nothing. A permanent
+    /// "0 B shared" on a volume without hard links is noise, and a scan
+    /// that did not measure has nothing to report.
+    pub(in crate::gui) fn hard_link_bytes(&self) -> Option<u64> {
+        self.tree.hard_link_bytes.filter(|bytes| *bytes > 0)
+    }
+
     pub(in crate::gui) fn open_modal(&mut self, page: ModalPage) {
         self.modal = Some(page);
     }
@@ -565,6 +576,7 @@ mod tests {
                 other_filesystem: false,
             },
             roots: Vec::new(),
+            hard_link_bytes: None,
         })
     }
 

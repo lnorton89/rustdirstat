@@ -478,6 +478,7 @@ impl GuiApp {
         tree.volume_free = shell.volume_free;
         tree.volume_total = shell.volume_total;
         tree.roots = shell.roots;
+        tree.hard_link_bytes = shell.hard_link_bytes;
         self.tree_generation = self.tree_generation.wrapping_add(1);
         self.live_scan = false;
     }
@@ -885,6 +886,7 @@ mod tests {
                 ],
             ),
             roots: Vec::new(),
+            hard_link_bytes: None,
         };
         // The user was looking at Downloads, which this scan happened to
         // enumerate first.
@@ -906,6 +908,7 @@ mod tests {
                 ],
             ),
             roots: Vec::new(),
+            hard_link_bytes: None,
         };
         let restored = resolve_identity(&reordered, &captured);
         assert_eq!(
@@ -941,6 +944,7 @@ mod tests {
                 ],
             ),
             roots: Vec::new(),
+            hard_link_bytes: None,
         };
         let captured = capture_identity(&before, &[0, 0])
             .ok_or_else(|| anyhow::anyhow!("the path should exist"))?;
@@ -960,6 +964,7 @@ mod tests {
                 ],
             ),
             roots: Vec::new(),
+            hard_link_bytes: None,
         };
         // Zoom/expansion placement resolves to the nearest surviving
         // ancestor.

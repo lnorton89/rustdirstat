@@ -133,6 +133,15 @@ pub struct Tree {
     /// content when browsing the scan root, the way WinDirStat does.
     pub volume_free: Option<u64>,
     pub volume_total: Option<u64>,
+    /// How many of `root.physical_size`'s bytes were counted more than
+    /// once, because two names pointed at one file.
+    ///
+    /// `None` when the scan did not measure it — see
+    /// `ScanOptions::count_hard_links`, which is on by default only where
+    /// measuring is free. The totals themselves deliberately still count
+    /// per pathname, matching what the rows show; this is the correction
+    /// a front end can report beside them.
+    pub hard_link_bytes: Option<u64>,
     /// The scanned roots, when there is more than one.
     ///
     /// Empty for the ordinary single-root scan, which keeps every index
@@ -385,6 +394,7 @@ impl Tree {
             volume_free: None,
             volume_total: None,
             roots: Vec::new(),
+            hard_link_bytes: None,
         }
     }
 
@@ -422,6 +432,7 @@ impl Tree {
             volume_free: None,
             volume_total: None,
             roots: Vec::new(),
+            hard_link_bytes: None,
         }
     }
 

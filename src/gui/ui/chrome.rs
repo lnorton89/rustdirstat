@@ -490,6 +490,22 @@ pub(super) fn draw_status_bar(app: &mut GuiApp, ui: &mut egui::Ui) {
                         thousands(node.dir_count),
                         size_label(node.effective_size(app.use_physical), app.use_physical)
                     ));
+                    // How much of that total is the same bytes under two
+                    // names. Shown rather than silently subtracted: the
+                    // rows above add up to the figure beside it, and a
+                    // total that disagreed with them would be its own
+                    // kind of wrong. Only when there is something to say
+                    // — on a volume with no hard links this is zero, and
+                    // a permanent "0 B in hard links" is noise.
+                    if let Some(shared) = app.hard_link_bytes() {
+                        ui.label(
+                            RichText::new(format!("· {} shared by hard links", size_label(shared, app.use_physical)))
+                                .color(palette().secondary_text),
+                        )
+                        .on_hover_text(
+                            "Counted once per name, the way the rows above do. This is how                              much of the total is the same bytes reached through more than                              one of them.",
+                        );
+                    }
                 });
             });
         });

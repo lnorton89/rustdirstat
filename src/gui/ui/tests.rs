@@ -96,6 +96,7 @@ fn app_with_one_file() -> GuiApp {
         volume_free: None,
         volume_total: None,
         roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -147,6 +148,7 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
         volume_free: None,
         volume_total: None,
         roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -230,6 +232,7 @@ fn app_with_sortable_files() -> GuiApp {
         volume_free: None,
         volume_total: None,
         roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -2888,6 +2891,7 @@ fn app_with_many_extensions() -> GuiApp {
             other_filesystem: false,
         },
         roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -3417,6 +3421,7 @@ fn app_with_big_tree() -> GuiApp {
         volume_free: None,
         volume_total: None,
         roots: Vec::new(),
+        hard_link_bytes: None,
     });
     app.expanded.insert(Vec::new());
     app
@@ -3979,6 +3984,7 @@ fn a_maintenance_tool_refuses_a_multi_root_scan_with_no_selection() {
         },
         volume_free: None,
         volume_total: None,
+        hard_link_bytes: None,
         roots: vec![crate::model::Root {
             path: std::path::PathBuf::from("C:\\"),
             volume_free: None,

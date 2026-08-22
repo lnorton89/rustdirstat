@@ -63,6 +63,12 @@ The terminal UI, the same three coupled views over the same scanning core:
   not use, and that answer is passed through as given. This costs no
   extra syscall: the directory listing the scan already performs carries
   it
+- Hard links are measured, not guessed at: the totals count each name,
+  the way the rows do, and the status bar says how much of that total is
+  the same bytes reached through more than one of them. Free on Unix,
+  where a file's link count comes with its metadata; opt-in on Windows
+  (`--count-hard-links`), where measuring means remembering every file's
+  identity for the length of the scan
 - Delete to the Recycle Bin/Trash (permanent delete is deliberately
   harder), empty folders with honest partial-failure reporting, move
   across volumes without following symlinks
@@ -165,6 +171,7 @@ to a compact column set in narrow panes.
 | `-n`, `--no-tui` | Print a text report instead of opening the TUI |
 | `-t`, `--top <N>` | Entries shown per directory in report mode (default 20) |
 | `-d`, `--depth <N>` | Depth of the report tree (default 2) |
+| `--count-hard-links` | Measure how much of the total is the same bytes under two names (default on where it is free — Unix) |
 | `--csv <PATH>` | Scan and write a full CSV export (one row per file/directory: path, type, size, physical_size, files, dirs, modified, unreadable) instead of opening the TUI |
 
 ## TUI keybindings

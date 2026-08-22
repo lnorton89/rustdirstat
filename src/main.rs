@@ -51,6 +51,16 @@ struct Cli {
     #[arg(long = "csv", value_name = "PATH")]
     csv: Option<PathBuf>,
 
+    /// Measure how much of the total is the same bytes under two names.
+    ///
+    /// On by default where it is free (Unix knows a file's link count
+    /// without asking); on Windows a directory listing carries no link
+    /// count, so measuring means remembering every file's identity for
+    /// the length of the scan — a few hundred megabytes on a full drive —
+    /// and it is opt-in.
+    #[arg(long = "count-hard-links")]
+    count_hard_links: bool,
+
     /// Descend into other filesystems (mount points, /proc, network
     /// shares) instead of staying on the scanned path's own filesystem.
     /// Unix only: Windows reports no device identity to the scanner, so
@@ -75,6 +85,7 @@ fn main() -> Result<()> {
     }
     let options = scanner::ScanOptions {
         same_filesystem_only: !cli.cross_filesystems,
+        count_hard_links: cli.count_hard_links || scanner::ScanOptions::default().count_hard_links,
     };
 
     if let Some(csv_path) = &cli.csv {
