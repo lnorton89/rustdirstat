@@ -305,9 +305,16 @@ fn a_multi_root_csv_uses_each_root_path() -> Result<()> {
         !csv.contains("Selected locations"),
         "no row may be built from the multi-root label: {csv}"
     );
+    // Compared against the *canonical* fixture paths, because that is
+    // what the binary scans: it canonicalizes every root before handing
+    // it to the scanner. On a machine whose temp directory is reached
+    // through an 8.3 short name — a GitHub Windows runner is one — the
+    // path this test built and the path in the export are two spellings
+    // of the same directory, and only the canonical form compares.
+    let hay = flatten(&csv);
     for path in [first.join("one.bin"), second.join("two.bin")] {
-        let needle = path.to_string_lossy().replace('\\', "/");
-        let hay = csv.replace('\\', "/");
+        let canonical = fs::canonicalize(&path)?;
+        let needle = flatten(&canonical.to_string_lossy());
         assert!(
             hay.contains(&needle),
             "every scanned file should appear at its real path; missing {needle} in {csv}"
@@ -318,4 +325,14 @@ fn a_multi_root_csv_uses_each_root_path() -> Result<()> {
     let _ = fs::remove_dir_all(&first);
     let _ = fs::remove_dir_all(&second);
     Ok(())
+}
+
+/// A path as a string with separators and any verbatim prefix flattened,
+/// so two spellings of one place compare equal.
+///
+/// Windows canonicalization returns a `\?\C:\...` form; the CSV carries
+/// whatever the scanner was handed. A comparison that kept either would
+/// be testing the spelling rather than the path.
+fn flatten(text: &str) -> String {
+    text.replace('\\', "/").replace("//?/", "")
 }
