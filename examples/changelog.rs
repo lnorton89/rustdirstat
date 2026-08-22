@@ -14,11 +14,28 @@
 //! cargo run --example changelog
 //! ```
 //!
-//! or check the committed file against the history without rewriting it:
+//! check the committed file against the history without rewriting it:
 //!
 //! ```sh
 //! cargo run --example changelog -- --check
 //! ```
+//!
+//! or write the section for a release that is *about to be tagged*, so
+//! the tag can be placed on a commit whose changelog is already final:
+//!
+//! ```sh
+//! cargo run --example changelog -- --release v0.2.2
+//! ```
+//!
+//! `--release` exists because of `v0.2.1`: the tag was placed first and
+//! the changelog regenerated after, so the tag — and the source archives
+//! GitHub serves for it, forever — carries a changelog listing the whole
+//! release under `Unreleased`. Writing the section before tagging means
+//! the tagged tree is the finished one. The commit that adds the
+//! generated changelog cannot list itself (its hash does not exist while
+//! the file is being written), which is why commits touching only
+//! `CHANGELOG.md` are excluded from every section, on the generate and
+//! check paths alike — the two must always agree.
 //!
 //! The changelog is derived, not authored. Every entry is a
 //! conventional-commit subject (`fix:`, `feat:`, `refactor:` …) resolved
@@ -53,6 +70,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use rustdirstat::util::format_modified;
 
 /// The generated file, relative to the crate root.
 const CHANGELOG: &str = "CHANGELOG.md";
@@ -118,24 +136,31 @@ struct Release {
 
 fn main() -> Result<()> {
     let mut check = false;
-    for arg in std::env::args().skip(1) {
-        if arg == "--check" {
-            check = true;
-        } else {
-            bail!("unknown argument `{arg}`; usage: changelog [--check]");
+    let mut release: Option<String> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--check" => check = true,
+            "--release" => {
+                let Some(version) = args.next() else {
+                    bail!("--release needs a version, e.g. `--release v0.2.2`");
+                };
+                release = Some(version);
+            }
+            _ => {
+                bail!("unknown argument `{arg}`; usage: changelog [--check | --release <version>]")
+            }
         }
+    }
+    if check && release.is_some() {
+        bail!("--check and --release are mutually exclusive");
     }
 
     if !Path::new("Cargo.toml").is_file() {
         bail!("run this from the crate root, where Cargo.toml lives");
     }
 
-    let releases = releases()?;
-    let unreleased = match releases.first() {
-        Some(latest) => commits(&format!("{}..HEAD", latest.tag))?,
-        None => commits("HEAD")?,
-    };
-    let generated = render(&releases, &unreleased);
+    let mut releases = releases()?;
 
     // An orphaned tag makes every range below wrong, so it is reported
     // before any mismatch it would itself have caused.
@@ -148,6 +173,20 @@ fn main() -> Result<()> {
         let existing = fs::read_to_string(CHANGELOG).with_context(|| {
             format!("{CHANGELOG} is missing; run `cargo run --example changelog`")
         })?;
+        // A leading section whose tag does not exist yet is the pre-tag
+        // release flow in progress, not drift — but it only passes if it
+        // is exactly the release about to be cut: version newer than the
+        // latest tag, matching Cargo.toml, content matching the history.
+        if let Some(version) = pending_version(&existing, &releases) {
+            let pending = pending_release(&version, &releases).with_context(|| {
+                format!(
+                    "{CHANGELOG} has a [{version}] section but no such tag exists, \
+                     and it does not validate as a release about to be cut"
+                )
+            })?;
+            releases.insert(0, pending);
+        }
+        let generated = render(&releases, &[]);
         if released_only(&existing) == released_only(&generated) {
             println!("{CHANGELOG} matches the git history.");
             return Ok(());
@@ -157,6 +196,21 @@ fn main() -> Result<()> {
              Regenerate it with `cargo run --example changelog` and commit the result."
         );
     }
+
+    let unreleased = match &release {
+        // The pending release swallows everything that would have been
+        // unreleased; the section it lands under is the one being cut.
+        Some(version) => {
+            let pending = pending_release(version, &releases)?;
+            releases.insert(0, pending);
+            Vec::new()
+        }
+        None => match releases.first() {
+            Some(latest) => commits(&format!("{}..HEAD", latest.tag))?,
+            None => commits("HEAD")?,
+        },
+    };
+    let generated = render(&releases, &unreleased);
 
     // A warning rather than an error on this path: the file still gets
     // written, so you are not locked out of regenerating while you sort the
@@ -314,19 +368,109 @@ fn parse_version(tag: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-/// Committer date of the commit a tag points at. `^{commit}` dereferences
-/// an annotated tag, so both tag styles give the same answer.
+/// Committer time of the commit a tag points at, as a UTC date.
+/// `^{commit}` dereferences an annotated tag, so both tag styles give
+/// the same answer.
+///
+/// UTC rather than the committer's recorded offset, so the date
+/// `--release` writes *before* the tag exists (from the wall clock, in
+/// UTC) is the same date this reads back after the tag exists — with
+/// local dates, a release cut near midnight in a non-UTC timezone would
+/// fail its own `--check`.
 fn tag_date(tag: &str) -> Result<String> {
     let spec = format!("{tag}^{{commit}}");
-    let date = git(&["log", "-1", "--format=%cd", "--date=short", &spec])?;
-    Ok(date.trim().to_string())
+    let seconds: u64 = git(&["log", "-1", "--format=%ct", &spec])?
+        .trim()
+        .parse()
+        .with_context(|| format!("{tag} has an unreadable committer timestamp"))?;
+    let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+    Ok(utc_date(time))
+}
+
+/// A `SystemTime` as a `YYYY-MM-DD` UTC date, through the same
+/// conversion the library's timestamp display uses.
+fn utc_date(time: std::time::SystemTime) -> String {
+    format_modified(Some(time)).chars().take(10).collect()
+}
+
+/// The section for a release that is about to be tagged: everything
+/// since the latest tag, dated today, under the version the tag will
+/// carry — so the tag can then be placed on a tree whose changelog is
+/// already finished. See the module docs for the `v0.2.1` incident this
+/// exists to prevent.
+fn pending_release(version: &str, releases: &[Release]) -> Result<Release> {
+    let tag = if version.starts_with('v') {
+        version.to_string()
+    } else {
+        format!("v{version}")
+    };
+    let Some(parsed) = parse_version(&tag) else {
+        bail!("`{version}` is not a version; expected something like v0.2.2");
+    };
+    if git(&["tag", "--list", &tag])?.trim() == tag {
+        bail!("{tag} already exists — regenerate without `--release` instead");
+    }
+    if let Some(latest) = releases.first() {
+        if parse_version(&latest.tag).is_some_and(|latest_version| parsed <= latest_version) {
+            bail!("{tag} is not newer than the latest tag, {}", latest.tag);
+        }
+    }
+    // The version bump commits first (see CONTRIBUTING.md), so a
+    // mismatch here means the release is being cut against the wrong
+    // tree — with the bump forgotten, or under the wrong number.
+    let manifest = fs::read_to_string("Cargo.toml").context("failed to read Cargo.toml")?;
+    let expected = format!("version = \"{}\"", tag.trim_start_matches('v'));
+    let Some(version_line) = manifest
+        .lines()
+        .find(|l| l.trim().starts_with("version = "))
+    else {
+        bail!("Cargo.toml has no `version =` line");
+    };
+    if version_line.trim() != expected {
+        bail!(
+            "Cargo.toml says `{}` but the release being cut is {tag}; bump the version first",
+            version_line.trim()
+        );
+    }
+
+    let range = match releases.first() {
+        Some(latest) => format!("{}..HEAD", latest.tag),
+        None => "HEAD".to_string(),
+    };
+    Ok(Release {
+        version: tag.trim_start_matches('v').to_string(),
+        date: utc_date(std::time::SystemTime::now()),
+        previous: releases.first().map(|r| r.tag.clone()),
+        commits: commits(&range)?,
+        tag,
+    })
 }
 
 /// Parsed commits in a revision range, newest first. Merges are excluded —
-/// they carry no subject of their own worth listing.
+/// they carry no subject of their own worth listing. So are commits that
+/// touch only `CHANGELOG.md`: the changelog commit a release produces
+/// cannot list itself (its hash does not exist while the file is being
+/// generated), so such commits are defined out of every section instead,
+/// which keeps the generate and check paths in exact agreement.
 fn commits(range: &str) -> Result<Vec<Commit>> {
     let format = format!("--format=%H{SEP}%h{SEP}%s");
-    let log = git(&["log", "--no-merges", &format, range])?;
+    // `--full-history` matters: a pathspec switches on git's history
+    // simplification, which is allowed to prune a commit whose
+    // path-limited tree matches a parent's — it silently dropped one of
+    // a duplicate-subject pair from the v0.2.0 section when this filter
+    // first landed. Full history keeps every commit whose own diff
+    // touches the kept paths, which is the semantics actually wanted:
+    // "skip a commit only when CHANGELOG.md is all it changed".
+    let log = git(&[
+        "log",
+        "--no-merges",
+        "--full-history",
+        &format,
+        range,
+        "--",
+        ".",
+        ":(exclude)CHANGELOG.md",
+    ])?;
 
     let mut commits = Vec::new();
     for line in log.lines() {
@@ -490,8 +634,34 @@ fn push_links(out: &mut String, releases: &[Release]) {
     }
 }
 
-/// The file with its `Unreleased` section removed, which is what `--check`
-/// compares. See the module docs for why that section is exempt.
+/// The version of the newest release section in the committed file when
+/// no tag of that name exists — the pre-tag state of the release flow.
+/// `None` when the newest section's tag exists (or there are no release
+/// sections at all). Only the newest section may be pending: an older
+/// section without a tag is plain drift and fails the comparison.
+fn pending_version(existing: &str, releases: &[Release]) -> Option<String> {
+    for line in existing.lines() {
+        let Some(rest) = line.strip_prefix("## [") else {
+            continue;
+        };
+        let Some((version, _)) = rest.split_once(']') else {
+            continue;
+        };
+        if version == "Unreleased" {
+            continue;
+        }
+        return (!releases.iter().any(|r| r.version == version)).then(|| version.to_string());
+    }
+    None
+}
+
+/// The file with its `Unreleased` section removed and release-heading
+/// dates stripped, which is what `--check` compares. The `Unreleased`
+/// exemption is in the module docs; dates are stripped because the
+/// pre-tag section is dated by the wall clock and the post-tag one by
+/// the tag, and a release cut close to UTC midnight must not fail its
+/// own check over which side of it the tag landed. The next
+/// regeneration refreshes the written date to the tag's.
 fn released_only(text: &str) -> String {
     let mut kept = Vec::new();
     let mut skipping = false;
@@ -506,8 +676,19 @@ fn released_only(text: &str) -> String {
             skipping = false;
         }
         if !skipping {
-            kept.push(line);
+            kept.push(undated_heading(line));
         }
     }
     kept.join("\n")
+}
+
+/// A release heading without its ` - YYYY-MM-DD` tail; every other line
+/// unchanged. Entry bullets start `- `, never `## [`, so only headings
+/// can match.
+fn undated_heading(line: &str) -> &str {
+    if line.starts_with("## [") {
+        line.split(" - ").next().unwrap_or(line)
+    } else {
+        line
+    }
 }

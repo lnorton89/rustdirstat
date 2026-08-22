@@ -135,8 +135,14 @@ rebuilds it from `git tag` plus conventional-commit subjects, and CI runs
 failure. `Unreleased` is exempt from the check by design: it changes with
 every merge, and a squash rewrites the hashes it pins. Prose for a release
 belongs in the GitHub release body, not here. `CONTRIBUTING.md` has the
-release ordering — the tag comes before the regeneration, because the
-generator reads tags.
+release ordering — the changelog section is written *before* the tag
+(`cargo run --example changelog -- --release vX.Y.Z`), so the tag names a
+tree whose changelog is already finished; v0.2.1's tag permanently
+carries a stale changelog because it was cut the other way around.
+Commits touching only `CHANGELOG.md` are excluded from every section (the
+changelog commit cannot list itself), and release dates are UTC with
+`--check` date-insensitive, so a tag landing across midnight cannot fail
+its own check.
 
 **Never amend or rebase a commit after tagging it.** The tag survives
 pointing at the discarded copy, on no branch at all, and every release
