@@ -1,6 +1,6 @@
 [package]
 name = "rustdirstat"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "A cross-platform WinDirStat clone for visualizing disk usage, with both a native desktop GUI and a terminal UI."
 license = "MIT"

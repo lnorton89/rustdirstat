@@ -11,8 +11,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+Nothing yet — the latest release is the tip of `main`.
+
+## [0.2.2] - 2026-08-22
+
+### Added
+
+- implement the v0.2.1 release review — changelog-before-tag, pinned tools, bound SBOM ([`3ade83a`](https://github.com/lnorton89/rustdirstat/commit/3ade83ab1f8e74004a806c7f2711d6f9d062e03f))
+
+### Documentation
+
+- add READMEs for the examples, assets, and tests folders ([`5ad90f6`](https://github.com/lnorton89/rustdirstat/commit/5ad90f64d412c02b8ac43eab76aff352a998ebf0))
+
 ### Internal
 
+- bump version to 0.2.2 ([`bca7d56`](https://github.com/lnorton89/rustdirstat/commit/bca7d56decbef529474505ac22286e3ff0363817))
 - **deps:** bump the github-actions group with 4 updates ([`7a0d8c0`](https://github.com/lnorton89/rustdirstat/commit/7a0d8c063f9884cfe504277fd09923026d5ef62f))
 
 ## [0.2.1] - 2026-08-21
@@ -207,7 +220,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Recursive nested treemap + full mouse support ([`7c6f176`](https://github.com/lnorton89/rustdirstat/commit/7c6f176be72fac3e76a0264b8519890b5c202406))
 - Add rustdirstat: cross-platform terminal clone of WinDirStat ([`79c6d06`](https://github.com/lnorton89/rustdirstat/commit/79c6d0697c7cad167dbe1ca6bf7ccfcded8df75f))
 
-[Unreleased]: https://github.com/lnorton89/rustdirstat/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/lnorton89/rustdirstat/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/lnorton89/rustdirstat/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/lnorton89/rustdirstat/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lnorton89/rustdirstat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lnorton89/rustdirstat/releases/tag/v0.1.0
