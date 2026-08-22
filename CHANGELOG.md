@@ -11,7 +11,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Nothing yet — the latest release is the tip of `main`.
+### Internal
+
+- **deps:** bump the github-actions group with 4 updates ([`7a0d8c0`](https://github.com/lnorton89/rustdirstat/commit/7a0d8c063f9884cfe504277fd09923026d5ef62f))
 
 ## [0.2.1] - 2026-08-21
 
@@ -48,7 +50,7 @@ Nothing yet — the latest release is the tip of `main`.
 - group Dependabot by patch only, and freeze the egui stack ([`c457327`](https://github.com/lnorton89/rustdirstat/commit/c457327f85e466bebfa0555be7f5436a2dde1164))
 - pin the Nix dev shell to rust-toolchain.toml via fenix ([`38031eb`](https://github.com/lnorton89/rustdirstat/commit/38031ebda8e3510e83085aae7b84b248d141a088))
 
-## [0.2.0] - 2026-08-20
+## [0.2.0] - 2026-08-21
 
 ### Added
 
@@ -133,7 +135,7 @@ Nothing yet — the latest release is the tip of `main`.
 - Revert the module move out of the previous commit ([`9b4858b`](https://github.com/lnorton89/rustdirstat/commit/9b4858b80ead88827a8ad299148e851273d1202a))
 - Add documentation for flake usage ([`69ff1d5`](https://github.com/lnorton89/rustdirstat/commit/69ff1d519a75130e1bd8d3e56d87bbf730dbd22d))
 
-## [0.1.0] - 2026-08-19
+## [0.1.0] - 2026-08-20
 
 ### Added
 

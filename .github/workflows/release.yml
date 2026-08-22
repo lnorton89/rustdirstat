@@ -162,8 +162,14 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          cargo install cargo-deb --locked
-          cargo install cargo-cyclonedx --locked
+          # Exact versions, not "latest": `--locked` alone pins these
+          # tools' *dependencies*, not the tools themselves, so a re-run
+          # of this same workflow months later could package with a
+          # different cargo-deb or emit a differently-shaped SBOM. A
+          # version moves the way an action SHA does — deliberately, in
+          # a reviewed commit.
+          cargo install cargo-deb --version 3.7.0 --locked
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
           deb="rustdirstat-${TAG}-amd64.deb"
           cargo deb --no-build --no-strip --target "$TARGET" --output "dist/${deb}"
           cargo cyclonedx --format json
@@ -211,7 +217,10 @@ jobs:
           pattern: release-assets-*
           path: dist
           merge-multiple: true
-      # Signed build provenance for every asset, verifiable with
+      # Signed build provenance for the archives, the .deb, and the
+      # SBOM file — exactly those; the `.sha256` companions are not
+      # attested, because an attestation *is* a signed digest and a
+      # signed checksum-of-a-checksum adds nothing. Verifiable with
       # `gh attestation verify <file> -R <owner>/<repo>`. This is the
       # supply-chain half a project without paid signing certificates
       # can still provide; Authenticode and notarization need
@@ -223,6 +232,20 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/*.deb
+            dist/*.cdx.json
+      # And the SBOM again as a real SBOM attestation, so the CycloneDX
+      # document is cryptographically bound to the artifacts it
+      # describes rather than merely uploaded beside them —
+      # `gh attestation verify <artifact> -R <owner>/<repo>
+      #  --predicate-type https://cyclonedx.org/bom` retrieves it.
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.deb
+          sbom-path: dist/rustdirstat-${{ needs.draft.outputs.tag }}-sbom.cdx.json
       - name: Upload and undraft
         shell: bash
         env:

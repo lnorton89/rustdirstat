@@ -172,18 +172,41 @@ that wants a human summary gets one in the GitHub release body, which
 
 Cutting a release, in this order:
 
-1. Bump `version` in `Cargo.toml` and commit.
-2. Tag it locally, annotated to match the existing tags:
-   `git tag -a v0.3.0 -m "rustdirstat v0.3.0"`.
-3. Regenerate the changelog and commit the result.
-4. Push the branch and the tag together.
+1. On a release branch off `main`: bump `version` in `Cargo.toml` and
+   commit.
+2. Write the release's section *before* any tag exists:
+   `cargo run --example changelog -- --release v0.3.0`, and commit the
+   result. The generator refuses a version that does not match
+   `Cargo.toml`, already has a tag, or is not newer than the latest
+   release.
+3. Open the pull request and let the required checks pass — the
+   changelog check recognizes a leading section whose tag does not exist
+   yet and validates it as the release being cut, rather than calling it
+   drift.
+4. Merge (a merge commit, never a squash — the changelog pins the
+   individual commit hashes), then tag the merge commit, annotated to
+   match the existing tags: `git tag -a v0.3.0 -m "rustdirstat v0.3.0"`,
+   and push the tag. The tag push triggers the release workflow.
 
-Step 3 follows the tag because the generator reads tags — the section for a
-release cannot exist before the release does. Pushing both at once in step 4
-means CI never sees the in-between state, where the tag exists but the
-changelog has not caught up yet. The changelog commit itself lands in the
-*next* release's `Internal` section, which is correct: it is not part of
-what was released.
+The point of writing the section first is that the tag then names a tree
+whose changelog is already finished. `v0.2.1` was cut the other way
+around — tag first, regenerate after — so the source archives GitHub
+serves for that tag permanently list the whole release under
+`Unreleased`. The tag is immutable; the ordering is what had to change.
+
+Three mechanics make the pre-tag section possible:
+
+- Commits that touch only `CHANGELOG.md` are excluded from every
+  section, on the generate and check paths alike — the changelog commit
+  cannot list itself, because its hash does not exist while the file is
+  being generated.
+- Release dates are UTC on both sides, and `--check` compares headings
+  with the date stripped, so a tag that lands on the other side of
+  midnight from the generated date cannot fail its own check. The next
+  regeneration refreshes the written date to the tag's.
+- Plain regeneration builds only from tags, so running it *between*
+  `--release` and the tag would erase the pending section — rerun
+  `--release` if that happens.
 
 **Never amend or rebase a commit after tagging it.** The tag keeps pointing
 at the copy you discarded, which then sits on no branch at all — and since
