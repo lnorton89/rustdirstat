@@ -22,6 +22,8 @@ plan that made them.
 | 3 | Windows: one handle per directory (allocation size, scan-time file id) | not started |
 | 4 | More than one scan root | not started |
 | 5 | Distribution breadth (rpm, AppImage, winget, Homebrew, AUR) | not started |
+| 6 | 120 FPS held during a scan, with tests that check it | not started |
+| 7 | Properties as a modeless, movable window | not started |
 
 ## Deferred, with reasons
 
