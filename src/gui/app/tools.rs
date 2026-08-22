@@ -54,9 +54,91 @@ pub(in crate::gui) struct ToolsState {
     /// in the page because the page is redrawn from scratch every frame
     /// and has nowhere of its own to remember a selection.
     pub selected_locations: Vec<std::path::PathBuf>,
+    /// A user-defined cleanup waiting on its confirmation, already
+    /// resolved against the selection.
+    ///
+    /// The *resolved* command rather than the cleanup's index, because
+    /// the confirmation shows exactly what will run — a template plus a
+    /// selection is not something a person can check, and the selection
+    /// could change between the question and the answer.
+    pub pending_cleanup: Option<PendingCleanup>,
+}
+
+/// A cleanup that has been resolved and is waiting to be confirmed.
+pub(in crate::gui) struct PendingCleanup {
+    pub name: String,
+    pub command: crate::cleanups::Command,
+    pub capture_output: bool,
 }
 
 impl GuiApp {
+    /// Resolves a cleanup against the current selection and either asks
+    /// or runs it.
+    ///
+    /// The path is resolved *exactly* — `path_for`, never the forgiving
+    /// lookup — for the reason the delete path does the same: a stale
+    /// selection must refuse rather than act on the nearest surviving
+    /// ancestor, and this one runs a program the app knows nothing about.
+    pub(in crate::gui) fn request_cleanup(&mut self, index: usize) {
+        let Some(cleanup) = self.cleanups.get(index).cloned() else {
+            return;
+        };
+        let Some(target) = self
+            .selected_path
+            .as_deref()
+            .and_then(|path| self.tree.path_for(path))
+        else {
+            self.status = Some(crate::cleanups::CleanupError::NoTarget.to_string());
+            return;
+        };
+        let command = match crate::cleanups::resolve(&cleanup, &target) {
+            Ok(command) => command,
+            Err(error) => {
+                self.status = Some(format!("{}: {error}", cleanup.name));
+                return;
+            }
+        };
+        let pending = PendingCleanup {
+            name: cleanup.name.clone(),
+            command,
+            capture_output: cleanup.capture_output,
+        };
+        if cleanup.confirm {
+            self.tools.pending_cleanup = Some(pending);
+        } else {
+            self.start_cleanup(pending);
+        }
+    }
+
+    pub(in crate::gui) fn confirm_cleanup(&mut self) {
+        if let Some(pending) = self.tools.pending_cleanup.take() {
+            self.start_cleanup(pending);
+        }
+    }
+
+    /// Runs a resolved cleanup on a worker thread.
+    ///
+    /// The same channel the Windows maintenance tools use, so a cleanup
+    /// that takes a minute leaves the window interactive and lands in the
+    /// same log.
+    fn start_cleanup(&mut self, pending: PendingCleanup) {
+        if self.is_busy() {
+            self.status = Some("Another background operation is already running".to_string());
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let name = pending.name.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::cleanups::run(
+                &pending.command,
+                pending.capture_output,
+            ));
+        });
+        self.tools.rx = Some(rx);
+        self.tools.active_name = Some(name.clone());
+        self.status = Some(format!("Running {name}…"));
+    }
+
     /// The volume a Windows maintenance tool should act on.
     ///
     /// `tree.root_path` was the obvious answer and is wrong as soon as a

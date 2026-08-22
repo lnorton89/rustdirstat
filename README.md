@@ -232,6 +232,35 @@ surface):
   shortcuts" for the rest), or the **Yes/No buttons** in the delete
   confirmation popup.
 
+## Cleanups
+
+Your own commands, run against whatever is selected — WinDirStat's
+"Cleanups". Nothing is configured by default; add them to the config file
+described under [Preferences](#preferences):
+
+```toml
+[[cleanups]]
+name = "Open a terminal here"
+program = "wt"
+args = ["-d", "%d"]
+capture_output = false
+
+[[cleanups]]
+name = "Compress with 7-Zip"
+program = "7z"
+args = ["a", "-tzip", "%p.zip", "%p"]
+```
+
+`%p` is the full path, `%n` the file name, `%d` the containing folder,
+and `%%` a literal per cent. Arguments are a list, and **no shell is
+involved**: a file name containing spaces, quotes or semicolons is passed
+as data, not parsed as syntax. Every cleanup asks before it runs (set
+`confirm = false` to opt out, per cleanup) and the confirmation shows the
+exact command, after substitution.
+
+The reasoning, including what a hostile file name can and cannot do here,
+is in [`docs/CLEANUPS_THREAT_MODEL.md`](docs/CLEANUPS_THREAT_MODEL.md).
+
 ## Preferences
 
 Sort order, the treemap panel's visibility and width, the detail-row

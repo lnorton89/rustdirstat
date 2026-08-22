@@ -264,6 +264,9 @@ pub(in crate::gui) struct GuiApp {
     /// flags used to live here; they could all be true at once, and two
     /// of them opened the same window.
     pub modal: Option<ModalPage>,
+    /// The user's configured cleanups, as of the last time their page was
+    /// opened. See [`crate::cleanups`].
+    pub(in crate::gui) cleanups: Vec<crate::cleanups::Cleanup>,
     pub properties: PropertiesWindow,
     pub backdrop: Backdrop,
     pub theme_id: String,
@@ -363,6 +366,7 @@ impl GuiApp {
             pending_delete: None,
             status: None,
             modal: None,
+            cleanups: config.cleanups.clone(),
             properties: PropertiesWindow::from_config(&config),
             backdrop: Backdrop::Idle,
             theme_id: theme_id.clone(),
@@ -416,6 +420,14 @@ impl GuiApp {
     }
 
     pub(in crate::gui) fn open_modal(&mut self, page: ModalPage) {
+        // Re-read the cleanups when their page opens, and only then. They
+        // are edited in a text file that may have changed while the app
+        // was running, but reading it while *drawing* would be file I/O
+        // on the frame path — which is the one thing the draw code is not
+        // allowed to do.
+        if page == ModalPage::Cleanups {
+            self.cleanups = crate::config::load().cleanups;
+        }
         self.modal = Some(page);
     }
 

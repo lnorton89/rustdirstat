@@ -55,17 +55,19 @@ pub(crate) enum ModalPage {
     Appearance,
     Layout,
     Views,
+    Cleanups,
     Maintenance,
     Guide,
     About,
 }
 
 impl ModalPage {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::Locations,
         Self::Appearance,
         Self::Layout,
         Self::Views,
+        Self::Cleanups,
         Self::Maintenance,
         Self::Guide,
         Self::About,
@@ -77,6 +79,7 @@ impl ModalPage {
             Self::Appearance => "Appearance",
             Self::Layout => "Layout",
             Self::Views => "Views",
+            Self::Cleanups => "Cleanups",
             Self::Maintenance => "Maintenance",
             Self::Guide => "View guide",
             Self::About => "About",
@@ -89,6 +92,7 @@ impl ModalPage {
             Self::Appearance => Icon::Settings,
             Self::Layout => Icon::LayoutHorizontal,
             Self::Views => Icon::Tree,
+            Self::Cleanups => Icon::Export,
             Self::Maintenance => Icon::Tools,
             Self::Guide => Icon::Help,
             Self::About => Icon::App,
@@ -104,6 +108,7 @@ impl ModalPage {
             Self::Appearance => "Theme, and how the treemap is drawn.",
             Self::Layout => "Where the treemap and the lists sit relative to each other.",
             Self::Views => "Which parts of the window are shown.",
+            Self::Cleanups => "Your own commands, run against the selected item.",
             Self::Maintenance => "Built-in Windows tools for the volume holding this scan.",
             Self::Guide => "What each of the coupled views does.",
             Self::About => "RustDirStat, and where its behaviour comes from.",
@@ -115,6 +120,9 @@ impl ModalPage {
 pub(super) enum ConfirmKind {
     Delete,
     WindowsTool(usize),
+    /// A user-defined cleanup, already resolved: the card shows the
+    /// command itself rather than the template it came from.
+    Cleanup,
 }
 
 /// Width of the navigation rail. Wide enough for the longest page name
@@ -156,6 +164,9 @@ pub(super) fn modal_is_open(app: &GuiApp) -> bool {
 pub(super) fn confirm_kind(app: &GuiApp) -> Option<ConfirmKind> {
     if app.pending_delete.is_some() {
         return Some(ConfirmKind::Delete);
+    }
+    if app.tools.pending_cleanup.is_some() {
+        return Some(ConfirmKind::Cleanup);
     }
     app.tools.pending.map(ConfirmKind::WindowsTool)
 }

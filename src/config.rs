@@ -56,6 +56,13 @@ pub struct Config {
     pub gui_properties_open: Option<bool>,
     #[serde(default)]
     pub gui_properties_pos: Option<Vec<f32>>,
+    /// User-defined cleanup commands.
+    ///
+    /// Empty unless the user wrote some: shipping defaults would be
+    /// shipping commands nobody read. See
+    /// [`crate::cleanups`] and `docs/CLEANUPS_THREAT_MODEL.md`.
+    #[serde(default)]
+    pub cleanups: Vec<crate::cleanups::Cleanup>,
     /// A theme `id` from `assets/themes.toml`, or from a user theme file.
     /// An id that no longer exists falls back to the default rather than
     /// failing to load — themes come and go, preferences should not
@@ -108,6 +115,10 @@ fn parse(text: &str) -> Config {
         gui_show_labels: field(&table, "gui_show_labels"),
         gui_properties_open: field(&table, "gui_properties_open"),
         gui_properties_pos: field(&table, "gui_properties_pos"),
+        // Forgiving like every other field: one malformed cleanup must
+        // not discard the rest of a config, and a malformed *list* means
+        // no cleanups rather than no preferences.
+        cleanups: field(&table, "cleanups").unwrap_or_default(),
         gui_theme: field(&table, "gui_theme"),
     }
 }

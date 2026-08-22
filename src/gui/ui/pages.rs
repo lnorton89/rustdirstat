@@ -40,6 +40,7 @@ pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
         ModalPage::Appearance => draw_appearance(app, ui),
         ModalPage::Layout => draw_layout(app, ui),
         ModalPage::Views => draw_views(app, ui),
+        ModalPage::Cleanups => draw_cleanups(app, ui),
         ModalPage::Maintenance => draw_maintenance(app, ui),
         ModalPage::Guide => draw_guide(ui),
         ModalPage::About => draw_about(app, ui),
@@ -660,12 +661,94 @@ fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
     see_also(ui, app, "For what each view does, see", ModalPage::Guide);
 }
 
+// -------------------------------------------------------------- Cleanups
+
+/// The user's own commands, run against the selection.
+///
+/// The list comes from `app.cleanups`, which is re-read from the config
+/// when this page is *opened* — never while drawing. A file read on the
+/// frame path is exactly the kind of thing that turns a 120 FPS window
+/// into a stuttering one, and the list only changes when someone edits
+/// the file.
+fn draw_cleanups(app: &mut GuiApp, ui: &mut egui::Ui) {
+    let palette = palette();
+    let cleanups = app.cleanups.clone();
+    let selected = app.selected_fs_path();
+
+    if cleanups.is_empty() {
+        empty_state(
+            ui,
+            Icon::Tools,
+            "No cleanups configured",
+            "A cleanup is a command of your own, run against whatever is selected.              They live in the config file; nothing is set up by default.",
+        );
+        ui.add_space(SPACE_MD);
+    }
+
+    group(ui, Icon::Tools, "Your commands", |ui| {
+        if cleanups.is_empty() {
+            ui.label(
+                RichText::new("Nothing to show until the config file has some.")
+                    .color(palette.secondary_text),
+            );
+            return;
+        }
+        for (index, cleanup) in cleanups.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let run = ui.add_enabled(
+                    selected.is_some() && !app.is_busy(),
+                    egui::Button::new(&cleanup.name),
+                );
+                #[cfg(test)]
+                probe(&TEST_CLEANUP_RECTS).push((cleanup.name.clone(), run.rect));
+                if run.clicked() {
+                    app.request_cleanup(index);
+                }
+                ui.label(RichText::new(command_summary(cleanup)).color(palette.secondary_text));
+            });
+        }
+        if selected.is_none() {
+            ui.add_space(SPACE_SM);
+            ui.label(
+                RichText::new("Select an item first — a cleanup always acts on one thing.")
+                    .color(palette.secondary_text),
+            );
+        }
+    });
+
+    ui.add_space(SPACE_MD);
+    group(ui, Icon::Info, "How they work", |ui| {
+        ui.label(
+            RichText::new(
+                "Each cleanup names a program and its arguments as a list.                  %p is the full path, %n the name, %d the containing folder,                  and %% a literal per cent.",
+            )
+            .color(palette.secondary_text),
+        );
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(
+                "No shell is involved: arguments are passed as they are, so a file                  name containing spaces, quotes or semicolons is data rather than                  syntax. Cleanups ask before running unless their entry says otherwise.",
+            )
+            .color(palette.secondary_text),
+        );
+    });
+}
+
+/// A one-line rendering of what a cleanup will run, before substitution.
+fn command_summary(cleanup: &crate::cleanups::Cleanup) -> String {
+    if cleanup.args.is_empty() {
+        return cleanup.program.clone();
+    }
+    format!("{} {}", cleanup.program, cleanup.args.join(" "))
+}
+
 // ---------------------------------------------------------- Confirmations
 
 pub(super) fn draw_confirm(app: &mut GuiApp, ctx: &egui::Context, kind: ConfirmKind, opening: f32) {
     match kind {
         ConfirmKind::Delete => draw_delete_confirm(app, ctx, opening),
         ConfirmKind::WindowsTool(index) => draw_tool_confirm(app, ctx, index, opening),
+        ConfirmKind::Cleanup => draw_cleanup_confirm(app, ctx, opening),
     }
 }
 
@@ -744,6 +827,54 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
     }
     if cancel {
         app.pending_delete = None;
+    }
+}
+
+/// "This is the command, exactly as it will run."
+///
+/// The whole point of the card: a user-defined cleanup is a template plus
+/// a selection, and neither of those is checkable on its own. What is
+/// shown is the resolved argv — program and every argument after
+/// substitution — because that is the thing that is actually about to
+/// happen. See `docs/CLEANUPS_THREAT_MODEL.md`.
+fn draw_cleanup_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
+    let Some(pending) = &app.tools.pending_cleanup else {
+        return;
+    };
+    let (name, preview) = (pending.name.clone(), pending.command.preview());
+    let palette = palette();
+    let mut confirm = false;
+    let mut cancel = false;
+    confirm_card(ctx, "confirm_cleanup", opening, |ui| {
+        ui.horizontal(|ui| {
+            paint_inline_icon(ui, Icon::Tools, 20.0, palette.accent);
+            ui.add_space(SPACE_XS);
+            ui.label(RichText::new(format!("Run {name}?")).heading().strong());
+        });
+        ui.add_space(SPACE_SM);
+        ui.label(
+            RichText::new("This runs a program you configured, with your privileges.")
+                .color(palette.secondary_text),
+        );
+        ui.add_space(SPACE_SM);
+        // Monospaced and selectable-looking: this is the text the user is
+        // being asked about, not a description of it.
+        ui.label(RichText::new(&preview).monospace());
+        ui.add_space(SPACE_LG);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+            if accent_button(ui, "Run").clicked() {
+                confirm = true;
+            }
+        });
+    });
+    if confirm {
+        app.confirm_cleanup();
+    }
+    if cancel {
+        app.tools.pending_cleanup = None;
     }
 }
 

@@ -38,6 +38,7 @@ this design.
 | `src/color.rs` | Extension → `Category` mapping, the category palette, and `extension_hue` — the one place an extension's colour is decided, so a file is the same colour in the terminal and in the window. It normalises its input, since the GUI holds `.mkv` and the TUI holds `mkv`. |
 | `src/duplicates.rs` | Size-bucketed, blake3-hashed duplicate detection, hard-link aware: two names for one inode are never reported as reclaimable duplicates. |
 | `src/search.rs`, `src/top_files.rs` | Name search across a subtree (glob, or regex behind `re:`) and the k largest files in one. Both walk iteratively and answer in index paths, so neither front end has an opinion about them. |
+| `src/cleanups.rs` | User-defined commands run against the selection. No shell, ever: argv arrays only, placeholders substituted *inside* one argument so a file name can never become another, and an unknown placeholder refused rather than silently emptied. `docs/CLEANUPS_THREAT_MODEL.md` is the reasoning and this module is what enforces it. |
 | `src/platform.rs`, `src/wintools.rs` | Volume free/total space; Windows maintenance tool shell-outs. |
 | `src/gui/shell_icons.rs` | The icon the OS shows for a file type, cached per extension. Windows-only; elsewhere it reports nothing and callers fall back to the drawn set. |
 | `src/config.rs` | Persisted preferences. Every field is `Option`; a missing or corrupt file means "use defaults", never an error. |

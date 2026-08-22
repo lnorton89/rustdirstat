@@ -24,6 +24,7 @@
 mod header_check;
 
 pub mod brand;
+pub mod cleanups;
 pub mod color;
 pub mod config;
 pub mod csv_export;

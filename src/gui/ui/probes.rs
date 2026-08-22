@@ -45,6 +45,11 @@ pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)
 pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Where each cleanup's Run button landed, by cleanup name.
+#[cfg(test)]
+pub(super) static TEST_CLEANUP_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// Where the Locations page's scan button landed, so a test can press
 /// the real control rather than calling the method behind it.
 #[cfg(test)]

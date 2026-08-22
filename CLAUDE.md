@@ -514,6 +514,16 @@ places.
 goes in its group, not at the top level — that is what forty-odd flat
 fields prefixed `duplicate_` and `search_` turned into.
 
+**A file name is attacker-controlled text, and `cleanups` is where that
+bites.** Anyone who can write into a scanned directory chooses what a
+cleanup substitutes — an unzipped archive is enough. So `src/cleanups.rs`
+never builds a command line as text: argv arrays only, no `sh -c`, no
+`cmd /c`, no splitting a configured string into arguments, and
+substitution that happens *inside* one argument so a name can never
+become a second one. An unknown placeholder is an error rather than an
+empty string. The reasoning is `docs/CLEANUPS_THREAT_MODEL.md`; if you
+change this module, change that document in the same commit.
+
 **A destructive confirmation only answers to the keys it offers.** The
 delete and Windows-tool prompts advertise `[Y]es`, `[E]mpty`, `[N]o`;
 anything else — an arrow key, F5, a stray modifier — leaves the dialog

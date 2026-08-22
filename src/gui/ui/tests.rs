@@ -4002,7 +4002,7 @@ fn a_maintenance_tool_refuses_a_multi_root_scan_with_no_selection() {
     );
     let status = app.status.clone().unwrap_or_default();
     assert!(
-        status.contains("Select an item"),
+        status.to_lowercase().contains("select an item"),
         "the refusal should say what to do, got {status:?}"
     );
 }
@@ -4181,4 +4181,103 @@ fn dir_node(name: &str, size: u64) -> Node {
         file_id: None,
         other_filesystem: false,
     }
+}
+
+// ----------------------------------------------------------- cleanups
+
+/// A cleanup asks before it runs, and shows the command it will run.
+///
+/// The confirmation is the feature's whole safety story: a template plus
+/// a selection is not something a person can check, so what the card
+/// shows is the resolved argv. See `docs/CLEANUPS_THREAT_MODEL.md`.
+#[test]
+fn a_cleanup_asks_first_and_shows_the_real_command() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.cleanups = vec![crate::cleanups::Cleanup {
+        name: "Inspect".to_string(),
+        program: "echo".to_string(),
+        args: vec!["--path=%p".to_string()],
+        confirm: true,
+        capture_output: true,
+    }];
+    app.selected_path = Some(vec![0]);
+
+    app.request_cleanup(0);
+
+    let pending = app.tools.pending_cleanup.as_ref();
+    assert!(
+        pending.is_some(),
+        "a confirming cleanup should be waiting on its answer"
+    );
+    let Some(pending) = pending else {
+        return;
+    };
+    let preview = pending.command.preview();
+    assert!(
+        preview.starts_with("echo "),
+        "the program is shown as configured: {preview}"
+    );
+    assert!(
+        preview.contains("--path=") && preview.contains("click-me.txt"),
+        "and the substituted argument with it: {preview}"
+    );
+    assert!(
+        !app.is_busy(),
+        "nothing runs until the question is answered"
+    );
+}
+
+/// A cleanup with nothing selected refuses, rather than picking a target.
+#[test]
+fn a_cleanup_refuses_when_nothing_is_selected() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.cleanups = vec![crate::cleanups::Cleanup {
+        name: "Inspect".to_string(),
+        program: "echo".to_string(),
+        args: vec!["%p".to_string()],
+        confirm: true,
+        capture_output: true,
+    }];
+    app.selected_path = None;
+
+    app.request_cleanup(0);
+
+    assert!(
+        app.tools.pending_cleanup.is_none(),
+        "there is no implicit target — not the scan root, not anything"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.to_lowercase().contains("select an item"),
+        "and it says what to do: {status:?}"
+    );
+}
+
+/// A stale selection refuses too.
+///
+/// The same rule the delete path follows: an index path that no longer
+/// resolves must not act on the nearest surviving ancestor. This one runs
+/// a program the app knows nothing about, so it matters more, not less.
+#[test]
+fn a_cleanup_refuses_a_selection_that_no_longer_resolves() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.cleanups = vec![crate::cleanups::Cleanup {
+        name: "Inspect".to_string(),
+        program: "echo".to_string(),
+        args: vec!["%p".to_string()],
+        confirm: true,
+        capture_output: true,
+    }];
+    // Two levels down a tree that is one level deep.
+    app.selected_path = Some(vec![0, 7]);
+
+    app.request_cleanup(0);
+
+    assert!(
+        app.tools.pending_cleanup.is_none(),
+        "a path that does not resolve is not a target"
+    );
 }
