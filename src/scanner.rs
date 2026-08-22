@@ -162,7 +162,7 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
     };
 
     let root_node = if meta.is_dir() {
-        scan_dir(root, name, progress, 0, root_dev)
+        scan_dir(root, name, progress, 0, root_dev, meta.modified().ok())
     } else {
         if let Some(p) = progress {
             p.files.fetch_add(1, Ordering::Relaxed);
@@ -288,9 +288,10 @@ fn scan_dir(
     progress: Option<&Progress>,
     depth: usize,
     root_dev: Option<u64>,
+    known_modified: Option<std::time::SystemTime>,
 ) -> Node {
     if depth >= MAX_PARALLEL_DEPTH {
-        return scan_dir_deep(path, name, progress, root_dev);
+        return scan_dir_deep(path, name, progress, root_dev, known_modified);
     }
     // One relaxed load per directory, in the same place the counters are
     // touched. The subtree below an abandoned directory is never walked,
@@ -300,9 +301,18 @@ fn scan_dir(
         return abandoned_dir(name);
     }
 
-    let dir_meta = std::fs::symlink_metadata(path).ok();
+    // The parent's listing already carried this directory's timestamp
+    // where the platform reports one, and asking the filesystem again is
+    // a syscall per directory — a million of them on a drive-sized scan.
+    // Only the scan root, which has no parent listing, pays for it.
+    let dir_modified = match known_modified {
+        Some(modified) => Some(modified),
+        None => std::fs::symlink_metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok()),
+    };
     let Some((raw, listing_unreadable)) = read_entries(path) else {
-        return unreadable_dir(name, dir_meta, progress);
+        return unreadable_dir(name, dir_modified, progress);
     };
     let wide = raw.len() >= PAR_THRESHOLD;
     let (entries, meta_unreadable) = materialize(raw, wide);
@@ -320,11 +330,18 @@ fn scan_dir(
     // directory that cannot be opened at all (handled above) and the
     // per-entry lookups `read_entries`/`materialize` already counted.
     let scan_one = |entry: EntryInfo, local_files: &mut u64, local_bytes: &mut u64| -> Node {
-        let ename = entry.name;
-        if entry.metadata.file_type().is_dir() {
-            return scan_dir(&entry.path, ename, progress, depth + 1, root_dev);
+        let ename = entry.name.clone();
+        if entry.is_dir && !entry.is_symlink {
+            return scan_dir(
+                &entry.path,
+                ename,
+                progress,
+                depth + 1,
+                root_dev,
+                entry.modified,
+            );
         }
-        let (node, files, bytes) = leaf_node(&entry.metadata, ename, &entry.path);
+        let (node, files, bytes) = leaf_node(entry, ename);
         *local_files += files;
         *local_bytes += bytes;
         node
@@ -385,7 +402,7 @@ fn scan_dir(
     // an invariant for the walks, not for the user.
     let mut all_children = stubs;
     all_children.extend(children);
-    finish_dir(name, dir_meta, all_children, own_unreadable, progress)
+    finish_dir(name, dir_modified, all_children, own_unreadable, progress)
 }
 
 /// The same walk as [`scan_dir`], iteratively and on one thread.
@@ -403,10 +420,11 @@ fn scan_dir_deep(
     name: OsString,
     progress: Option<&Progress>,
     root_dev: Option<u64>,
+    known_modified: Option<std::time::SystemTime>,
 ) -> Node {
     struct Frame {
         name: OsString,
-        dir_meta: Option<std::fs::Metadata>,
+        dir_modified: Option<std::time::SystemTime>,
         entries: std::vec::IntoIter<EntryInfo>,
         children: Vec<Node>,
         own_unreadable: u64,
@@ -419,8 +437,14 @@ fn scan_dir_deep(
         name: OsString,
         progress: Option<&Progress>,
         root_dev: Option<u64>,
+        known_modified: Option<std::time::SystemTime>,
     ) -> Result2 {
-        let dir_meta = std::fs::symlink_metadata(&path).ok();
+        let dir_modified = match known_modified {
+            Some(modified) => Some(modified),
+            None => std::fs::symlink_metadata(&path)
+                .ok()
+                .and_then(|meta| meta.modified().ok()),
+        };
         match read_entries(&path) {
             Some((raw, listing_unreadable)) => {
                 // Sequential materialization: this walk only runs past
@@ -430,7 +454,7 @@ fn scan_dir_deep(
                 let (entries, stubs) = split_other_filesystem(entries, root_dev);
                 Result2::Frame(Box::new(Frame {
                     name,
-                    dir_meta,
+                    dir_modified,
                     entries: entries.into_iter(),
                     // Markers first, scanned children appended after —
                     // the same order `scan_dir` produces.
@@ -440,7 +464,7 @@ fn scan_dir_deep(
                     local_bytes: 0,
                 }))
             }
-            None => Result2::Node(unreadable_dir(name, dir_meta, progress)),
+            None => Result2::Node(unreadable_dir(name, dir_modified, progress)),
         }
     }
 
@@ -450,7 +474,7 @@ fn scan_dir_deep(
     }
 
     let mut stack: Vec<Frame> = Vec::new();
-    match open(path.to_path_buf(), name, progress, root_dev) {
+    match open(path.to_path_buf(), name, progress, root_dev, known_modified) {
         Result2::Frame(frame) => stack.push(*frame),
         Result2::Node(node) => return node,
     }
@@ -479,7 +503,7 @@ fn scan_dir_deep(
             }
             let node = finish_dir(
                 frame.name,
-                frame.dir_meta,
+                frame.dir_modified,
                 frame.children,
                 frame.own_unreadable,
                 progress,
@@ -491,15 +515,21 @@ fn scan_dir_deep(
             continue;
         };
 
-        let ename = entry.name;
-        if entry.metadata.file_type().is_dir() {
-            match open(entry.path, ename, progress, root_dev) {
+        let ename = entry.name.clone();
+        if entry.is_dir && !entry.is_symlink {
+            match open(
+                entry.path.clone(),
+                ename,
+                progress,
+                root_dev,
+                entry.modified,
+            ) {
                 Result2::Frame(child) => stack.push(*child),
                 Result2::Node(node) => frame.children.push(node),
             }
             continue;
         }
-        let (node, files, bytes) = leaf_node(&entry.metadata, ename, &entry.path);
+        let (node, files, bytes) = leaf_node(entry, ename);
         frame.local_files += files;
         frame.local_bytes += bytes;
         frame.children.push(node);
@@ -508,47 +538,129 @@ fn scan_dir_deep(
     finished.unwrap_or_else(|| unreadable_dir(OsString::new(), None, progress))
 }
 
-/// Whether an entry is on the device the scan started on.
+/// One directory entry, with everything the walk needs about it already
+/// resolved.
 ///
-/// `root_dev` is always `None` on platforms without an inode model, where
-/// the guard is simply off.
-#[cfg(unix)]
-fn same_filesystem(root_dev: u64, meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.dev() == root_dev
-}
-
-#[cfg(not(unix))]
-fn same_filesystem(_root_dev: u64, _meta: &std::fs::Metadata) -> bool {
-    true
-}
-
-/// What the scanner actually keeps of a directory entry.
-///
-/// Deliberately not a [`std::fs::DirEntry`]: Rust documents that a Unix
-/// `DirEntry` holds an internal reference to the directory it came from,
-/// so retaining entries while recursively scanning their siblings keeps
-/// one directory file descriptor open per entry — a deep or wide tree can
-/// exhaust `RLIMIT_NOFILE`. The name, path, and metadata are materialized
-/// by [`materialize`] and the `DirEntry` is dropped before any child scan
-/// begins.
+/// Deliberately not a `std::fs::Metadata`: where the fields come from is
+/// a platform decision made once, in [`read_entries`], and everything
+/// downstream reads the same shape either way. Holding a `DirEntry` here
+/// instead would also keep the directory's file descriptor open across
+/// the child scan, and a deep or wide tree of those can exhaust Unix
+/// `RLIMIT_NOFILE`.
 struct EntryInfo {
     name: OsString,
     path: PathBuf,
-    metadata: std::fs::Metadata,
+    is_dir: bool,
+    is_symlink: bool,
+    len: u64,
+    /// Bytes on disk. Where a directory listing supplied the allocation
+    /// size it is that; otherwise it is whatever [`crate::platform`] can
+    /// work out from the metadata.
+    physical: u64,
+    modified: Option<std::time::SystemTime>,
+    file_id: Option<crate::platform::FileId>,
+    /// The device the entry lives on, where the platform reports one.
+    /// Only the filesystem-boundary check reads it.
+    device: Option<u64>,
+}
+
+impl EntryInfo {
+    /// The `std` path: everything derived from a per-entry `stat`.
+    fn from_metadata(name: OsString, path: PathBuf, metadata: &std::fs::Metadata) -> Self {
+        let kind = metadata.file_type();
+        Self {
+            is_dir: kind.is_dir(),
+            is_symlink: kind.is_symlink(),
+            len: metadata.len(),
+            physical: crate::platform::physical_size(metadata, &path),
+            modified: metadata.modified().ok(),
+            file_id: crate::platform::file_id(metadata),
+            device: entry_device(metadata),
+            name,
+            path,
+        }
+    }
+
+    /// The listing path: everything the directory itself reported.
+    fn from_listing(dir: &Path, entry: crate::platform::DirEntryInfo) -> Self {
+        Self {
+            path: dir.join(&entry.name),
+            name: entry.name,
+            is_dir: entry.is_dir,
+            is_symlink: entry.is_symlink,
+            len: entry.len,
+            physical: entry.allocation,
+            modified: entry.modified,
+            file_id: entry.file_id,
+            // A directory listing describes one directory, which is on
+            // one filesystem by construction, so the boundary check has
+            // nothing to compare. The platforms that report a device
+            // report it through `stat`, which is the other path.
+            device: None,
+        }
+    }
+}
+
+/// The device an entry sits on, where the platform says.
+#[cfg(unix)]
+fn entry_device(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.dev())
+}
+
+#[cfg(not(unix))]
+fn entry_device(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+/// A directory's entries, before they are turned into [`EntryInfo`]s.
+///
+/// Two shapes, because two platforms answer differently. Windows can
+/// describe every entry from the directory handle it had to open anyway
+/// — sizes, identity, timestamps and all — so those arrive complete and
+/// there is nothing left to fetch. Everywhere else the walk gets names
+/// and has to `stat` each one, which is worth doing in parallel for a
+/// wide directory.
+enum Listing {
+    Ready(Vec<EntryInfo>),
+    NeedsMetadata(Vec<std::fs::DirEntry>),
+}
+
+impl Listing {
+    fn len(&self) -> usize {
+        match self {
+            Self::Ready(entries) => entries.len(),
+            Self::NeedsMetadata(entries) => entries.len(),
+        }
+    }
 }
 
 /// Every entry in `path`, plus a count of the ones that could not be
-/// read. `None` when the directory itself could not be opened.
+/// read. `None` when the directory itself could not be listed at all.
 ///
-/// `read_dir` can fail outright (permission denied, etc.) — that's the
-/// `None`. But the *iterator it returns* can also yield individual
-/// `Err`s partway through (a race with something deleting an entry, a
-/// flaky mount) without the whole listing failing. Silently dropping
-/// those via `.filter_map(|e| e.ok())` would make a partial listing look
-/// identical to a complete one, so they're counted instead of discarded.
-/// Metadata failures are counted the same way, by [`materialize`].
-fn read_entries(path: &Path) -> Option<(Vec<std::fs::DirEntry>, u64)> {
+/// The preferred path is [`crate::platform::directory_listing`], which on
+/// Windows enumerates the directory through one handle and reports the
+/// allocated size and the file identity of every entry alongside the
+/// name — strictly more than `read_dir` exposes, for the same cost,
+/// because `read_dir` opens the very same handle internally. Measured
+/// over a 1,900-directory tree the two walks came out within a percent
+/// of each other; running *both* — which is what an earlier version of
+/// this did, to bolt the extra fields onto a `std` listing — cost more
+/// than twice either.
+///
+/// Everywhere else, and on any Windows filesystem that does not
+/// implement the info class, it falls back to `read_dir`. That path can
+/// also fail *per entry* partway through — a race with something
+/// deleting a file, a flaky mount — without the listing itself failing,
+/// and those are counted rather than silently dropped.
+fn read_entries(path: &Path) -> Option<(Listing, u64)> {
+    if let Some(entries) = crate::platform::directory_listing(path) {
+        let entries = entries
+            .into_iter()
+            .map(|entry| EntryInfo::from_listing(path, entry))
+            .collect();
+        return Some((Listing::Ready(entries), 0));
+    }
     let read_dir = std::fs::read_dir(path).ok()?;
     let mut entries = Vec::new();
     let mut unreadable = 0u64;
@@ -558,29 +670,34 @@ fn read_entries(path: &Path) -> Option<(Vec<std::fs::DirEntry>, u64)> {
             Err(_) => unreadable += 1,
         }
     }
-    Some((entries, unreadable))
+    Some((Listing::NeedsMetadata(entries), unreadable))
 }
 
-/// Turns raw `DirEntry`s into owned [`EntryInfo`] records, plus a count
-/// of the ones whose metadata could not be fetched.
+/// Completes a [`Listing`], plus a count of the entries whose metadata
+/// could not be fetched.
 ///
-/// Every `DirEntry` is consumed here, before any child scan begins —
-/// see [`EntryInfo`] for why holding one across recursion matters. The
-/// lookup is a real `stat` per entry on Unix, so a directory wide
-/// enough for the parallel walk fetches in parallel; an earlier version
-/// fetched sequentially inside `read_entries`, which serialized the
-/// syscalls the walk used to overlap and slowed exactly the huge flat
-/// directories a scan spends most of its time in.
-fn materialize(raw: Vec<std::fs::DirEntry>, parallel: bool) -> (Vec<EntryInfo>, u64) {
+/// A listing that arrived complete passes straight through. For the
+/// `std` path this is where the per-entry `stat` happens, and every
+/// `DirEntry` is consumed here, before any child scan begins. The
+/// lookups run in parallel for a wide directory; an earlier version
+/// fetched them sequentially inside [`read_entries`], which serialized
+/// the syscalls the walk used to overlap and slowed exactly the huge
+/// flat directories a scan spends most of its time in.
+fn materialize(listing: Listing, parallel: bool) -> (Vec<EntryInfo>, u64) {
+    let raw = match listing {
+        Listing::Ready(entries) => return (entries, 0),
+        Listing::NeedsMetadata(entries) => entries,
+    };
+
     // `DirEntry::metadata` does not follow symlinks, matching what the
     // scan has always assumed of a directory entry.
     fn one(entry: std::fs::DirEntry) -> Option<EntryInfo> {
         let metadata = entry.metadata().ok()?;
-        Some(EntryInfo {
-            name: entry.file_name(),
-            path: entry.path(),
-            metadata,
-        })
+        Some(EntryInfo::from_metadata(
+            entry.file_name(),
+            entry.path(),
+            &metadata,
+        ))
     }
 
     let materialized: Vec<Option<EntryInfo>> = if parallel {
@@ -617,7 +734,7 @@ fn split_other_filesystem(
     let mut kept = Vec::with_capacity(entries.len());
     let mut stubs = Vec::new();
     for entry in entries {
-        if same_filesystem(dev, &entry.metadata) {
+        if entry.device.is_none_or(|entry_dev| entry_dev == dev) {
             kept.push(entry);
         } else {
             stubs.push(other_filesystem_stub(entry));
@@ -633,17 +750,16 @@ fn split_other_filesystem(
 /// volume" against its free space. The marker keeps the place visible
 /// while keeping the accounting honest.
 fn other_filesystem_stub(entry: EntryInfo) -> Node {
-    let meta = &entry.metadata;
-    let is_dir = meta.file_type().is_dir();
+    let is_dir = entry.is_dir;
     Node {
         name: entry.name,
         is_dir,
-        is_symlink: meta.file_type().is_symlink(),
+        is_symlink: entry.is_symlink,
         size: 0,
         physical_size: 0,
         file_count: 0,
         dir_count: 0,
-        modified: meta.modified().ok(),
+        modified: entry.modified,
         children: vec![],
         error: false,
         category: None,
@@ -653,7 +769,7 @@ fn other_filesystem_stub(entry: EntryInfo) -> Node {
             vec![]
         },
         unreadable_count: 0,
-        file_id: crate::platform::file_id(meta),
+        file_id: entry.file_id,
         other_filesystem: true,
     }
 }
@@ -690,7 +806,7 @@ fn abandoned_dir(name: OsString) -> Node {
 
 fn unreadable_dir(
     name: OsString,
-    dir_meta: Option<std::fs::Metadata>,
+    dir_modified: Option<std::time::SystemTime>,
     progress: Option<&Progress>,
 ) -> Node {
     if let Some(p) = progress {
@@ -704,7 +820,7 @@ fn unreadable_dir(
         physical_size: 0,
         file_count: 0,
         dir_count: 0,
-        modified: dir_meta.and_then(|m| m.modified().ok()),
+        modified: dir_modified,
         children: vec![],
         error: true,
         category: None,
@@ -716,11 +832,14 @@ fn unreadable_dir(
 }
 
 /// A non-directory entry, with what it contributes to its parent's
-/// running file and byte counts. `path` is only for platforms whose
-/// physical size needs the real path (Windows) — Unix reads it straight
-/// off the metadata.
-fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u64, u64) {
-    if meta.file_type().is_symlink() {
+/// running file and byte counts.
+///
+/// Everything it needs is already on the entry: the walk decided how to
+/// get each field — a directory listing on Windows, a `stat` elsewhere —
+/// before this was called, so there is one shape of leaf here rather
+/// than one per platform.
+fn leaf_node(entry: EntryInfo, name: OsString) -> (Node, u64, u64) {
+    if entry.is_symlink {
         return (
             Node {
                 name,
@@ -730,13 +849,13 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
                 physical_size: 0,
                 file_count: 1,
                 dir_count: 0,
-                modified: meta.modified().ok(),
+                modified: entry.modified,
                 children: vec![],
                 error: false,
                 category: None,
                 ext_totals: vec![],
                 unreadable_count: 0,
-                file_id: crate::platform::file_id(meta),
+                file_id: entry.file_id,
                 other_filesystem: false,
             },
             1,
@@ -749,20 +868,20 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
             name,
             is_dir: false,
             is_symlink: false,
-            size: meta.len(),
-            physical_size: crate::platform::physical_size(meta, path),
+            size: entry.len,
+            physical_size: entry.physical,
             file_count: 1,
             dir_count: 0,
-            modified: meta.modified().ok(),
+            modified: entry.modified,
             children: vec![],
             error: false,
             ext_totals: vec![],
             unreadable_count: 0,
-            file_id: crate::platform::file_id(meta),
+            file_id: entry.file_id,
             other_filesystem: false,
         },
         1,
-        meta.len(),
+        entry.len,
     )
 }
 
@@ -772,7 +891,7 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
 /// drift into aggregating differently.
 fn finish_dir(
     name: OsString,
-    dir_meta: Option<std::fs::Metadata>,
+    dir_modified: Option<std::time::SystemTime>,
     children: Vec<Node>,
     own_unreadable: u64,
     progress: Option<&Progress>,
@@ -816,7 +935,7 @@ fn finish_dir(
         physical_size,
         file_count,
         dir_count,
-        modified: dir_meta.and_then(|m| m.modified().ok()),
+        modified: dir_modified,
         children,
         error: false,
         category: None,
@@ -832,6 +951,159 @@ mod tests {
     use super::*;
     use crate::util::scratch_dir;
     use std::fs;
+
+    /// On Windows a scan now reports what a file actually occupies.
+    ///
+    /// Before 0.3.0 "physical size" there meant compression- and
+    /// sparse-aware but *not* cluster-rounded, so every plain file
+    /// reported its logical size — internally consistent, and not what a
+    /// disk-usage tool means by on-disk size. The per-directory listing
+    /// supplies the filesystem's own allocation size for every entry at
+    /// the cost of one call per directory, so the honest number is now
+    /// affordable.
+    ///
+    /// "Honest" is worth being precise about, because NTFS has two
+    /// answers. A file too small to need a cluster is stored *resident*
+    /// inside its MFT record, and NTFS reports its allocation as the data
+    /// rounded to eight bytes — it genuinely occupies no clusters. A file
+    /// past that threshold is allocated in whole clusters and reports
+    /// them. This checks the second case, which is the one the old
+    /// behaviour got wrong.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_reports_the_clusters_it_occupies() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "allocation");
+        fs::create_dir_all(&root)?;
+        // Deliberately not a round number and past any residency
+        // threshold, so the answer has to be rounded *up* to something.
+        let logical = 5_000_u64;
+        fs::write(root.join("chunk.bin"), vec![b'x'; logical as usize])?;
+        // And a resident-sized one beside it, to pin the other case.
+        fs::write(root.join("tiny.bin"), *b"x")?;
+
+        let tree = scan_to_completion(&root)?;
+        let find = |name: &str| {
+            tree.root
+                .children
+                .iter()
+                .find(|child| child.name == std::ffi::OsStr::new(name))
+        };
+        let Some(chunk) = find("chunk.bin") else {
+            anyhow::bail!("the 5000-byte fixture file was not scanned");
+        };
+        assert_eq!(chunk.size, logical, "the logical size is what was written");
+        assert!(
+            chunk.physical_size > logical,
+            "{} bytes on disk for a {logical}-byte file is the logical size again,              not an allocation",
+            chunk.physical_size
+        );
+        assert_eq!(
+            chunk.physical_size % 512,
+            0,
+            "an allocation is a whole number of sectors, got {}",
+            chunk.physical_size
+        );
+
+        let Some(tiny) = find("tiny.bin") else {
+            anyhow::bail!("the one-byte fixture file was not scanned");
+        };
+        assert!(
+            tiny.physical_size < chunk.physical_size,
+            "a resident file cannot occupy more than a clustered one: {} vs {}",
+            tiny.physical_size,
+            chunk.physical_size
+        );
+        Ok(())
+    }
+
+    /// An empty file occupies nothing, and that is not a failure to read
+    /// the allocation.
+    #[cfg(windows)]
+    #[test]
+    fn an_empty_file_occupies_nothing() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "empty_file");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("empty.bin"), *b"")?;
+
+        let tree = scan_to_completion(&root)?;
+        let Some(empty) = tree.root.children.first() else {
+            anyhow::bail!("the fixture has one file and the scan found none");
+        };
+        assert_eq!(empty.size, 0);
+        assert_eq!(
+            empty.physical_size, 0,
+            "an empty file allocates no clusters"
+        );
+        Ok(())
+    }
+
+    /// The scan captures file identity on Windows, not just on Unix.
+    ///
+    /// Two hard links to one file share an identity, and until 0.3.0 the
+    /// Windows scan left `file_id` `None` and duplicate detection
+    /// recovered it later from the hashing handle. Having it at scan time
+    /// is what a hard-link-aware *total* would need, and it costs nothing
+    /// extra now that the directory listing is being read anyway.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_scan_captures_file_identity() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "identity");
+        fs::create_dir_all(&root)?;
+        let original = root.join("original.bin");
+        fs::write(&original, vec![b'x'; 4096])?;
+        let link = root.join("link.bin");
+        // `fs::hard_link` needs no privilege on NTFS, unlike a symlink.
+        // A filesystem that refuses one (FAT32 on a USB stick) skips the
+        // test rather than failing it.
+        if fs::hard_link(&original, &link).is_err() {
+            return Ok(());
+        }
+
+        let tree = scan_to_completion(&root)?;
+        let ids: Vec<_> = tree
+            .root
+            .children
+            .iter()
+            .filter(|child| !child.is_dir)
+            .map(|child| child.file_id)
+            .collect();
+        assert_eq!(ids.len(), 2, "the fixture has two names for one file");
+        assert!(
+            ids.iter().all(Option::is_some),
+            "a Windows scan should now capture identity: {ids:?}"
+        );
+        assert_eq!(
+            ids.first(),
+            ids.last(),
+            "two hard links to one file must share an identity: {ids:?}"
+        );
+        Ok(())
+    }
+
+    /// A directory that cannot be listed the fast way still scans.
+    ///
+    /// The fallback is the whole reason `directory_listing` returns an
+    /// `Option`: a redirector or a filesystem that does not implement the
+    /// info class must produce a scan with less precise sizes, never no
+    /// scan. Checked here by asking for a listing of something that is
+    /// not a directory at all, which is the same "cannot list this"
+    /// answer.
+    #[test]
+    fn a_directory_with_no_fast_listing_still_scans() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "no_listing");
+        fs::create_dir_all(&root)?;
+        let file = root.join("plain.bin");
+        fs::write(&file, vec![b'x'; 100])?;
+
+        assert!(
+            crate::platform::directory_listing(&file).is_none(),
+            "a file is not a directory, so it has no entry listing"
+        );
+        let tree = scan_to_completion(&root)?;
+        assert_eq!(tree.root.file_count, 1, "the scan still produced a tree");
+        assert!(tree.root.size >= 100);
+        Ok(())
+    }
 
     /// A cancelled scan says so, and stops walking.
     ///
@@ -927,6 +1199,7 @@ mod tests {
             &root.join("deep"),
             std::ffi::OsString::from("deep"),
             Some(&progress),
+            None,
             None,
         );
 
@@ -1041,8 +1314,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         build_fixture(&root)?;
 
-        let parallel = scan_dir(&root, OsString::from("root"), None, 0, None);
-        let deep = scan_dir_deep(&root, OsString::from("root"), None, None);
+        let parallel = scan_dir(&root, OsString::from("root"), None, 0, None, None);
+        let deep = scan_dir_deep(&root, OsString::from("root"), None, None, None);
 
         assert_eq!(
             canonical(&parallel),
@@ -1106,7 +1379,7 @@ mod tests {
             return Ok(());
         }
 
-        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None, None);
         let Some(child) = node.children.first() else {
             return Err(std::io::Error::other("fixture file was not scanned"));
         };
@@ -1152,7 +1425,7 @@ mod tests {
         }
         fs::write(root.join("a\u{FFFD}"), b"two")?;
 
-        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None, None);
         assert_eq!(
             node.children.len(),
             2,
@@ -1272,7 +1545,7 @@ mod tests {
             return Ok(());
         }
 
-        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None, None);
         assert_eq!(
             node.size, 512,
             "the payload is counted once — a followed junction would double it"
@@ -1309,7 +1582,7 @@ mod tests {
         fs::create_dir_all(&chain)?;
         fs::write(chain.join("bottom.bin"), vec![b'z'; 7])?;
 
-        let tree = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let tree = scan_dir(&root, OsString::from("root"), None, 0, None, None);
         assert_eq!(tree.file_count, 1, "the file at the bottom should be found");
         assert_eq!(tree.size, 7, "and its bytes counted");
         assert_eq!(

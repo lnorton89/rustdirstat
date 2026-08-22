@@ -53,6 +53,50 @@ has — no individual frame is slow, and the target is still missed by a
 factor of four. A busy app now asks for the next frame immediately and
 lets vsync do the pacing.
 
+## 0b. What a Windows directory listing costs, and buys
+
+Since 0.3.0 the walk lists each Windows directory through its own handle
+(`platform::directory_listing`) rather than through `read_dir`. The
+listing reports, for every entry and in the same call: the name, the
+attributes, the logical size, the **allocation size**, the timestamps and
+the **file id**. That is what makes two things possible that were not
+before — physical sizes that mean what Explorer means by "size on disk",
+and hard-link identity captured at scan time rather than recovered later
+from the duplicate hasher's open handle.
+
+It is not free, and the number matters more than the argument. Measured
+on this repository's `target/` directory — 1,913 directories holding
+13,452 files, so roughly seven files per directory, which is close to the
+worst case for a per-directory cost — with a warm cache and a release
+build:
+
+| Walk | Wall clock |
+|---|---|
+| `read_dir` + per-entry metadata | ~55 ms |
+| One directory handle per directory | ~80 ms |
+
+About **13 µs per directory**, or ~45% on a tree shaped like that one.
+The overhead is per *directory*, not per file, so it shrinks against any
+directory with more than a handful of entries in it; on a drive-sized
+scan of ~1.3M directories it is on the order of fifteen seconds against a
+scan measured in minutes.
+
+Two things were tried and did not help: opening with the narrow
+`FILE_LIST_DIRECTORY` right rather than `GENERIC_READ`, and caching the
+volume serial per volume instead of asking per directory (kept anyway —
+it is a syscall per directory not made). Building each name straight from
+UTF-16 with `OsStringExt::from_wide` rather than via
+`String::from_utf16_lossy` *did*: the double conversion was most of the
+cost of the parse.
+
+One thing was removed to pay for it: the walk no longer calls
+`symlink_metadata` for each directory to learn its own timestamp, because
+the parent's listing already carried it. Only the scan root pays for that
+now, on either path.
+
+`RUSTDIRSTAT_STD_LISTING=1` forces the `read_dir` walk — for a filesystem
+where the listing path misbehaves, and for reproducing the table above.
+
 ## 1. The GUI is immediate mode: every frame rebuilds the window
 
 `gui::ui::draw` runs top to bottom on every frame. There is no retained

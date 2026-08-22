@@ -19,7 +19,7 @@ plan that made them.
 |---|---|---|
 | 1 | Leave egui 0.29 behind (0.36) | done |
 | 2 | A scan you can stop (cancellation) | done |
-| 3 | Windows: one handle per directory (allocation size, scan-time file id) | not started |
+| 3 | Windows: one handle per directory (allocation size, scan-time file id) | done |
 | 4 | More than one scan root | not started |
 | 5 | Distribution breadth (rpm, AppImage, winget, Homebrew, AUR) | not started |
 | 6 | 120 FPS held during a scan, with tests that check it | done |

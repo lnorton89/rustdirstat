@@ -53,15 +53,16 @@ The terminal UI, the same three coupled views over the same scanning core:
 - Search the whole scan by glob or regex, list the largest files, and find
   duplicate files by content hash — hard-link aware, so two names for one
   file are never counted as reclaimable space
-- Logical vs. physical (on-disk) size everywhere. What "physical" means
-  is platform-honest rather than pretended uniform: on Unix it is
-  allocated blocks (`st_blocks`, so sparse files and tail packing show
-  their real footprint); on Windows it is compression- and sparse-aware
-  — NTFS-compressed and sparse files report their true on-disk bytes —
-  but not rounded up to allocation clusters, so a 1-byte plain file
-  reports 1 byte, not a 4 KB cluster. True cluster accounting would
-  cost a handle per file on exactly the huge scans this tool is built
-  for, and is deliberately not paid
+- Logical vs. physical (on-disk) size everywhere, and "physical" means
+  what the filesystem says rather than what is convenient to ask for: on
+  Unix it is allocated blocks (`st_blocks`, so sparse files and tail
+  packing show their real footprint), and on Windows it is the
+  allocation size — cluster-rounded, compression- and sparse-aware. NTFS
+  answers for a file too small to need a cluster by reporting what it
+  really occupies inside the MFT record rather than a cluster it does
+  not use, and that answer is passed through as given. This costs no
+  extra syscall: the directory listing the scan already performs carries
+  it
 - Delete to the Recycle Bin/Trash (permanent delete is deliberately
   harder), empty folders with honest partial-failure reporting, move
   across volumes without following symlinks

@@ -460,8 +460,8 @@ directory tan is load-bearing: without it an ordinary `.wav` tile is
 hard to tell from a folder tile beside it.
 
 **A pathname and a filesystem object are different things.** `Node`
-holds `file_id` — `(st_dev, st_ino)` on Unix, `None` on Windows —
-captured at scan time. Duplicates use it to tell two hard links to one
+holds `file_id` — `(st_dev, st_ino)` on Unix, volume serial plus
+file index on Windows — captured at scan time. Duplicates use it to tell two hard links to one
 file from two real copies: a same-content group whose names all share
 one inode is not reclaimable space, and `DupGroup::reclaimable` counts
 `distinct_inodes - 1`, not `files.len() - 1`. The scanner stays on the
