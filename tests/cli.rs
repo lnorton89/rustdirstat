@@ -207,3 +207,132 @@ fn the_report_and_csv_modes_conflict() -> Result<()> {
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+/// Two paths on the command line scan into one tree.
+///
+/// The terminal equivalent of WinDirStat opening on several drives: each
+/// root becomes a top-level entry under a label, and the totals are the
+/// sum of the roots rather than of either one.
+#[test]
+fn several_paths_scan_into_one_report() -> Result<()> {
+    let first = scratch("multi_first");
+    let second = scratch("multi_second");
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    fs::create_dir_all(&first)?;
+    fs::create_dir_all(&second)?;
+    fs::write(first.join("one.bin"), vec![b'a'; 1000])?;
+    fs::write(second.join("two.bin"), vec![b'b'; 2000])?;
+
+    let first_arg = first
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let second_arg = second
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let (ok, text) = run(&["--no-tui", "-d", "2", first_arg, second_arg])?;
+
+    assert!(ok, "the report should succeed: {text}");
+    assert!(
+        text.contains("one.bin") && text.contains("two.bin"),
+        "both roots should appear in one report: {text}"
+    );
+
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    Ok(())
+}
+
+/// A typo in the second path fails before anything is scanned.
+#[test]
+fn a_missing_second_path_is_an_error() -> Result<()> {
+    let real = scratch("multi_real");
+    let _ = fs::remove_dir_all(&real);
+    fs::create_dir_all(&real)?;
+    let missing = scratch("multi_missing");
+    let _ = fs::remove_dir_all(&missing);
+
+    let real_arg = real
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let missing_arg = missing
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let (ok, text) = run(&["--no-tui", real_arg, missing_arg])?;
+
+    assert!(!ok, "a missing path should fail the run: {text}");
+    assert!(
+        text.contains("path does not exist"),
+        "and say which: {text}"
+    );
+
+    let _ = fs::remove_dir_all(&real);
+    Ok(())
+}
+
+/// A multi-root CSV names paths that exist.
+///
+/// The tree's `root_path` is a label when several places are scanned, so
+/// an export built from it would head every row with
+/// `Selected locations/...` — a path that resolves nowhere, in the one
+/// output whose entire purpose is to be fed to something else.
+#[test]
+fn a_multi_root_csv_uses_each_root_path() -> Result<()> {
+    let first = scratch("csv_multi_first");
+    let second = scratch("csv_multi_second");
+    let out = scratch("csv_multi_out");
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    fs::create_dir_all(&first)?;
+    fs::create_dir_all(&second)?;
+    fs::write(first.join("one.bin"), vec![b'a'; 10])?;
+    fs::write(second.join("two.bin"), vec![b'b'; 20])?;
+
+    let first_arg = first
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let second_arg = second
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let out_arg = out
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let (ok, text) = run(&["--csv", out_arg, first_arg, second_arg])?;
+    assert!(ok, "the export should succeed: {text}");
+
+    let csv = fs::read_to_string(&out)?;
+    assert!(
+        !csv.contains("Selected locations"),
+        "no row may be built from the multi-root label: {csv}"
+    );
+    // Compared against the *canonical* fixture paths, because that is
+    // what the binary scans: it canonicalizes every root before handing
+    // it to the scanner. On a machine whose temp directory is reached
+    // through an 8.3 short name — a GitHub Windows runner is one — the
+    // path this test built and the path in the export are two spellings
+    // of the same directory, and only the canonical form compares.
+    let hay = flatten(&csv);
+    for path in [first.join("one.bin"), second.join("two.bin")] {
+        let canonical = fs::canonicalize(&path)?;
+        let needle = flatten(&canonical.to_string_lossy());
+        assert!(
+            hay.contains(&needle),
+            "every scanned file should appear at its real path; missing {needle} in {csv}"
+        );
+    }
+
+    let _ = fs::remove_file(&out);
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    Ok(())
+}
+
+/// A path as a string with separators and any verbatim prefix flattened,
+/// so two spellings of one place compare equal.
+///
+/// Windows canonicalization returns a `\?\C:\...` form; the CSV carries
+/// whatever the scanner was handed. A comparison that kept either would
+/// be testing the spelling rather than the path.
+fn flatten(text: &str) -> String {
+    text.replace('\\', "/").replace("//?/", "")
+}

@@ -22,7 +22,7 @@
 
 use crate::gui::app::{GuiApp, PaneOrientation};
 use crate::gui::icons::Icon;
-use crate::util::{format_modified, human_bytes, thousands};
+use crate::util::{human_bytes, thousands};
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, Vec2};
 
 use super::modal::{
@@ -36,10 +36,11 @@ use super::widgets::*;
 
 pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
     match page {
+        ModalPage::Locations => draw_locations(app, ui),
         ModalPage::Appearance => draw_appearance(app, ui),
         ModalPage::Layout => draw_layout(app, ui),
         ModalPage::Views => draw_views(app, ui),
-        ModalPage::Properties => draw_properties(app, ui),
+        ModalPage::Cleanups => draw_cleanups(app, ui),
         ModalPage::Maintenance => draw_maintenance(app, ui),
         ModalPage::Guide => draw_guide(ui),
         ModalPage::About => draw_about(app, ui),
@@ -49,10 +50,10 @@ pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
 /// A titled block of related controls.
 fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     let palette = palette();
-    Frame::none()
+    Frame::NONE
         .fill(palette.raised)
-        .rounding(egui::Rounding::same(9.0))
-        .inner_margin(Margin::same(SPACE_MD))
+        .corner_radius(egui::CornerRadius::same(9))
+        .inner_margin(Margin::same(px(SPACE_MD)))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -83,7 +84,49 @@ fn see_also(ui: &mut egui::Ui, app: &mut GuiApp, lead: &str, page: ModalPage) {
 /// Visible height of the theme list before it scrolls on its own.
 const THEME_LIST_HEIGHT: f32 = 330.0;
 
+/// The language picker.
+///
+/// English is compiled in; everything else is a file the user dropped
+/// into `lang/` beside the config, which is why the list is read from
+/// disk rather than from a table in the binary — a translation is content
+/// and content that needs a compiler is a translation nobody writes.
+fn draw_language(ui: &mut egui::Ui) {
+    let palette = palette();
+    let available = crate::i18n::available();
+    let current = crate::i18n::language();
+    group(ui, Icon::Info, "Language", |ui| {
+        if available.len() == 1 {
+            ui.label(
+                RichText::new(crate::i18n::tr("settings.language.only_english"))
+                    .color(palette.secondary_text),
+            );
+        }
+        ui.horizontal_wrapped(|ui| {
+            for tag in &available {
+                if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
+                    crate::i18n::set_language(tag);
+                }
+            }
+        });
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(crate::i18n::tr_with(
+                "settings.language.folder",
+                &[(
+                    "path",
+                    &crate::i18n::catalog_dir()
+                        .map(|dir| crate::util::display_path(&dir))
+                        .unwrap_or_default(),
+                )],
+            ))
+            .color(palette.secondary_text),
+        );
+    });
+}
+
 fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
+    draw_language(ui);
+    ui.add_space(SPACE_MD);
     let mut chosen: Option<&'static str> = None;
     group(ui, Icon::Palette, "Theme", |ui| {
         ui.label(
@@ -161,8 +204,13 @@ fn theme_row(ui: &mut egui::Ui, selected: bool, spec: &themes::ThemeSpec) -> egu
         } else {
             hover_fill(ui, &response, Color32::TRANSPARENT, palette.hover)
         };
-        ui.painter()
-            .rect(rect, egui::Rounding::same(7.0), fill, Stroke::NONE);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(7),
+            fill,
+            Stroke::NONE,
+            egui::StrokeKind::Middle,
+        );
         // The swatch shows the theme's own panel, accent, and two text
         // weights, painted in that theme rather than the active one —
         // which is the whole point of showing a swatch at all.
@@ -172,9 +220,10 @@ fn theme_row(ui: &mut egui::Ui, selected: bool, spec: &themes::ThemeSpec) -> egu
         );
         ui.painter().rect(
             swatch,
-            egui::Rounding::same(4.0),
+            egui::CornerRadius::same(4),
             preview.panel,
             Stroke::new(1.0_f32, preview.border),
+            egui::StrokeKind::Middle,
         );
         for (index, color) in [preview.accent, preview.primary_text, preview.secondary_text]
             .into_iter()
@@ -263,53 +312,101 @@ fn draw_views(app: &mut GuiApp, ui: &mut egui::Ui) {
     see_also(ui, app, "For what each pane does, see", ModalPage::Guide);
 }
 
-// ------------------------------------------------------------ Properties
+// ------------------------------------------------------------- Locations
 
-fn draw_properties(app: &mut GuiApp, ui: &mut egui::Ui) {
-    let Some((node, path)) = app.selected_node().zip(app.selected_fs_path()) else {
-        empty_state(
-            ui,
-            Icon::Info,
-            "Nothing selected",
-            "Pick an item in the file list or the treemap, and its details appear here.",
-        );
-        return;
-    };
-    let (name, is_dir) = (node.name.to_string_lossy().to_string(), node.is_dir);
-    let rows = [
-        ("Name", name),
-        ("Path", crate::util::display_path(&path)),
-        ("Type", if is_dir { "Folder" } else { "File" }.to_string()),
-        ("Logical size", human_bytes(node.size)),
-        ("Physical size", human_bytes(node.physical_size)),
-        ("Files", thousands(node.file_count)),
-        ("Subdirectories", thousands(node.dir_count)),
-        ("Last change", format_modified(node.modified)),
-        ("Unreadable items", thousands(node.unreadable_count)),
-    ];
-    group(ui, Icon::Info, "Item details", |ui| {
-        egui::Grid::new("properties_grid")
-            .num_columns(2)
-            .spacing(Vec2::new(18.0, 9.0))
-            .show(ui, |ui| {
-                for (label, value) in rows {
-                    ui.label(RichText::new(label).color(palette().secondary_text));
-                    ui.label(value);
-                    ui.end_row();
-                }
-            });
-    });
-}
-
-fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, body: &str) {
+/// Pick what to scan: any number of drives, or a folder.
+///
+/// WinDirStat opens on this choice — one folder, one drive, several
+/// drives, or all of them — and it was the last thing here that only
+/// accepted one answer. The volumes come from `platform::volumes`, which
+/// offers fixed and removable drives only; anything else is reachable
+/// through the folder button, which is the honest place for "somewhere
+/// this list does not know about".
+fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
-    ui.add_space(SPACE_LG);
-    ui.vertical_centered(|ui| {
-        paint_inline_icon(ui, icon, 38.0, palette.secondary_text);
-        ui.add_space(SPACE_MD);
-        ui.label(RichText::new(title).strong());
+    let scanned = app.scanned_roots();
+    group(ui, Icon::Folder, "Currently scanned", |ui| {
+        for root in &scanned {
+            ui.label(crate::util::display_path(root));
+        }
+    });
+    ui.add_space(SPACE_MD);
+
+    let volumes = crate::platform::volumes();
+    group(ui, Icon::Tree, "Drives", |ui| {
+        if volumes.is_empty() {
+            ui.label(
+                RichText::new("No local drives were found to offer.").color(palette.secondary_text),
+            );
+            return;
+        }
+        for volume in &volumes {
+            let mut ticked = app.tools.selected_locations.contains(&volume.path);
+            let used = match (volume.total, volume.free) {
+                (Some(total), Some(free)) => format!(
+                    "{} of {} used",
+                    human_bytes(total.saturating_sub(free)),
+                    human_bytes(total)
+                ),
+                _ => String::new(),
+            };
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut ticked, &volume.label).changed() {
+                    if ticked {
+                        app.tools.selected_locations.push(volume.path.clone());
+                    } else {
+                        app.tools
+                            .selected_locations
+                            .retain(|path| path != &volume.path);
+                    }
+                }
+                ui.label(RichText::new(used).color(palette.secondary_text));
+            });
+        }
+        ui.add_space(SPACE_SM);
+        ui.horizontal(|ui| {
+            if ui.button("Select all").clicked() {
+                app.tools.selected_locations = volumes.iter().map(|v| v.path.clone()).collect();
+            }
+            if ui.button("Clear").clicked() {
+                app.tools.selected_locations.clear();
+            }
+        });
+    });
+    ui.add_space(SPACE_MD);
+
+    group(ui, Icon::FolderOpen, "Scan", |ui| {
+        let count = app.tools.selected_locations.len();
+        let label = match count {
+            0 => "Scan selected drives".to_string(),
+            1 => "Scan 1 drive".to_string(),
+            n => format!("Scan {n} drives together"),
+        };
+        ui.horizontal(|ui| {
+            let scan = ui.add_enabled(count > 0 && !app.is_busy(), egui::Button::new(label));
+            #[cfg(test)]
+            probe(&TEST_LOCATION_SCAN_RECTS).push(scan.rect);
+            if scan.clicked() {
+                let picked = app.tools.selected_locations.clone();
+                app.open_locations(picked);
+                app.close_modal();
+            }
+            if ui
+                .add_enabled(!app.is_busy(), egui::Button::new("Choose folder…"))
+                .clicked()
+            {
+                super::actions::choose_folder(app);
+                app.close_modal();
+            }
+        });
         ui.add_space(SPACE_XS);
-        ui.label(RichText::new(body).color(palette.secondary_text));
+        ui.label(
+            RichText::new(
+                "Several drives scan into one tree, each as a top-level entry. \
+                 Free space is reported per drive, never added together.",
+            )
+            .color(palette.secondary_text),
+        );
     });
 }
 
@@ -399,10 +496,10 @@ fn tool_row(
     let palette = palette();
     let running = app.tools.running == Some(index);
     let mut clicked = false;
-    let frame = Frame::none()
+    let frame = Frame::NONE
         .fill(palette.raised)
-        .rounding(egui::Rounding::same(9.0))
-        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_MD))
+        .corner_radius(egui::CornerRadius::same(9))
+        .inner_margin(Margin::symmetric(px(SPACE_MD), px(SPACE_MD)))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -473,11 +570,11 @@ fn tool_row(
         edge.max.x = row.min.x + SEVERITY_BAR;
         ui.painter().rect_filled(
             edge,
-            egui::Rounding {
-                nw: 8.0,
-                sw: 8.0,
-                ne: 0.0,
-                se: 0.0,
+            egui::CornerRadius {
+                nw: 8,
+                sw: 8,
+                ne: 0,
+                se: 0,
             },
             palette.danger,
         );
@@ -490,10 +587,10 @@ fn tool_row(
 
 /// A small pill carrying one fact about a row.
 fn chip(ui: &mut egui::Ui, tone: Color32, text: &str) {
-    Frame::none()
+    Frame::NONE
         .fill(blend(palette().raised, tone, 0.18))
-        .rounding(egui::Rounding::same(5.0))
-        .inner_margin(Margin::symmetric(SPACE_SM, SPACE_XS))
+        .corner_radius(egui::CornerRadius::same(5))
+        .inner_margin(Margin::symmetric(px(SPACE_SM), px(SPACE_XS)))
         .show(ui, |ui| {
             ui.label(RichText::new(text).small().color(tone));
         });
@@ -506,10 +603,10 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
     } else {
         palette.success
     };
-    Frame::none()
+    Frame::NONE
         .fill(palette.raised)
-        .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::same(SPACE_MD))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(Margin::same(px(SPACE_MD)))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -531,10 +628,10 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
                 ui.add_space(SPACE_SM);
                 // Monospace, because a DISM report is a table and a
                 // proportional font turns it back into prose.
-                Frame::none()
+                Frame::NONE
                     .fill(palette.app)
-                    .rounding(egui::Rounding::same(6.0))
-                    .inner_margin(Margin::same(SPACE_SM))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(Margin::same(px(SPACE_SM)))
                     .show(ui, |ui| {
                         fill_width(ui);
                         ui.label(RichText::new(&entry.detail).monospace().small());
@@ -606,12 +703,94 @@ fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
     see_also(ui, app, "For what each view does, see", ModalPage::Guide);
 }
 
+// -------------------------------------------------------------- Cleanups
+
+/// The user's own commands, run against the selection.
+///
+/// The list comes from `app.cleanups`, which is re-read from the config
+/// when this page is *opened* — never while drawing. A file read on the
+/// frame path is exactly the kind of thing that turns a 120 FPS window
+/// into a stuttering one, and the list only changes when someone edits
+/// the file.
+fn draw_cleanups(app: &mut GuiApp, ui: &mut egui::Ui) {
+    let palette = palette();
+    let cleanups = app.cleanups.clone();
+    let selected = app.selected_fs_path();
+
+    if cleanups.is_empty() {
+        empty_state(
+            ui,
+            Icon::Tools,
+            "No cleanups configured",
+            "A cleanup is a command of your own, run against whatever is selected.              They live in the config file; nothing is set up by default.",
+        );
+        ui.add_space(SPACE_MD);
+    }
+
+    group(ui, Icon::Tools, "Your commands", |ui| {
+        if cleanups.is_empty() {
+            ui.label(
+                RichText::new("Nothing to show until the config file has some.")
+                    .color(palette.secondary_text),
+            );
+            return;
+        }
+        for (index, cleanup) in cleanups.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let run = ui.add_enabled(
+                    selected.is_some() && !app.is_busy(),
+                    egui::Button::new(&cleanup.name),
+                );
+                #[cfg(test)]
+                probe(&TEST_CLEANUP_RECTS).push((cleanup.name.clone(), run.rect));
+                if run.clicked() {
+                    app.request_cleanup(index);
+                }
+                ui.label(RichText::new(command_summary(cleanup)).color(palette.secondary_text));
+            });
+        }
+        if selected.is_none() {
+            ui.add_space(SPACE_SM);
+            ui.label(
+                RichText::new("Select an item first — a cleanup always acts on one thing.")
+                    .color(palette.secondary_text),
+            );
+        }
+    });
+
+    ui.add_space(SPACE_MD);
+    group(ui, Icon::Info, "How they work", |ui| {
+        ui.label(
+            RichText::new(
+                "Each cleanup names a program and its arguments as a list.                  %p is the full path, %n the name, %d the containing folder,                  and %% a literal per cent.",
+            )
+            .color(palette.secondary_text),
+        );
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(
+                "No shell is involved: arguments are passed as they are, so a file                  name containing spaces, quotes or semicolons is data rather than                  syntax. Cleanups ask before running unless their entry says otherwise.",
+            )
+            .color(palette.secondary_text),
+        );
+    });
+}
+
+/// A one-line rendering of what a cleanup will run, before substitution.
+fn command_summary(cleanup: &crate::cleanups::Cleanup) -> String {
+    if cleanup.args.is_empty() {
+        return cleanup.program.clone();
+    }
+    format!("{} {}", cleanup.program, cleanup.args.join(" "))
+}
+
 // ---------------------------------------------------------- Confirmations
 
 pub(super) fn draw_confirm(app: &mut GuiApp, ctx: &egui::Context, kind: ConfirmKind, opening: f32) {
     match kind {
         ConfirmKind::Delete => draw_delete_confirm(app, ctx, opening),
         ConfirmKind::WindowsTool(index) => draw_tool_confirm(app, ctx, index, opening),
+        ConfirmKind::Cleanup => draw_cleanup_confirm(app, ctx, opening),
     }
 }
 
@@ -690,6 +869,54 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
     }
     if cancel {
         app.pending_delete = None;
+    }
+}
+
+/// "This is the command, exactly as it will run."
+///
+/// The whole point of the card: a user-defined cleanup is a template plus
+/// a selection, and neither of those is checkable on its own. What is
+/// shown is the resolved argv — program and every argument after
+/// substitution — because that is the thing that is actually about to
+/// happen. See `docs/CLEANUPS_THREAT_MODEL.md`.
+fn draw_cleanup_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
+    let Some(pending) = &app.tools.pending_cleanup else {
+        return;
+    };
+    let (name, preview) = (pending.name.clone(), pending.command.preview());
+    let palette = palette();
+    let mut confirm = false;
+    let mut cancel = false;
+    confirm_card(ctx, "confirm_cleanup", opening, |ui| {
+        ui.horizontal(|ui| {
+            paint_inline_icon(ui, Icon::Tools, 20.0, palette.accent);
+            ui.add_space(SPACE_XS);
+            ui.label(RichText::new(format!("Run {name}?")).heading().strong());
+        });
+        ui.add_space(SPACE_SM);
+        ui.label(
+            RichText::new("This runs a program you configured, with your privileges.")
+                .color(palette.secondary_text),
+        );
+        ui.add_space(SPACE_SM);
+        // Monospaced and selectable-looking: this is the text the user is
+        // being asked about, not a description of it.
+        ui.label(RichText::new(&preview).monospace());
+        ui.add_space(SPACE_LG);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+            if accent_button(ui, "Run").clicked() {
+                confirm = true;
+            }
+        });
+    });
+    if confirm {
+        app.confirm_cleanup();
+    }
+    if cancel {
+        app.tools.pending_cleanup = None;
     }
 }
 

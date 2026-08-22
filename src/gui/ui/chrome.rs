@@ -13,7 +13,9 @@ use super::modal::ModalPage;
 use crate::gui::app::{size_label, FileView, GuiApp, PaneOrientation};
 use crate::gui::icons::Icon;
 use crate::util::thousands;
-use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Stroke, Vec2};
+use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Vec2};
+
+use crate::i18n::tr;
 
 use super::actions::*;
 use super::theme::*;
@@ -36,7 +38,7 @@ pub(super) const MENU_BAR_ITEM_GAP: f32 = 10.0;
 /// responding. Squaring it, and letting it run the full height of the
 /// strip, is what every desktop menu bar does and is why they read as
 /// bars.
-const MENU_BAR_ROUNDING: egui::Rounding = egui::Rounding::ZERO;
+const MENU_BAR_ROUNDING: egui::CornerRadius = egui::CornerRadius::ZERO;
 /// Floors the test measures against. Deliberately below what is
 /// configured above, so ordinary tuning does not trip them, but far above
 /// what egui's `set_menu_style` leaves behind (2px padding, 0 gap) — the
@@ -55,8 +57,10 @@ fn menu_bar_button<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     #[cfg(test)]
-    super::probes::probe(&super::probes::TEST_MENU_BAR_ROUNDING)
-        .push((label.to_owned(), ui.visuals().widgets.hovered.rounding.nw));
+    super::probes::probe(&super::probes::TEST_MENU_BAR_ROUNDING).push((
+        label.to_owned(),
+        ui.visuals().widgets.hovered.corner_radius.nw,
+    ));
     let response = ui.menu_button(label, add_contents);
     #[cfg(test)]
     super::probes::probe(&super::probes::TEST_MENU_BAR_RECTS)
@@ -64,13 +68,21 @@ fn menu_bar_button<R>(
     response
 }
 
-/// Squares off the hover, open, and pressed backgrounds for the bar.
+/// The bar's own style: egui's menu defaults, then what this bar needs on
+/// top of them.
 ///
-/// Has to be applied to the child `Ui` *inside* `menu::bar`, for the same
-/// reason the padding does: `set_menu_style` runs first and overwrites
-/// whatever was configured on the way in.
-fn square_off_menu_bar(ui: &mut egui::Ui) {
-    let widgets = &mut ui.visuals_mut().widgets;
+/// It is handed to [`egui::containers::menu::MenuBar::style`] rather than
+/// applied to the `Ui` inside the bar, because the bar applies its style
+/// modifier *after* entering its own scope — the same ordering problem the
+/// old `set_menu_style` had, solved by the API instead of worked around.
+/// Note that a modifier replaces the default rather than adding to it,
+/// which is why this calls `menu_style` first: without that line the bar
+/// silently loses egui's own menu defaults.
+fn menu_bar_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.button_padding = MENU_BAR_BUTTON_PADDING;
+    style.spacing.item_spacing.x = MENU_BAR_ITEM_GAP;
+    let widgets = &mut style.visuals.widgets;
     for state in [
         &mut widgets.noninteractive,
         &mut widgets.inactive,
@@ -78,14 +90,27 @@ fn square_off_menu_bar(ui: &mut egui::Ui) {
         &mut widgets.active,
         &mut widgets.open,
     ] {
-        state.rounding = MENU_BAR_ROUNDING;
+        state.corner_radius = MENU_BAR_ROUNDING;
     }
 }
 
-pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
-    egui::TopBottomPanel::top("menu_bar")
+/// How a menu answers a click.
+///
+/// egui 0.32 made `CloseOnClick` the default, which would close the menu
+/// under a size choice or a view toggle — the three `menu_toggle` rows and
+/// the logical/physical pair are deliberately flippable several at a time,
+/// and every row that *should* dismiss the menu says so with `ui.close()`.
+/// So the bar asks for the older behaviour explicitly rather than
+/// inheriting a default that contradicts the menus it holds.
+fn menu_config() -> egui::containers::menu::MenuConfig {
+    egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+}
+
+pub(super) fn draw_menu_bar(app: &mut GuiApp, ui: &mut egui::Ui) {
+    egui::Panel::top("menu_bar")
         .frame(
-            Frame::none()
+            Frame::NONE
                 .fill(palette().app)
                 // No vertical margin: the highlight under a menu name is
                 // the button's own background, so anything the frame adds
@@ -93,207 +118,256 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ctx: &egui::Context) {
                 // reach — which is what made it look like a floating pill
                 // instead of part of the bar. The height comes from the
                 // button padding below instead.
-                .inner_margin(Margin::symmetric(SPACE_XS, 0.0))
-                .stroke(Stroke::new(1.0_f32, palette().border)),
+                // No stroke either: since egui 0.31 a frame's stroke
+                // is padding, which would inset the bar's content and
+                // put the gap back. The rule under the bar is the
+                // panel's own separator line.
+                .inner_margin(Margin::symmetric(px(SPACE_XS), 0)),
         )
-        .show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                // These have to be set *inside* the bar, not before it.
-                // `menu::bar` runs egui's `set_menu_style` on the child
-                // Ui as its first act, which hard-codes button_padding to
-                // (2, 0) — so anything configured on the way in is
-                // discarded, and the names come out jammed together with
-                // no indication why.
-                ui.spacing_mut().button_padding = MENU_BAR_BUTTON_PADDING;
-                ui.spacing_mut().item_spacing.x = MENU_BAR_ITEM_GAP;
-                square_off_menu_bar(ui);
-                menu_bar_button(ui, "File", |ui| {
-                    if menu_action(
-                        ui,
-                        !app.is_busy(),
-                        Icon::FolderOpen,
-                        "Select folder…",
-                        "Ctrl+O",
-                    )
-                    .clicked()
-                    {
-                        choose_folder(app);
-                        ui.close_menu();
-                    }
-                    if menu_action(ui, !app.is_busy(), Icon::Refresh, "Rescan", "F5").clicked() {
-                        refresh(app);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if icon_button(ui, true, Icon::Export, "Export CSV…").clicked() {
-                        export_csv(app);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if icon_button(ui, true, Icon::ExternalLink, "Exit").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
-                menu_bar_button(ui, "Edit", |ui| {
-                    if menu_action(
-                        ui,
-                        app.selected_path.is_some(),
-                        Icon::Copy,
-                        "Copy path",
-                        "Ctrl+C",
-                    )
-                    .clicked()
-                    {
-                        copy_path(app);
-                        ui.close_menu();
-                    }
-                    if menu_action(ui, true, Icon::Search, "Search…", "Ctrl+F").clicked() {
-                        app.file_view = FileView::SearchResults;
-                        ui.close_menu();
-                    }
-                });
-                menu_bar_button(ui, "Cleanup", |ui| {
-                    let selected = app.selected_path.is_some();
-                    if icon_button(ui, selected, Icon::ExternalLink, "Open").clicked() {
-                        open_selected(app);
-                        ui.close_menu();
-                    }
-                    if icon_button(ui, selected, Icon::Folder, "Show in Explorer").clicked() {
-                        reveal_selected(app);
-                        ui.close_menu();
-                    }
-                    if icon_button(ui, selected, Icon::Info, "Properties").clicked() {
-                        app.open_modal(ModalPage::Properties);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if menu_action(ui, selected, Icon::Trash, "Delete to Recycle Bin", "Del")
+        .show(ui, |ui| {
+            let ctx = ui.ctx().clone();
+            egui::containers::menu::MenuBar::new()
+                .style(menu_bar_style)
+                .config(menu_config())
+                .ui(ui, |ui| {
+                    menu_bar_button(ui, &tr("menu.file"), |ui| {
+                        if menu_action(
+                            ui,
+                            !app.is_busy(),
+                            Icon::FolderOpen,
+                            &tr("menu.file.select_folder"),
+                            "Ctrl+O",
+                        )
                         .clicked()
-                    {
-                        app.request_delete_selected(false);
-                        ui.close_menu();
-                    }
-                    if menu_action(ui, selected, Icon::Trash, "Delete permanently", "Shift+Del")
+                        {
+                            choose_folder(app);
+                            ui.close();
+                        }
+                        if menu_action(
+                            ui,
+                            !app.is_busy(),
+                            Icon::Refresh,
+                            &tr("menu.file.rescan"),
+                            "F5",
+                        )
                         .clicked()
-                    {
-                        app.request_delete_selected(true);
-                        ui.close_menu();
-                    }
+                        {
+                            refresh(app);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if icon_button(ui, true, Icon::Export, &tr("menu.file.export_csv"))
+                            .clicked()
+                        {
+                            export_csv(app);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if icon_button(ui, true, Icon::ExternalLink, &tr("menu.file.exit"))
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    });
+                    menu_bar_button(ui, &tr("menu.edit"), |ui| {
+                        if menu_action(
+                            ui,
+                            app.selected_path.is_some(),
+                            Icon::Copy,
+                            &tr("menu.edit.copy_path"),
+                            "Ctrl+C",
+                        )
+                        .clicked()
+                        {
+                            copy_path(app);
+                            ui.close();
+                        }
+                        if menu_action(ui, true, Icon::Search, &tr("menu.edit.search"), "Ctrl+F")
+                            .clicked()
+                        {
+                            app.file_view = FileView::SearchResults;
+                            ui.close();
+                        }
+                    });
+                    menu_bar_button(ui, &tr("menu.cleanup"), |ui| {
+                        let selected = app.selected_path.is_some();
+                        if icon_button(ui, selected, Icon::ExternalLink, &tr("menu.cleanup.open"))
+                            .clicked()
+                        {
+                            open_selected(app);
+                            ui.close();
+                        }
+                        if icon_button(ui, selected, Icon::Folder, &tr("menu.cleanup.reveal"))
+                            .clicked()
+                        {
+                            reveal_selected(app);
+                            ui.close();
+                        }
+                        if icon_button(ui, selected, Icon::Info, &tr("menu.cleanup.properties"))
+                            .clicked()
+                        {
+                            app.toggle_properties();
+                            ui.close();
+                        }
+                        ui.separator();
+                        if menu_action(ui, selected, Icon::Trash, &tr("menu.cleanup.delete"), "Del")
+                            .clicked()
+                        {
+                            app.request_delete_selected(false);
+                            ui.close();
+                        }
+                        if menu_action(
+                            ui,
+                            selected,
+                            Icon::Trash,
+                            &tr("menu.cleanup.delete_permanent"),
+                            "Shift+Del",
+                        )
+                        .clicked()
+                        {
+                            app.request_delete_selected(true);
+                            ui.close();
+                        }
+                    });
+                    menu_bar_button(ui, &tr("menu.treemap"), |ui| {
+                        if menu_choice(
+                            ui,
+                            app.view.orientation == PaneOrientation::Horizontal,
+                            &tr("menu.treemap.horizontal"),
+                        )
+                        .clicked()
+                        {
+                            app.view.orientation = PaneOrientation::Horizontal;
+                            ui.close();
+                        }
+                        if menu_choice(
+                            ui,
+                            app.view.orientation == PaneOrientation::Vertical,
+                            &tr("menu.treemap.vertical"),
+                        )
+                        .clicked()
+                        {
+                            app.view.orientation = PaneOrientation::Vertical;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if menu_choice(ui, !app.use_physical, &tr("menu.treemap.logical")).clicked()
+                        {
+                            app.use_physical = false;
+                            app.refresh_extensions();
+                        }
+                        if menu_choice(ui, app.use_physical, &tr("menu.treemap.physical")).clicked()
+                        {
+                            app.use_physical = true;
+                            app.refresh_extensions();
+                        }
+                        ui.separator();
+                        menu_toggle(ui, &mut app.view.grid, &tr("menu.treemap.grid"));
+                        menu_toggle(ui, &mut app.view.labels, &tr("menu.treemap.labels"));
+                        menu_toggle(ui, &mut app.view.free_space, &tr("menu.treemap.free_space"));
+                        ui.separator();
+                        if menu_action(ui, true, Icon::ZoomIn, &tr("menu.treemap.zoom_in"), "+")
+                            .clicked()
+                        {
+                            app.zoom_in();
+                            ui.close();
+                        }
+                        if menu_action(ui, true, Icon::ZoomOut, &tr("menu.treemap.zoom_out"), "-")
+                            .clicked()
+                        {
+                            app.zoom_out();
+                            ui.close();
+                        }
+                        if menu_action(ui, true, Icon::Home, &tr("menu.treemap.reset_zoom"), "Home")
+                            .clicked()
+                        {
+                            app.reset_zoom();
+                            ui.close();
+                        }
+                    });
+                    menu_bar_button(ui, &tr("menu.view"), |ui| {
+                        view_menu_item(app, ui, FileView::AllFiles);
+                        view_menu_item(app, ui, FileView::LargestFiles);
+                        if icon_button(
+                            ui,
+                            !app.is_busy(),
+                            Icon::Duplicate,
+                            &tr("view.duplicate_files"),
+                        )
+                        .clicked()
+                        {
+                            app.find_duplicates();
+                            ui.close();
+                        }
+                        view_menu_item(app, ui, FileView::SearchResults);
+                        ui.separator();
+                        menu_toggle(
+                            ui,
+                            &mut app.view.extension_pane,
+                            &tr("menu.view.extensions"),
+                        );
+                        menu_toggle(ui, &mut app.view.treemap, &tr("menu.view.treemap"));
+                        menu_toggle(ui, &mut app.view.toolbar, &tr("menu.view.toolbar"));
+                        menu_toggle(ui, &mut app.view.status_bar, &tr("menu.view.status_bar"));
+                        ui.separator();
+                        if icon_button(ui, true, Icon::Palette, &tr("menu.view.appearance"))
+                            .clicked()
+                        {
+                            app.open_modal(ModalPage::Appearance);
+                            ui.close();
+                        }
+                        if icon_button(ui, true, Icon::Settings, &tr("menu.view.settings"))
+                            .clicked()
+                        {
+                            app.open_modal(ModalPage::Views);
+                            ui.close();
+                        }
+                    });
+                    menu_bar_button(ui, &tr("menu.tools"), |ui| {
+                        if icon_button(ui, true, Icon::Tools, &tr("menu.tools.maintenance"))
+                            .clicked()
+                        {
+                            app.open_modal(ModalPage::Maintenance);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if icon_button(ui, true, Icon::Duplicate, &tr("menu.tools.duplicates"))
+                            .clicked()
+                        {
+                            app.find_duplicates();
+                            ui.close();
+                        }
+                    });
+                    menu_bar_button(ui, &tr("menu.help"), |ui| {
+                        // These used to open the same window as each other.
+                        if icon_button(ui, true, Icon::Help, &tr("menu.help.guide")).clicked() {
+                            app.open_modal(ModalPage::Guide);
+                            ui.close();
+                        }
+                        if icon_button(ui, true, Icon::Info, &tr("menu.help.about")).clicked() {
+                            app.open_modal(ModalPage::About);
+                            ui.close();
+                        }
+                    });
                 });
-                menu_bar_button(ui, "Treemap", |ui| {
-                    if menu_choice(
-                        ui,
-                        app.view.orientation == PaneOrientation::Horizontal,
-                        "Horizontal — below",
-                    )
-                    .clicked()
-                    {
-                        app.view.orientation = PaneOrientation::Horizontal;
-                        ui.close_menu();
-                    }
-                    if menu_choice(
-                        ui,
-                        app.view.orientation == PaneOrientation::Vertical,
-                        "Vertical — right",
-                    )
-                    .clicked()
-                    {
-                        app.view.orientation = PaneOrientation::Vertical;
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if menu_choice(ui, !app.use_physical, "Logical size").clicked() {
-                        app.use_physical = false;
-                        app.refresh_extensions();
-                    }
-                    if menu_choice(ui, app.use_physical, "Physical size").clicked() {
-                        app.use_physical = true;
-                        app.refresh_extensions();
-                    }
-                    ui.separator();
-                    menu_toggle(ui, &mut app.view.grid, "Grid lines");
-                    menu_toggle(ui, &mut app.view.labels, "File labels");
-                    menu_toggle(ui, &mut app.view.free_space, "Free space");
-                    ui.separator();
-                    if menu_action(ui, true, Icon::ZoomIn, "Zoom in", "+").clicked() {
-                        app.zoom_in();
-                        ui.close_menu();
-                    }
-                    if menu_action(ui, true, Icon::ZoomOut, "Zoom out", "-").clicked() {
-                        app.zoom_out();
-                        ui.close_menu();
-                    }
-                    if menu_action(ui, true, Icon::Home, "Reset zoom", "Home").clicked() {
-                        app.reset_zoom();
-                        ui.close_menu();
-                    }
-                });
-                menu_bar_button(ui, "View", |ui| {
-                    view_menu_item(app, ui, FileView::AllFiles);
-                    view_menu_item(app, ui, FileView::LargestFiles);
-                    if icon_button(ui, !app.is_busy(), Icon::Duplicate, "Duplicate Files").clicked()
-                    {
-                        app.find_duplicates();
-                        ui.close_menu();
-                    }
-                    view_menu_item(app, ui, FileView::SearchResults);
-                    ui.separator();
-                    menu_toggle(ui, &mut app.view.extension_pane, "Extension list");
-                    menu_toggle(ui, &mut app.view.treemap, "Treemap");
-                    menu_toggle(ui, &mut app.view.toolbar, "Toolbar");
-                    menu_toggle(ui, &mut app.view.status_bar, "Status bar");
-                    ui.separator();
-                    if icon_button(ui, true, Icon::Palette, "Appearance…").clicked() {
-                        app.open_modal(ModalPage::Appearance);
-                        ui.close_menu();
-                    }
-                    if icon_button(ui, true, Icon::Settings, "Settings…").clicked() {
-                        app.open_modal(ModalPage::Views);
-                        ui.close_menu();
-                    }
-                });
-                menu_bar_button(ui, "Tools", |ui| {
-                    if icon_button(ui, true, Icon::Tools, "Windows maintenance…").clicked() {
-                        app.open_modal(ModalPage::Maintenance);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if icon_button(ui, true, Icon::Duplicate, "Find duplicate files").clicked() {
-                        app.find_duplicates();
-                        ui.close_menu();
-                    }
-                });
-                menu_bar_button(ui, "Help", |ui| {
-                    // These used to open the same window as each other.
-                    if icon_button(ui, true, Icon::Help, "View guide").clicked() {
-                        app.open_modal(ModalPage::Guide);
-                        ui.close_menu();
-                    }
-                    if icon_button(ui, true, Icon::Info, "About RustDirStat").clicked() {
-                        app.open_modal(ModalPage::About);
-                        ui.close_menu();
-                    }
-                });
-            });
         });
 }
 
 pub(super) fn view_menu_item(app: &mut GuiApp, ui: &mut egui::Ui, view: FileView) {
-    if icon_selectable_label(ui, app.file_view == view, view_icon(view), view.label()).clicked() {
+    if icon_selectable_label(ui, app.file_view == view, view_icon(view), &view.label()).clicked() {
         app.file_view = view;
-        ui.close_menu();
+        ui.close();
     }
 }
 
-pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
-    egui::TopBottomPanel::top("toolbar")
+pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
+    egui::Panel::top("toolbar")
         .frame(
-            Frame::none()
+            Frame::NONE
                 .fill(palette().panel)
-                .inner_margin(Margin::symmetric(PAD, SPACE_SM))
-                .stroke(Stroke::new(1.0_f32, palette().border)),
+                .inner_margin(Margin::symmetric(px(PAD), px(SPACE_SM))),
         )
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 // Toolbar buttons are icon-only, so they need more air
                 // between them than text controls do to stay readable as
@@ -346,7 +420,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                 }
                 if tool_enabled(ui, app.selected_path.is_some(), Icon::Info, "Properties").clicked()
                 {
-                    app.open_modal(ModalPage::Properties);
+                    app.toggle_properties();
                 }
                 toolbar_separator(ui);
                 if tool_enabled(
@@ -394,10 +468,10 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ctx: &egui::Context) {
                 }
                 if ui.available_width() > 240.0 {
                     toolbar_separator(ui);
-                    Frame::none()
+                    Frame::NONE
                         .fill(palette().app)
-                        .rounding(egui::Rounding::same(6.0))
-                        .inner_margin(Margin::symmetric(SPACE_SM, SPACE_XS))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(Margin::symmetric(px(SPACE_SM), px(SPACE_XS)))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(crate::util::display_name(&app.tree.root_path))
@@ -439,15 +513,14 @@ pub(super) fn toolbar_separator(ui: &mut egui::Ui) {
     ui.add_space(SPACE_XS);
 }
 
-pub(super) fn draw_status_bar(app: &mut GuiApp, ctx: &egui::Context) {
-    egui::TopBottomPanel::bottom("status_bar")
+pub(super) fn draw_status_bar(app: &mut GuiApp, ui: &mut egui::Ui) {
+    egui::Panel::bottom("status_bar")
         .frame(
-            Frame::none()
+            Frame::NONE
                 .fill(palette().app)
-                .inner_margin(Margin::symmetric(PAD, SPACE_XS))
-                .stroke(Stroke::new(1.0_f32, palette().border)),
+                .inner_margin(Margin::symmetric(px(PAD), px(SPACE_XS))),
         )
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
                 if app.is_busy() {
                     ui.spinner();
@@ -458,16 +531,40 @@ pub(super) fn draw_status_bar(app: &mut GuiApp, ctx: &egui::Context) {
                     app.busy_text()
                         .as_deref()
                         .or(app.status.as_deref())
-                        .unwrap_or("Ready"),
+                        .unwrap_or(&tr("status.ready")),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let node = app.zoom_node();
-                    ui.label(format!(
-                        "{} files · {} folders · {}",
-                        thousands(node.file_count),
-                        thousands(node.dir_count),
-                        size_label(node.effective_size(app.use_physical), app.use_physical)
+                    ui.label(crate::i18n::tr_with(
+                        "status.scan_counts",
+                        &[
+                            ("files", &thousands(node.file_count)),
+                            ("folders", &thousands(node.dir_count)),
+                            (
+                                "size",
+                                &size_label(
+                                    node.effective_size(app.use_physical),
+                                    app.use_physical,
+                                ),
+                            ),
+                        ],
                     ));
+                    // How much of that total is the same bytes under two
+                    // names. Shown rather than silently subtracted: the
+                    // rows above add up to the figure beside it, and a
+                    // total that disagreed with them would be its own
+                    // kind of wrong. Only when there is something to say
+                    // — on a volume with no hard links this is zero, and
+                    // a permanent "0 B in hard links" is noise.
+                    if let Some(shared) = app.hard_link_bytes() {
+                        ui.label(
+                            RichText::new(format!("· {} shared by hard links", size_label(shared, app.use_physical)))
+                                .color(palette().secondary_text),
+                        )
+                        .on_hover_text(
+                            "Counted once per name, the way the rows above do. This is how                              much of the total is the same bytes reached through more than                              one of them.",
+                        );
+                    }
                 });
             });
         });

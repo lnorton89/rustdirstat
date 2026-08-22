@@ -16,7 +16,7 @@
 //! into a thread-local before anything paints, and the drawing code
 //! reads it back through [`palette`]. That is ambient state, which this
 //! codebase otherwise avoids — the justification is that it is exactly
-//! how `ctx.style()` already works, and the alternative is threading a
+//! how `ctx.global_style()` already works, and the alternative is threading a
 //! `&Palette` argument through roughly a hundred call sites that have no
 //! other reason to know a theme exists. The property that matters —
 //! that a palette change cannot leave half the window on the old one —
@@ -46,9 +46,51 @@ pub(super) const SPACE_SM: f32 = 8.0;
 pub(super) const SPACE_MD: f32 = 12.0;
 pub(super) const SPACE_LG: f32 = 18.0;
 
+/// The spacing scale in the units a [`Margin`] is measured in.
+///
+/// `Margin` carries whole pixels (`i8`) rather than the `f32` the rest of
+/// the layout speaks, so every margin has to cross that boundary
+/// somewhere. It crosses here, once, instead of as an `as i8` at each of
+/// the sixteen call sites — the scale stays one set of numbers, and a
+/// margin still reads as the step it came from rather than as a cast.
+///
+/// Every step on the scale is a whole number already, so nothing is lost
+/// on the way through.
+pub(super) const fn px(space: f32) -> i8 {
+    space as i8
+}
+
 /// Inset from the edge of any panel to its content, so the left edges of
 /// the toolbar, the status bar, and every pane's heading form one column.
 pub(super) const PAD: f32 = SPACE_MD;
+
+/// The frame the window is built to hit, and the time it has to do it in.
+///
+/// 120 FPS, so 8.33 ms of wall clock from the start of one frame to the
+/// start of the next -- and the target is that it holds *while a scan of a
+/// whole volume is running*, not only on an idle window. That is the
+/// number every other performance rule in this codebase is in service of:
+/// the row and tile caches keyed off observed state, the level-order tile
+/// budget, `drop_in_background`, and the scan pool deliberately leaving a
+/// core free all exist so a frame can be built inside it.
+///
+/// Stated here rather than left implied because a budget nothing names is
+/// a budget nothing checks. `gui::ui::tests` measures against it; see
+/// `docs/PERFORMANCE.md` for what each check actually guarantees and why
+/// a debug build is allowed a multiple of it.
+#[cfg(test)]
+pub(super) const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_micros(8_333);
+
+/// What a debug build is allowed instead.
+///
+/// The binary this target describes is the release one; an unoptimized
+/// build of the same code is roughly an order of magnitude slower, and
+/// tests run in it. Asserting 8.33 ms there would fail honest code, and
+/// asserting nothing would let a real regression through -- so the debug
+/// budget is the release budget times this, and a regression that
+/// overshoots by more than a factor still shows up.
+#[cfg(test)]
+pub(super) const DEBUG_FRAME_BUDGET_FACTOR: u32 = 12;
 
 /// How long a hover highlight takes to reach full strength.
 ///
@@ -97,11 +139,11 @@ pub(super) fn set_palette(palette: Palette) {
 pub(super) fn apply_style(ctx: &egui::Context, palette: Palette) {
     set_palette(palette);
     let dark = palette.mode.is_dark();
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.visuals.dark_mode = dark;
     style.spacing.item_spacing = Vec2::new(8.0, 7.0);
     style.spacing.button_padding = Vec2::new(11.0, 7.0);
-    style.spacing.menu_margin = Margin::same(SPACE_SM);
+    style.spacing.menu_margin = Margin::same(px(SPACE_SM));
     style.spacing.indent = 18.0;
     style.spacing.scroll = scroll_style();
     style.spacing.interact_size = Vec2::new(40.0, 32.0);
@@ -129,9 +171,9 @@ pub(super) fn apply_style(ctx: &egui::Context, palette: Palette) {
     style.visuals.window_fill = palette.raised;
     style.visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
     style.visuals.window_shadow = egui::epaint::Shadow {
-        offset: Vec2::new(0.0, 5.0),
-        blur: 18.0,
-        spread: 2.0,
+        offset: [0, 5],
+        blur: 18,
+        spread: 2,
         // A light theme cannot borrow the dark theme's shadow: 110/255
         // black under a white card is a smear, not a lift.
         color: Color32::from_black_alpha(if dark { 110 } else { 38 }),
@@ -175,10 +217,10 @@ pub(super) fn apply_style(ctx: &egui::Context, palette: Palette) {
         &mut style.visuals.widgets.active,
         &mut style.visuals.widgets.open,
     ] {
-        widgets.rounding = egui::Rounding::same(6.0);
+        widgets.corner_radius = egui::CornerRadius::same(6);
     }
-    style.visuals.window_rounding = egui::Rounding::same(10.0);
-    style.visuals.menu_rounding = egui::Rounding::same(8.0);
+    style.visuals.window_corner_radius = egui::CornerRadius::same(10);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(8);
     style.visuals.popup_shadow = style.visuals.window_shadow;
     style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     style.text_styles.insert(
@@ -197,7 +239,7 @@ pub(super) fn apply_style(ctx: &egui::Context, palette: Palette) {
         TextStyle::Small,
         egui::FontId::new(12.0, egui::FontFamily::Proportional),
     );
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 /// The one scrollbar style in the app.
@@ -227,12 +269,25 @@ pub(super) fn scroll_style() -> egui::style::ScrollStyle {
     scroll
 }
 
+/// The frame every pane paints itself into.
+///
+/// It deliberately carries **no stroke**. Since egui 0.31 a `Frame`
+/// counts its stroke width as part of its padding, so a 1px border would
+/// inset the content to 13px and quietly break the one thing the scale
+/// exists for: the left edges of the toolbar, the status bar, and every
+/// pane heading forming one column
+/// (`every_pane_rules_off_its_heading_at_the_same_inset` measures exactly
+/// that, and caught this during the 0.36 upgrade).
+///
+/// The line between two panes is the `Panel`'s own separator instead,
+/// which is painted outside the content rather than inside it, and takes
+/// its colour from `widgets.noninteractive.bg_stroke` — set to
+/// `palette.border`, the same colour the frame used to stroke.
 pub(super) fn panel_frame() -> Frame {
     let palette = palette();
-    Frame::none()
+    Frame::NONE
         .fill(palette.panel)
-        .inner_margin(Margin::same(PAD))
-        .stroke(Stroke::new(1.0_f32, palette.border))
+        .inner_margin(Margin::same(px(PAD)))
 }
 
 pub(super) fn extension_color(extension: &str) -> Color32 {

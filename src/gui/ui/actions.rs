@@ -19,9 +19,17 @@ use eframe::egui::{self};
 use super::modal::{dismiss_top, modal_is_open};
 
 pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
-    let editing_text = ctx.wants_keyboard_input();
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && modal_is_open(app) {
+    let editing_text = ctx.egui_wants_keyboard_input();
+    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if escape && modal_is_open(app) {
         dismiss_top(app);
+        return;
+    }
+    // Esc with nothing open stops a scan. It is the key every other
+    // "stop what you are doing" in this app answers to, and a scan of a
+    // whole volume is the one thing here long enough to want stopping.
+    if escape && !editing_text && app.scan_is_running() {
+        app.cancel_scan();
         return;
     }
     // A modal is modal for the keyboard too. Without this, pressing Del

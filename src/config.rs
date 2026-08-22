@@ -46,6 +46,30 @@ pub struct Config {
     pub gui_show_grid: Option<bool>,
     #[serde(default)]
     pub gui_show_labels: Option<bool>,
+    /// Whether the Properties inspector was showing, and where it was.
+    ///
+    /// The position is a two-element list rather than a pair of fields
+    /// because it is meaningless as halves — a saved x with no y would
+    /// place a window somewhere nobody put it. `load` is forgiving per
+    /// field, so a list of the wrong length is simply ignored.
+    #[serde(default)]
+    pub gui_properties_open: Option<bool>,
+    #[serde(default)]
+    pub gui_properties_pos: Option<Vec<f32>>,
+    /// The language tag the UI was last set to (`en`, `de`, …).
+    ///
+    /// A tag with no catalogue selects English rather than failing, which
+    /// is what a removed translation should look like from the user's
+    /// side. See [`crate::i18n`].
+    #[serde(default)]
+    pub language: Option<String>,
+    /// User-defined cleanup commands.
+    ///
+    /// Empty unless the user wrote some: shipping defaults would be
+    /// shipping commands nobody read. See
+    /// [`crate::cleanups`] and `docs/CLEANUPS_THREAT_MODEL.md`.
+    #[serde(default)]
+    pub cleanups: Vec<crate::cleanups::Cleanup>,
     /// A theme `id` from `assets/themes.toml`, or from a user theme file.
     /// An id that no longer exists falls back to the default rather than
     /// failing to load — themes come and go, preferences should not
@@ -96,6 +120,13 @@ fn parse(text: &str) -> Config {
         gui_show_free_space: field(&table, "gui_show_free_space"),
         gui_show_grid: field(&table, "gui_show_grid"),
         gui_show_labels: field(&table, "gui_show_labels"),
+        gui_properties_open: field(&table, "gui_properties_open"),
+        gui_properties_pos: field(&table, "gui_properties_pos"),
+        // Forgiving like every other field: one malformed cleanup must
+        // not discard the rest of a config, and a malformed *list* means
+        // no cleanups rather than no preferences.
+        cleanups: field(&table, "cleanups").unwrap_or_default(),
+        language: field(&table, "language"),
         gui_theme: field(&table, "gui_theme"),
     }
 }

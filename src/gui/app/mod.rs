@@ -53,7 +53,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
 
 use super::treemap_layout;
 use super::ui::{ModalPage, Palette};
@@ -132,13 +131,22 @@ pub(in crate::gui) enum FileView {
 }
 
 impl FileView {
-    pub(in crate::gui) fn label(self) -> &'static str {
+    /// The key its name lives under, and the name itself.
+    ///
+    /// Two functions because one caller needs a `&'static str` for an
+    /// egui id and the other needs the translated text; a single
+    /// `String`-returning `label` would make every id allocate.
+    pub(in crate::gui) fn key(self) -> &'static str {
         match self {
-            Self::AllFiles => "All Files",
-            Self::LargestFiles => "Largest Files",
-            Self::DuplicateFiles => "Duplicate Files",
-            Self::SearchResults => "Search Results",
+            Self::AllFiles => "view.all_files",
+            Self::LargestFiles => "view.largest_files",
+            Self::DuplicateFiles => "view.duplicate_files",
+            Self::SearchResults => "view.search_results",
         }
+    }
+
+    pub(in crate::gui) fn label(self) -> String {
+        crate::i18n::tr(self.key())
     }
 }
 
@@ -202,6 +210,42 @@ impl ViewOptions {
     }
 }
 
+/// The Properties inspector: whether it is showing, and where it was
+/// left.
+///
+/// Separate from `modal` on purpose. Properties is the one surface here
+/// that describes something the user is still changing, so it is
+/// modeless — see `gui::ui::properties`. Keeping its state apart is what
+/// stops "is a modal open" from accidentally becoming true while an
+/// inspector sits harmlessly in the corner, which would block every
+/// keyboard shortcut in the app.
+#[derive(Default)]
+pub(in crate::gui) struct PropertiesWindow {
+    pub open: bool,
+    /// Top-left corner, remembered across runs. `None` means "wherever
+    /// the default puts it".
+    pub pos: Option<[f32; 2]>,
+}
+
+impl PropertiesWindow {
+    /// Reads the inspector back out of a saved config.
+    ///
+    /// A saved position is taken only as a whole pair: half of one places
+    /// a window somewhere nobody put it, so anything that is not exactly
+    /// two numbers falls back to the default position rather than being
+    /// patched up.
+    pub(in crate::gui) fn from_config(config: &crate::config::Config) -> Self {
+        let pos = match config.gui_properties_pos.as_deref() {
+            Some([x, y]) => Some([*x, *y]),
+            _ => None,
+        };
+        Self {
+            open: config.gui_properties_open.unwrap_or(false),
+            pos,
+        }
+    }
+}
+
 /// The search box and its last results.
 #[derive(Default)]
 pub(in crate::gui) struct SearchState {
@@ -229,6 +273,15 @@ pub(in crate::gui) struct GuiApp {
     /// flags used to live here; they could all be true at once, and two
     /// of them opened the same window.
     pub modal: Option<ModalPage>,
+    /// The user's configured cleanups, as of the last time their page was
+    /// opened. See [`crate::cleanups`].
+    pub(in crate::gui) cleanups: Vec<crate::cleanups::Cleanup>,
+    pub properties: PropertiesWindow,
+    /// The filesystem's own answer about the selected item, kept until
+    /// the selection moves. `RefCell` because the inspector reads it from
+    /// a draw path that holds `&GuiApp`, and the alternative — asking on
+    /// every frame — is file I/O inside the frame budget.
+    item_facts: std::cell::RefCell<Option<(PathBuf, crate::platform::ItemFacts)>>,
     pub backdrop: Backdrop,
     pub theme_id: String,
     /// Resolved from `theme_id`. Cached rather than looked up per frame
@@ -256,7 +309,27 @@ pub(in crate::gui) struct GuiApp {
     pub shell_icons: super::shell_icons::ShellIcons,
     pub treemap_tiles: Vec<treemap_layout::Tile>,
     treemap_key: Option<TreemapKey>,
-    scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
+    scan_rx: Option<mpsc::Receiver<ScanMessage>>,
+    /// Whether the tree on screen is one being filled in by a running
+    /// scan rather than a finished one.
+    pub(in crate::gui) live_scan: bool,
+    /// What the live tree will be rooted at, remembered from the moment
+    /// the scan started — the first published child is what swaps the
+    /// previous tree out, and by then the request has to be to hand.
+    pending_root: PathBuf,
+    /// Children published by the scan but not yet attached, because a
+    /// background worker still held a clone of the tree when they
+    /// arrived. Never more than a frame's worth behind.
+    pending_children: Vec<Node>,
+    /// The finished shell, waiting for the same exclusive access.
+    pending_finish: Option<Box<Tree>>,
+    /// Bumped whenever the tree is mutated in place.
+    ///
+    /// The row and tile caches key off the tree's *address*, which does
+    /// not change when a child is pushed into it, so without this they
+    /// would serve rows from before the child arrived and the window
+    /// would not fill in at all.
+    pub(in crate::gui) tree_generation: u64,
     scan_resets_workspace: bool,
     /// The user's zoom/selection/expansion captured as name identities
     /// when a refresh scan started, to be re-derived against the new
@@ -287,6 +360,9 @@ impl GuiApp {
         let mut expanded = HashSet::new();
         expanded.insert(Vec::new());
         let config = crate::config::load();
+        // Before anything is built, because every label below asks the
+        // catalogue for its text.
+        crate::i18n::set_language(config.language.as_deref().unwrap_or("en"));
         let theme_id = config
             .gui_theme
             .clone()
@@ -307,6 +383,9 @@ impl GuiApp {
             pending_delete: None,
             status: None,
             modal: None,
+            cleanups: config.cleanups.clone(),
+            properties: PropertiesWindow::from_config(&config),
+            item_facts: std::cell::RefCell::new(None),
             backdrop: Backdrop::Idle,
             theme_id: theme_id.clone(),
             palette: super::ui::palette_for(&theme_id),
@@ -322,6 +401,11 @@ impl GuiApp {
             treemap_tiles: Vec::new(),
             treemap_key: None,
             scan_rx: None,
+            live_scan: false,
+            pending_root: PathBuf::new(),
+            pending_children: Vec::new(),
+            pending_finish: None,
+            tree_generation: 0,
             scan_resets_workspace: false,
             restore: None,
             duplicate_rx: None,
@@ -342,8 +426,42 @@ impl GuiApp {
         self.palette = super::ui::palette_for(id);
     }
 
+    /// Bytes the scan counted more than once because of hard links, if
+    /// it measured and there were any.
+    ///
+    /// `None` covers both "not measured" and "none found", because the
+    /// status bar has the same answer for each: say nothing. A permanent
+    /// "0 B shared" on a volume without hard links is noise, and a scan
+    /// that did not measure has nothing to report.
+    pub(in crate::gui) fn hard_link_bytes(&self) -> Option<u64> {
+        self.tree.hard_link_bytes.filter(|bytes| *bytes > 0)
+    }
+
     pub(in crate::gui) fn open_modal(&mut self, page: ModalPage) {
+        // Re-read the cleanups when their page opens, and only then. They
+        // are edited in a text file that may have changed while the app
+        // was running, but reading it while *drawing* would be file I/O
+        // on the frame path — which is the one thing the draw code is not
+        // allowed to do.
+        if page == ModalPage::Cleanups {
+            self.cleanups = crate::config::load().cleanups;
+        }
         self.modal = Some(page);
+    }
+
+    /// Closes the modal card, whatever page it was showing.
+    pub(in crate::gui) fn close_modal(&mut self) {
+        self.modal = None;
+    }
+
+    /// Shows or hides the Properties inspector.
+    ///
+    /// A toggle rather than an open, because the control that reaches it
+    /// is a menu row and a toolbar button that stay available while the
+    /// window is up — "Properties" clicked twice should put the window
+    /// away, not re-open the one already there.
+    pub(in crate::gui) fn toggle_properties(&mut self) {
+        self.properties.open = !self.properties.open;
     }
 
     /// Picks up the reply to the screenshot the modal asked for.
@@ -379,6 +497,9 @@ impl GuiApp {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),
+            language: Some(crate::i18n::language()),
+            gui_properties_open: Some(self.properties.open),
+            gui_properties_pos: self.properties.pos.map(|pos| vec![pos[0], pos[1]]),
             ..self.view.to_config()
         });
         // This runs from `on_exit` — the window is already going away,
@@ -395,13 +516,28 @@ impl GuiApp {
 pub(in crate::gui) const NO_EXTENSION_LABEL: &str = "[no extension]";
 
 impl eframe::App for GuiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    /// Everything that is not drawing.
+    ///
+    /// eframe 0.34 split the old `update` in two: `logic` runs once
+    /// before each `ui`, and additionally while the window is hidden and
+    /// something has asked for a repaint. Polling the background workers
+    /// belongs on that side of the line — a finished scan has to be
+    /// collected whether or not anyone is looking at the window.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_background(ctx);
-        super::ui::draw(self, ctx);
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        super::ui::draw(self, ui);
+    }
+
+    fn on_exit(&mut self) {
         self.save_preferences();
+        // A scan still walking has nowhere to deliver to. Telling it to
+        // stop is not required for the process to exit — nothing joins it
+        // — but a window that has visibly closed should not leave every
+        // core but one busy for another minute.
+        self.cancel_scan();
         // Preferences are the only thing that has to survive the process,
         // and they are on disk by now. Everything else is a cache of the
         // filesystem, so the scanned tree is handed off instead of being
@@ -470,6 +606,8 @@ mod tests {
                 file_id: None,
                 other_filesystem: false,
             },
+            roots: Vec::new(),
+            hard_link_bytes: None,
         })
     }
 
@@ -574,7 +712,7 @@ mod tests {
         std::fs::write(first.join("old.txt"), b"old")?;
         std::fs::write(second.join("new.txt"), b"new")?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&first, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&first)?);
         app.open_folder(&second)?;
         assert!(app.is_busy());
         assert_eq!(app.tree.root_path, first);
@@ -592,7 +730,7 @@ mod tests {
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("payload.dat"), vec![7_u8; 4096])?;
 
-        let mut app = GuiApp::loading(dir.clone());
+        let mut app = GuiApp::loading(vec![dir.clone()]);
         assert!(app.is_busy());
         assert_eq!(app.tree.root.size, 0);
         wait_for_background(&mut app);
@@ -609,7 +747,7 @@ mod tests {
         std::fs::write(dir.join("one.bin"), b"same bytes")?;
         std::fs::write(dir.join("two.bin"), b"same bytes")?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.find_duplicates();
         assert!(app.is_busy());
         wait_for_background(&mut app);
@@ -636,7 +774,7 @@ mod tests {
     #[test]
     fn cached_rows_refresh_whenever_an_input_changes() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
 
         app.refresh_visible_rows();
         let collapsed = app.visible_rows.len();
@@ -675,7 +813,7 @@ mod tests {
     #[test]
     fn cached_rows_are_not_rebuilt_when_nothing_changed() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
 
         app.refresh_visible_rows();
         let first = app.visible_rows.as_ptr();
@@ -696,7 +834,7 @@ mod tests {
     #[test]
     fn cached_treemap_follows_the_panel_rect_and_the_zoom() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
 
         app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert!(!app.treemap_tiles.is_empty());
@@ -740,7 +878,7 @@ mod tests {
     #[test]
     fn releasing_the_tree_drops_everything_derived_from_it() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert!(!app.visible_rows.is_empty());
@@ -769,7 +907,7 @@ mod tests {
         std::fs::create_dir_all(&second)?;
         std::fs::write(second.join("other.bin"), vec![9_u8; 32])?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&first, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&first)?);
         // Put the workspace into a thoroughly used state.
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
@@ -807,7 +945,7 @@ mod tests {
     #[test]
     fn a_refresh_scan_restores_selection_and_zoom() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
         app.toggle_expanded(&alpha);
@@ -845,7 +983,7 @@ mod tests {
     #[test]
     fn a_selection_whose_file_vanished_is_dropped_not_moved_to_its_parent() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
         app.toggle_expanded(&alpha);
@@ -881,7 +1019,7 @@ mod tests {
     #[test]
     fn a_stale_view_is_still_validated_when_no_identity_could_be_captured() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         // Point the view somewhere the current tree cannot resolve, so
         // the capture step has nothing to capture.
@@ -924,7 +1062,7 @@ mod tests {
         std::fs::write(dir.join("alpha/one.bin"), vec![1_u8; 8])?;
         std::fs::write(dir.join("beta/two.txt"), vec![2_u8; 8])?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
         app.zoom_path = alpha;
@@ -959,7 +1097,7 @@ mod tests {
     #[test]
     fn a_queued_deletion_does_not_survive_a_rescan() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         app.select_path(row_path(&app, "alpha")?);
         app.request_delete_selected(true);
@@ -993,7 +1131,7 @@ mod tests {
     fn scan_root_cannot_be_queued_for_deletion() -> anyhow::Result<()> {
         let dir = scratch_dir("gui", "root_delete");
         std::fs::create_dir_all(&dir)?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.select_path(Vec::new());
         app.request_delete_selected(false);
         assert!(app.pending_delete.is_none());

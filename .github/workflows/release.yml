@@ -110,6 +110,78 @@ jobs:
       - name: Build
         run: cargo build --release --bins --target ${{ matrix.target }}
 
+      # Code signing, if and only if the certificates exist.
+      #
+      # They cannot live in this repository — Authenticode and Apple
+      # Developer certificates are bought, are tied to an identity, and
+      # are exactly the kind of secret a public repo must not hold — so
+      # these steps read them from repository secrets and *skip silently*
+      # when the secrets are unset. That is the deliberate design: the
+      # release path is complete and inert, so the day a certificate
+      # exists it is a secret away from signed releases rather than a
+      # workflow away.
+      #
+      # Until then, provenance and SBOM attestations are what this project
+      # can offer instead, and they ship on every asset. See
+      # docs/ROADMAP.md.
+      #
+      # Windows: WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD.
+      - name: Sign Windows binaries
+        if: runner.os == 'Windows' && env.CERT != ''
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT))
+          $bin = "target/$env:TARGET/release"
+          # SHA-256, RFC 3161 timestamp: a signature without a timestamp
+          # stops verifying the day the certificate expires, which for a
+          # release archive people download for years is the same as not
+          # signing it.
+          & signtool sign /fd SHA256 /td SHA256 `
+            /tr http://timestamp.digicert.com `
+            /f $pfx /p $env:CERT_PASSWORD `
+            "$bin/rustdirstat.exe" "$bin/rustdirstat-gui.exe"
+          Remove-Item $pfx -Force
+
+      # macOS: MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD,
+      # MACOS_SIGN_IDENTITY, and for notarisation MACOS_NOTARY_KEY_ID,
+      # MACOS_NOTARY_ISSUER_ID, MACOS_NOTARY_KEY_BASE64.
+      - name: Sign macOS binaries
+        if: runner.os == 'macOS' && env.CERT != ''
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 900 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$password" "$keychain" >/dev/null
+          security list-keychain -d user -s "$keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Hardened runtime and a timestamp: notarisation refuses a
+          # binary without either, so signing without them would produce
+          # something that still cannot be distributed.
+          for binary in rustdirstat rustdirstat-gui; do
+            codesign --force --timestamp --options runtime \
+              --sign "$IDENTITY" "target/$TARGET/release/$binary"
+            codesign --verify --strict --verbose=2 "target/$TARGET/release/$binary"
+          done
+
       # Both binaries ship together: the TUI/report tool and the desktop
       # GUI are two front ends over one scanner, and someone who wants one
       # usually wants the other available.
@@ -169,13 +241,17 @@ jobs:
           # version moves the way an action SHA does — deliberately, in
           # a reviewed commit.
           cargo install cargo-deb --version 3.7.0 --locked
+          cargo install cargo-generate-rpm --version 0.16.1 --locked
           cargo install cargo-cyclonedx --version 0.5.9 --locked
           deb="rustdirstat-${TAG}-amd64.deb"
           cargo deb --no-build --no-strip --target "$TARGET" --output "dist/${deb}"
+          rpm="rustdirstat-${TAG}-x86_64.rpm"
+          cargo generate-rpm --target "$TARGET" --output "dist/${rpm}"
           cargo cyclonedx --format json
           cp rustdirstat.cdx.json "dist/rustdirstat-${TAG}-sbom.cdx.json"
           cd dist
           sha256sum "$deb" > "${deb}.sha256"
+          sha256sum "$rpm" > "${rpm}.sha256"
 
       # One artifact per target: with upload-artifact@v4 a second matrix
       # job uploading to the same name fails outright, and even when it
@@ -185,6 +261,33 @@ jobs:
       # and SBOM are uploaded — the staging directory with the raw
       # binaries, README, and LICENSE stays inside the build job where
       # it belongs.
+      # Notarisation, again only when the credentials exist. The archive
+      # is what is submitted, because it is what a user downloads — a
+      # signed binary inside an un-notarised zip is still quarantined by
+      # Gatekeeper.
+      - name: Notarise macOS archive
+        if: runner.os == 'macOS' && env.NOTARY_KEY != ''
+        env:
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/notary.p8"
+          echo "$NOTARY_KEY" | base64 --decode > "$key"
+          archive="dist/rustdirstat-${TAG}-${TARGET}.tar.gz"
+          xcrun notarytool submit "$archive" \
+            --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --wait --timeout 30m
+          rm -f "$key"
+          # No stapling: `stapler` works on app bundles and disk images,
+          # not on a tarball of two command-line binaries. The ticket is
+          # published to Apple's servers by the submission above, which is
+          # what Gatekeeper checks on first launch.
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -193,6 +296,7 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/*.deb
+            dist/*.rpm
             dist/*.cdx.json
             dist/*.sha256
 
@@ -232,6 +336,7 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/*.deb
+            dist/*.rpm
             dist/*.cdx.json
       # And the SBOM again as a real SBOM attestation, so the CycloneDX
       # document is cryptographically bound to the artifacts it
@@ -245,7 +350,120 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/*.deb
+            dist/*.rpm
           sbom-path: dist/rustdirstat-${{ needs.draft.outputs.tag }}-sbom.cdx.json
+      # The three manifests a package manager needs are generated from
+      # the assets that were actually built, not maintained by hand: a
+      # checked-in formula carrying last release's SHA-256 is worse than
+      # none, because it installs the wrong bytes without complaint.
+      # They ship as release assets, so updating a tap or a PKGBUILD is
+      # copying a file rather than transcribing four digests.
+      - name: Render package manifests
+        shell: bash
+        env:
+          TAG: ${{ needs.draft.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd dist
+          version="${TAG#v}"
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          digest() { sha256sum "$1" | cut -d' ' -f1; }
+
+          win_zip="rustdirstat-${TAG}-x86_64-pc-windows-msvc.zip"
+          mac_arm="rustdirstat-${TAG}-aarch64-apple-darwin.tar.gz"
+          mac_x86="rustdirstat-${TAG}-x86_64-apple-darwin.tar.gz"
+          linux="rustdirstat-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+
+          mkdir -p manifests
+
+          cat > "manifests/lnorton89.rustdirstat.yaml" <<EOF
+          # winget manifest, generated by the release workflow.
+          PackageIdentifier: lnorton89.rustdirstat
+          PackageVersion: ${version}
+          PackageLocale: en-US
+          Publisher: lnorton89
+          PackageName: RustDirStat
+          License: MIT
+          ShortDescription: A cross-platform WinDirStat clone with a desktop GUI and a terminal UI.
+          Installers:
+            - Architecture: x64
+              InstallerType: zip
+              InstallerUrl: ${base}/${win_zip}
+              InstallerSha256: $(digest "$win_zip")
+              NestedInstallerType: portable
+              NestedInstallerFiles:
+                - RelativeFilePath: rustdirstat-${TAG}-x86_64-pc-windows-msvc\\rustdirstat.exe
+                  PortableCommandAlias: rustdirstat
+                - RelativeFilePath: rustdirstat-${TAG}-x86_64-pc-windows-msvc\\rustdirstat-gui.exe
+                  PortableCommandAlias: rustdirstat-gui
+          ManifestType: singleton
+          ManifestVersion: 1.6.0
+          EOF
+
+          cat > "manifests/rustdirstat.rb" <<EOF
+          # Homebrew formula, generated by the release workflow.
+          class Rustdirstat < Formula
+            desc "Cross-platform WinDirStat clone with a desktop GUI and a terminal UI"
+            homepage "https://github.com/${REPO}"
+            version "${version}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${base}/${mac_arm}"
+                sha256 "$(digest "$mac_arm")"
+              end
+              on_intel do
+                url "${base}/${mac_x86}"
+                sha256 "$(digest "$mac_x86")"
+              end
+            end
+
+            on_linux do
+              url "${base}/${linux}"
+              sha256 "$(digest "$linux")"
+            end
+
+            def install
+              bin.install "rustdirstat"
+              bin.install "rustdirstat-gui"
+            end
+
+            test do
+              system "#{bin}/rustdirstat", "--version"
+            end
+          end
+          EOF
+
+          cat > "manifests/PKGBUILD" <<EOF
+          # AUR PKGBUILD, generated by the release workflow.
+          pkgname=rustdirstat-bin
+          pkgver=${version}
+          pkgrel=1
+          pkgdesc="Cross-platform WinDirStat clone with a desktop GUI and a terminal UI"
+          arch=('x86_64')
+          url="https://github.com/${REPO}"
+          license=('MIT')
+          provides=('rustdirstat')
+          conflicts=('rustdirstat')
+          source=("${base}/${linux}")
+          sha256sums=('$(digest "$linux")')
+
+          package() {
+            cd "rustdirstat-${TAG}-x86_64-unknown-linux-gnu"
+            install -Dm755 rustdirstat "\$pkgdir/usr/bin/rustdirstat"
+            install -Dm755 rustdirstat-gui "\$pkgdir/usr/bin/rustdirstat-gui"
+            install -Dm644 LICENSE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
+            install -Dm644 README.md "\$pkgdir/usr/share/doc/\$pkgname/README.md"
+          }
+          EOF
+
+          tar czf "rustdirstat-${TAG}-package-manifests.tar.gz" -C manifests .
+          sha256sum "rustdirstat-${TAG}-package-manifests.tar.gz" \
+            > "rustdirstat-${TAG}-package-manifests.tar.gz.sha256"
+          rm -rf manifests
+
       - name: Upload and undraft
         shell: bash
         env:

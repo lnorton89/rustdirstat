@@ -20,12 +20,38 @@
 //! single byte reached the disk, and recursing per directory put the
 //! tree's depth on the call stack.
 
-use crate::model::Node;
+use crate::model::{Node, Tree};
 use crate::util::format_modified;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
 const HEADER: &str = "path,type,size,physical_size,files,dirs,modified,unreadable\n";
+
+/// Writes a whole [`Tree`], however many roots it has.
+///
+/// The multi-root case cannot go through [`write_csv_to_file`] with the
+/// tree's `root_path`: that is a label rather than a path, so every row
+/// would name something like `Selected locations/Users/report.docx` —
+/// a path that exists nowhere, in the export whose only purpose is to be
+/// consumed by something else. Each root is written against its own path
+/// instead, into one file, with one header.
+pub fn write_tree_csv(tree: &Tree, out_path: &Path) -> std::io::Result<()> {
+    let file = std::fs::File::create(out_path)?;
+    let mut out = BufWriter::new(file);
+    match tree.roots.as_slice() {
+        [] => write_csv(&mut out, &tree.root_path, &tree.root)?,
+        roots => {
+            write_header(&mut out)?;
+            for (index, root) in roots.iter().enumerate() {
+                let Some(node) = tree.root.children.get(index) else {
+                    continue;
+                };
+                write_rows(&mut out, &root.path, node)?;
+            }
+        }
+    }
+    out.flush()
+}
 
 pub fn write_csv_to_file(root_path: &Path, root: &Node, out_path: &Path) -> std::io::Result<()> {
     let file = std::fs::File::create(out_path)?;
@@ -44,8 +70,17 @@ pub fn write_csv_to_file(root_path: &Path, root: &Node, out_path: &Path) -> std:
 /// a row per node *and* must keep a live `PathBuf` in step with the
 /// stack — the shared walker hands out index paths only.
 fn write_csv<W: Write>(out: &mut W, root_path: &Path, root: &Node) -> std::io::Result<()> {
-    out.write_all(HEADER.as_bytes())?;
+    write_header(out)?;
+    write_rows(out, root_path, root)
+}
 
+/// The column names, once per file however many roots follow.
+fn write_header<W: Write>(out: &mut W) -> std::io::Result<()> {
+    out.write_all(HEADER.as_bytes())
+}
+
+/// Every row for one root, against that root's own path.
+fn write_rows<W: Write>(out: &mut W, root_path: &Path, root: &Node) -> std::io::Result<()> {
     // One frame per directory being walked, holding how far through its
     // children we are, plus a single path buffer pushed and popped in
     // step with them. Frames cost depth, not breadth — a stack of

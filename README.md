@@ -53,15 +53,22 @@ The terminal UI, the same three coupled views over the same scanning core:
 - Search the whole scan by glob or regex, list the largest files, and find
   duplicate files by content hash — hard-link aware, so two names for one
   file are never counted as reclaimable space
-- Logical vs. physical (on-disk) size everywhere. What "physical" means
-  is platform-honest rather than pretended uniform: on Unix it is
-  allocated blocks (`st_blocks`, so sparse files and tail packing show
-  their real footprint); on Windows it is compression- and sparse-aware
-  — NTFS-compressed and sparse files report their true on-disk bytes —
-  but not rounded up to allocation clusters, so a 1-byte plain file
-  reports 1 byte, not a 4 KB cluster. True cluster accounting would
-  cost a handle per file on exactly the huge scans this tool is built
-  for, and is deliberately not paid
+- Logical vs. physical (on-disk) size everywhere, and "physical" means
+  what the filesystem says rather than what is convenient to ask for: on
+  Unix it is allocated blocks (`st_blocks`, so sparse files and tail
+  packing show their real footprint), and on Windows it is the
+  allocation size — cluster-rounded, compression- and sparse-aware. NTFS
+  answers for a file too small to need a cluster by reporting what it
+  really occupies inside the MFT record rather than a cluster it does
+  not use, and that answer is passed through as given. This costs no
+  extra syscall: the directory listing the scan already performs carries
+  it
+- Hard links are measured, not guessed at: the totals count each name,
+  the way the rows do, and the status bar says how much of that total is
+  the same bytes reached through more than one of them. Free on Unix,
+  where a file's link count comes with its metadata; opt-in on Windows
+  (`--count-hard-links`), where measuring means remembering every file's
+  identity for the length of the scan
 - Delete to the Recycle Bin/Trash (permanent delete is deliberately
   harder), empty folders with honest partial-failure reporting, move
   across volumes without following symlinks
@@ -75,7 +82,48 @@ The terminal UI, the same three coupled views over the same scanning core:
 Prebuilt archives for Linux, macOS (Intel and Apple Silicon), and Windows
 are attached to each [release](https://github.com/lnorton89/rustdirstat/releases).
 Each contains both binaries and a `.sha256` companion file to verify the
-download against.
+download against, and every asset carries a signed build provenance
+attestation:
+
+```sh
+gh attestation verify rustdirstat-v0.3.0-x86_64-unknown-linux-gnu.tar.gz -R lnorton89/rustdirstat
+```
+
+### Linux packages
+
+A `.deb` and an `.rpm` are attached to each release, both holding the two
+binaries and built from the same bytes as the archive:
+
+```sh
+sudo dpkg -i rustdirstat-v0.3.0-amd64.deb        # Debian, Ubuntu
+sudo rpm -i rustdirstat-v0.3.0-x86_64.rpm        # Fedora, openSUSE, RHEL
+```
+
+### Signing
+
+Release binaries are **not** code-signed: an Authenticode certificate and
+an Apple Developer membership are bought and tied to an identity, and
+neither can live in a public repository. Windows SmartScreen and macOS
+Gatekeeper will say so.
+
+What is offered instead is provenance: every asset carries a signed
+attestation naming the workflow, the commit and the tag that produced it,
+which `gh attestation verify` checks against GitHub's transparency log —
+a stronger statement about *where the bytes came from* than a code
+signature makes, and a weaker one about *who the publisher is*.
+
+The signing path itself is written and waiting: `release.yml` signs and
+notarises when the certificate secrets are present, and skips when they
+are not. Adding them is all that stands between here and signed releases.
+
+### Package managers
+
+Each release also ships a `package-manifests.tar.gz` containing a winget
+manifest, a Homebrew formula, and an AUR `PKGBUILD`, generated from the
+digests of the assets that were actually built. They are published as
+assets rather than checked in because a manifest carrying the previous
+release's SHA-256 is worse than no manifest — it installs the wrong bytes
+without complaining.
 
 ### Nix
 
@@ -106,12 +154,18 @@ none of them.
 ## Usage
 
 ```sh
-rustdirstat [PATH]                # launch the interactive TUI (defaults to '.')
-rustdirstat --no-tui [PATH]       # print a plain-text report instead
+rustdirstat [PATH...]             # launch the interactive TUI (defaults to '.')
+rustdirstat --no-tui [PATH...]    # print a plain-text report instead
 rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels deep
 rustdirstat --csv out.csv [PATH]  # scan and write a full CSV export instead
-rustdirstat-gui [PATH]            # launch the native WinDirStat-style GUI
+rustdirstat-gui [PATH...]         # launch the native WinDirStat-style GUI
+rustdirstat-gui C:\ D:\           # or several places at once, as one tree
 ```
+
+Several paths scan into one tree, each as a top-level entry — the same
+choice WinDirStat's opening dialog offers, and the same one the GUI's
+**Locations** page offers with the drives listed and their used space
+shown. Free space is reported per drive and never added together.
 
 The GUI implements the three coupled views from the installed WinDirStat
 1.1.2 reference: an expandable directory tree, exact-extension list, and
@@ -134,6 +188,7 @@ to a compact column set in narrow panes.
 | `-n`, `--no-tui` | Print a text report instead of opening the TUI |
 | `-t`, `--top <N>` | Entries shown per directory in report mode (default 20) |
 | `-d`, `--depth <N>` | Depth of the report tree (default 2) |
+| `--count-hard-links` | Measure how much of the total is the same bytes under two names (default on where it is free — Unix) |
 | `--csv <PATH>` | Scan and write a full CSV export (one row per file/directory: path, type, size, physical_size, files, dirs, modified, unreadable) instead of opening the TUI |
 
 ## TUI keybindings
@@ -193,6 +248,59 @@ surface):
 - **Click the footer buttons** (Open, Up, Delete, Quit, and "more
   shortcuts" for the rest), or the **Yes/No buttons** in the delete
   confirmation popup.
+
+## Cleanups
+
+Your own commands, run against whatever is selected — WinDirStat's
+"Cleanups". Nothing is configured by default; add them to the config file
+described under [Preferences](#preferences):
+
+```toml
+[[cleanups]]
+name = "Open a terminal here"
+program = "wt"
+args = ["-d", "%d"]
+capture_output = false
+
+[[cleanups]]
+name = "Compress with 7-Zip"
+program = "7z"
+args = ["a", "-tzip", "%p.zip", "%p"]
+```
+
+`%p` is the full path, `%n` the file name, `%d` the containing folder,
+and `%%` a literal per cent. Arguments are a list, and **no shell is
+involved**: a file name containing spaces, quotes or semicolons is passed
+as data, not parsed as syntax. Every cleanup asks before it runs (set
+`confirm = false` to opt out, per cleanup) and the confirmation shows the
+exact command, after substitution.
+
+The reasoning, including what a hostile file name can and cannot do here,
+is in [`docs/CLEANUPS_THREAT_MODEL.md`](docs/CLEANUPS_THREAT_MODEL.md).
+
+## Language
+
+The window reads its text from a message catalogue. English ships
+compiled in; anything else is a file you drop into `lang/` beside the
+config, named for its language tag:
+
+```
+<config>/rustdirstat/lang/de.toml
+```
+
+A translation is a copy of [`assets/lang/en.toml`](assets/lang/en.toml)
+with the right-hand sides replaced. **Partial translations are useful**:
+any key a catalogue does not define falls back to English, so ten
+translated lines are ten translated lines rather than a broken UI. Pick
+the language under *Appearance*; the choice is remembered.
+
+`assets/lang/de.toml` is a deliberately partial German catalogue — enough
+to see the mechanism working end to end, and a starting point for anyone
+who wants to finish it.
+
+Coverage today is the menus, the view names, the status bar, the settings
+pages and the Properties inspector. The rest of the app is still English
+literals; `docs/ROADMAP.md` names the modules that remain.
 
 ## Preferences
 

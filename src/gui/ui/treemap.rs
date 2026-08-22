@@ -130,7 +130,12 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             // gridding the dense regions turned them into black mush and
             // cost a stroke per tile to do it.
             if app.view.grid && rect.width() >= MIN_GRID_PX && rect.height() >= MIN_GRID_PX {
-                painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, palette().treemap_grid));
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    Stroke::new(1.0_f32, palette().treemap_grid),
+                    egui::StrokeKind::Middle,
+                );
             }
             if app.selected_path.as_ref() == Some(&tile.index_path) {
                 selected_rect = treemap_selection_rect(rect);
@@ -171,6 +176,7 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                     rect.shrink(0.5),
                     0.0,
                     Stroke::new(1.5_f32, palette().treemap_hover),
+                    egui::StrokeKind::Middle,
                 );
             }
         }
@@ -191,8 +197,14 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                 rect,
                 0.0,
                 Stroke::new(TREEMAP_SELECTION_WIDTH + 2.0, backing),
+                egui::StrokeKind::Middle,
             );
-            painter.rect_stroke(rect, 0.0, Stroke::new(TREEMAP_SELECTION_WIDTH, marker));
+            painter.rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(TREEMAP_SELECTION_WIDTH, marker),
+                egui::StrokeKind::Middle,
+            );
         }
     }
     if let Some(text) = hover_text {

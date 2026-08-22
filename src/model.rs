@@ -122,12 +122,48 @@ pub struct Node {
 
 /// A scanned tree plus the absolute path its root corresponds to.
 pub struct Tree {
+    /// Where the scan started. For a scan of several roots this is the
+    /// common label rather than a real path — see [`Tree::roots`], which
+    /// is what path resolution actually walks.
     pub root_path: PathBuf,
     pub root: Node,
     /// Free/total bytes on the volume containing `root_path`, if it could
     /// be determined. Volume-level info, not part of the file hierarchy —
     /// used only to draw a "free space" reference tile alongside the real
     /// content when browsing the scan root, the way WinDirStat does.
+    pub volume_free: Option<u64>,
+    pub volume_total: Option<u64>,
+    /// How many of `root.physical_size`'s bytes were counted more than
+    /// once, because two names pointed at one file.
+    ///
+    /// `None` when the scan did not measure it — see
+    /// `ScanOptions::count_hard_links`, which is on by default only where
+    /// measuring is free. The totals themselves deliberately still count
+    /// per pathname, matching what the rows show; this is the correction
+    /// a front end can report beside them.
+    pub hard_link_bytes: Option<u64>,
+    /// The scanned roots, when there is more than one.
+    ///
+    /// Empty for the ordinary single-root scan, which keeps every index
+    /// path, every `path_for`, and every view exactly as it was — a
+    /// synthetic level above a single root would change the shape of the
+    /// tree for the common case to serve the rare one.
+    ///
+    /// When it is non-empty the tree's root is a synthetic node whose
+    /// children are the roots *in the same order*, so `root.children[i]`
+    /// belongs to `roots[i]` and an index path's first component selects
+    /// which real path the rest of it is relative to.
+    pub roots: Vec<Root>,
+}
+
+/// One scanned root of a multi-root tree.
+#[derive(Clone, Debug)]
+pub struct Root {
+    pub path: PathBuf,
+    /// Volume free/total for *this* root. Kept per root because two
+    /// roots on one volume share one figure and two roots on different
+    /// volumes must not be added together — free space is a property of
+    /// a volume, not of a scan.
     pub volume_free: Option<u64>,
     pub volume_total: Option<u64>,
 }
@@ -357,6 +393,46 @@ impl Tree {
             root_path,
             volume_free: None,
             volume_total: None,
+            roots: Vec::new(),
+            hard_link_bytes: None,
+        }
+    }
+
+    /// An empty tree for a scan that is about to fill it in.
+    ///
+    /// Like [`Self::placeholder`], but always a directory and without
+    /// asking the filesystem whether it is one: a scan that publishes
+    /// children has already established that, and a live tree whose root
+    /// says `is_dir: false` shows no children at all — the row builder
+    /// stops at a leaf.
+    pub fn live_shell(root_path: PathBuf) -> Self {
+        let name = root_path
+            .file_name()
+            .map(OsString::from)
+            .unwrap_or_else(|| root_path.as_os_str().to_os_string());
+        Self {
+            root: Node {
+                name,
+                is_dir: true,
+                is_symlink: false,
+                size: 0,
+                physical_size: 0,
+                file_count: 0,
+                dir_count: 0,
+                modified: None,
+                children: Vec::new(),
+                error: false,
+                category: None,
+                ext_totals: vec![(0, 0, 0); Category::COUNT],
+                unreadable_count: 0,
+                file_id: None,
+                other_filesystem: false,
+            },
+            root_path,
+            volume_free: None,
+            volume_total: None,
+            roots: Vec::new(),
+            hard_link_bytes: None,
         }
     }
 
@@ -375,6 +451,22 @@ impl Tree {
     /// directly and panic instead — the crate denies `panic!`, but `[]`
     /// walks straight past that.
     pub fn path_for(&self, index_path: &[usize]) -> Option<PathBuf> {
+        // A multi-root tree has a synthetic node on top, so the first
+        // component selects a root rather than naming a directory: its
+        // *path* replaces the prefix instead of being appended to it.
+        // Getting this wrong would build `C:\D:\Users`, which is not a
+        // path anywhere.
+        if !self.roots.is_empty() {
+            let (&first, rest) = index_path.split_first()?;
+            let root = self.roots.get(first)?;
+            let mut node = self.root.children.get(first)?;
+            let mut path = root.path.clone();
+            for &idx in rest {
+                node = node.children.get(idx)?;
+                path.push(&node.name);
+            }
+            return Some(path);
+        }
         let mut path = self.root_path.clone();
         let mut node = &self.root;
         for &idx in index_path {
@@ -383,6 +475,21 @@ impl Tree {
             path.push(&node.name);
         }
         Some(path)
+    }
+
+    /// The scanned root an index path belongs to, and its volume figures.
+    ///
+    /// For a single-root tree that is the tree itself, whatever the path.
+    pub fn root_for(&self, index_path: &[usize]) -> Option<Root> {
+        if self.roots.is_empty() {
+            return Some(Root {
+                path: self.root_path.clone(),
+                volume_free: self.volume_free,
+                volume_total: self.volume_total,
+            });
+        }
+        let &first = index_path.first()?;
+        self.roots.get(first).cloned()
     }
 
     /// The node `index_path` leads to, or `None` if it runs off the end
@@ -446,7 +553,16 @@ impl Tree {
     /// tile representing almost the entire area, which is what WinDirStat
     /// avoids by only ever showing it for a whole-drive scan.
     pub fn is_volume_root(&self) -> bool {
-        self.root_path.parent().is_none()
+        // A multi-root tree is never one volume, so the free-space
+        // reference has no single meaning at its top. Each root still
+        // has its own figures — see [`Self::root_for`] — and a zoom into
+        // one of them is a single-volume view again.
+        self.roots.is_empty() && self.root_path.parent().is_none()
+    }
+
+    /// Whether this tree spans more than one scanned root.
+    pub fn is_multi_root(&self) -> bool {
+        !self.roots.is_empty()
     }
 }
 

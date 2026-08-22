@@ -336,6 +336,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                                     response.rect.shrink(1.0),
                                     2.0,
                                     Stroke::new(1.0_f32, palette().accent),
+                                    egui::StrokeKind::Middle,
                                 );
                             }
                             if let Some(source) = response.dnd_release_payload::<DirectoryColumn>()
@@ -387,31 +388,31 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                         response.context_menu(|ui| {
                             if icon_button(ui, true, Icon::ExternalLink, "Open").clicked() {
                                 row_action = Some((RowAction::Open, item.path.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                             if icon_button(ui, true, Icon::Folder, "Show in Explorer").clicked() {
                                 row_action = Some((RowAction::Reveal, item.path.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                             if icon_button(ui, true, Icon::Copy, "Copy path").clicked() {
                                 row_action = Some((RowAction::CopyPath, item.path.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if icon_button(ui, true, Icon::ZoomIn, "Zoom treemap here").clicked() {
                                 row_action = Some((RowAction::Zoom, item.path.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                             if icon_button(ui, true, Icon::Info, "Properties").clicked() {
                                 row_action = Some((RowAction::Properties, item.path.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if icon_button(ui, !item.path.is_empty(), Icon::Trash, "Delete…")
                                 .clicked()
                             {
                                 row_action = Some((RowAction::Delete, item.path.clone()));
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         if response.clicked() {
@@ -479,7 +480,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
             RowAction::Reveal => reveal_selected(app),
             RowAction::CopyPath => copy_path(app),
             RowAction::Zoom => app.zoom_in(),
-            RowAction::Properties => app.open_modal(super::modal::ModalPage::Properties),
+            RowAction::Properties => app.toggle_properties(),
             RowAction::Delete => app.request_delete_selected(false),
         }
     }

@@ -42,7 +42,44 @@ pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)
 /// menu bar has to override it — a rounded pill under a menu name reads
 /// as a floating button rather than as part of the bar.
 #[cfg(test)]
-pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, f32)>> =
+pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Where each cleanup's Run button landed, by cleanup name.
+#[cfg(test)]
+pub(super) static TEST_CLEANUP_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Where the Locations page's scan button landed, so a test can press
+/// the real control rather than calling the method behind it.
+#[cfg(test)]
+pub(super) static TEST_LOCATION_SCAN_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Where the Properties inspector landed, so a test can check it is on
+/// screen, that it moved when dragged, and that it went away when closed.
+#[cfg(test)]
+pub(super) static TEST_PROPERTIES_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// How many times the row list and the treemap layout have been rebuilt.
+///
+/// Both are the tree-sized work a frame must not repeat: the caches on
+/// `GuiApp` exist so a still window does none of it, and a cache that
+/// silently misses every frame looks identical from the outside while
+/// costing the whole frame budget. These make the miss observable.
+#[cfg(test)]
+pub(in crate::gui) static TEST_ROW_REBUILDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub(in crate::gui) static TEST_TREEMAP_REBUILDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Where the "Cancel scan" button landed, so a test can press the real
+/// control rather than calling `cancel_scan` directly and proving
+/// nothing about the button.
+#[cfg(test)]
+pub(super) static TEST_SCAN_CANCEL_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
     std::sync::Mutex::new(Vec::new());
 
 /// `(label, x of the first glyph)` for every table column header, of

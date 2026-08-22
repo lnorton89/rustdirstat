@@ -207,6 +207,7 @@ pub(super) fn draw_extension_cell(
                 3.0,
                 extension_color(&ext.extension),
                 Stroke::new(1.0_f32, Color32::from_white_alpha(80)),
+                egui::StrokeKind::Middle,
             );
         }
         ExtensionColumn::Description => {
@@ -242,6 +243,7 @@ pub(super) fn draw_extension_header(
             response.rect.shrink(1.0),
             2.0,
             Stroke::new(1.0_f32, palette().accent),
+            egui::StrokeKind::Middle,
         );
     }
     let reorder = response

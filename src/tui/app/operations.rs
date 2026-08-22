@@ -176,14 +176,29 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let filename = format!("rustdirstat-report-{secs}.txt");
+        // At the top of a multi-root scan there is no single path to
+        // head the report with — `current_path` would give the label
+        // standing in for the roots — so the whole tree is written, one
+        // section per root, each against its own path.
+        let at_top = self.path_indices.is_empty() && self.tree.is_multi_root();
         let path = self.current_path();
-        match crate::report::write_report_to_file(
-            &path,
-            self.current_node(),
-            50,
-            4,
-            std::path::Path::new(&filename),
-        ) {
+        let written = if at_top {
+            crate::report::write_tree_report_to_file(
+                &self.tree,
+                50,
+                4,
+                std::path::Path::new(&filename),
+            )
+        } else {
+            crate::report::write_report_to_file(
+                &path,
+                self.current_node(),
+                50,
+                4,
+                std::path::Path::new(&filename),
+            )
+        };
+        match written {
             Ok(()) => self.message = Some(format!("Report written to {filename}")),
             Err(e) => self.message = Some(format!("Failed to write report: {e}")),
         }
@@ -195,12 +210,21 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let filename = format!("rustdirstat-export-{secs}.csv");
+        // Same reasoning as the report above: at the top of a
+        // multi-root scan every row would be built from a label rather
+        // than a path, which is worthless to whatever consumes the CSV.
+        let at_top = self.path_indices.is_empty() && self.tree.is_multi_root();
         let path = self.current_path();
-        match crate::csv_export::write_csv_to_file(
-            &path,
-            self.current_node(),
-            std::path::Path::new(&filename),
-        ) {
+        let written = if at_top {
+            crate::csv_export::write_tree_csv(&self.tree, std::path::Path::new(&filename))
+        } else {
+            crate::csv_export::write_csv_to_file(
+                &path,
+                self.current_node(),
+                std::path::Path::new(&filename),
+            )
+        };
+        match written {
             Ok(()) => self.message = Some(format!("CSV written to {filename}")),
             Err(e) => self.message = Some(format!("Failed to write CSV: {e}")),
         }
@@ -210,7 +234,23 @@ impl App {
         let Some(tool) = crate::wintools::TOOLS.get(idx) else {
             return;
         };
-        match crate::wintools::run(idx, &self.tree.root_path) {
+        // The volume comes from where the user is standing, not from
+        // `root_path`: with several roots scanned that is a label, and
+        // `wintools` derives a volume from a path's first component — so
+        // the tools were being handed the first word of a UI string.
+        let volume = if self.tree.is_multi_root() {
+            let Some(path) = self.tree.root_for(&self.path_indices).map(|root| root.path) else {
+                self.message = Some(
+                    "Open one of the scanned locations first: with several, there is no                      single volume for a maintenance tool"
+                        .to_string(),
+                );
+                return;
+            };
+            path
+        } else {
+            self.tree.root_path.clone()
+        };
+        match crate::wintools::run(idx, &volume) {
             // The TUI has one status line and no scrollback panel to put
             // a report in, so a tool's `detail` is folded onto the end of
             // its summary rather than dropped — truncated by the status

@@ -51,44 +51,48 @@ use super::widgets::*;
 /// Which page of the modal is showing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModalPage {
+    Locations,
     Appearance,
     Layout,
     Views,
-    Properties,
+    Cleanups,
     Maintenance,
     Guide,
     About,
 }
 
 impl ModalPage {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Locations,
         Self::Appearance,
         Self::Layout,
         Self::Views,
-        Self::Properties,
+        Self::Cleanups,
         Self::Maintenance,
         Self::Guide,
         Self::About,
     ];
 
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Appearance => "Appearance",
-            Self::Layout => "Layout",
-            Self::Views => "Views",
-            Self::Properties => "Properties",
-            Self::Maintenance => "Maintenance",
-            Self::Guide => "View guide",
-            Self::About => "About",
-        }
+    pub(crate) fn label(self) -> String {
+        crate::i18n::tr(match self {
+            Self::Locations => "page.locations",
+            Self::Appearance => "page.appearance",
+            Self::Layout => "page.layout",
+            Self::Views => "page.views",
+            Self::Cleanups => "page.cleanups",
+            Self::Maintenance => "page.maintenance",
+            Self::Guide => "page.guide",
+            Self::About => "page.about",
+        })
     }
 
     pub(crate) fn icon(self) -> Icon {
         match self {
+            Self::Locations => Icon::Folder,
             Self::Appearance => Icon::Settings,
             Self::Layout => Icon::LayoutHorizontal,
             Self::Views => Icon::Tree,
-            Self::Properties => Icon::Info,
+            Self::Cleanups => Icon::Export,
             Self::Maintenance => Icon::Tools,
             Self::Guide => Icon::Help,
             Self::About => Icon::App,
@@ -98,16 +102,17 @@ impl ModalPage {
     /// The line under the page title. Every page gets one — a heading
     /// with nothing under it was most of what made the old dialogs read
     /// as unfinished.
-    pub(crate) fn blurb(self) -> &'static str {
-        match self {
-            Self::Appearance => "Theme, and how the treemap is drawn.",
-            Self::Layout => "Where the treemap and the lists sit relative to each other.",
-            Self::Views => "Which parts of the window are shown.",
-            Self::Properties => "Details of the item selected in the tree.",
-            Self::Maintenance => "Built-in Windows tools for the volume holding this scan.",
-            Self::Guide => "What each of the coupled views does.",
-            Self::About => "RustDirStat, and where its behaviour comes from.",
-        }
+    pub(crate) fn blurb(self) -> String {
+        crate::i18n::tr(match self {
+            Self::Locations => "page.locations.blurb",
+            Self::Appearance => "page.appearance.blurb",
+            Self::Layout => "page.layout.blurb",
+            Self::Views => "page.views.blurb",
+            Self::Cleanups => "page.cleanups.blurb",
+            Self::Maintenance => "page.maintenance.blurb",
+            Self::Guide => "page.guide.blurb",
+            Self::About => "page.about.blurb",
+        })
     }
 }
 
@@ -115,6 +120,9 @@ impl ModalPage {
 pub(super) enum ConfirmKind {
     Delete,
     WindowsTool(usize),
+    /// A user-defined cleanup, already resolved: the card shows the
+    /// command itself rather than the template it came from.
+    Cleanup,
 }
 
 /// Width of the navigation rail. Wide enough for the longest page name
@@ -128,7 +136,7 @@ pub(super) const NAV_WIDTH: f32 = 212.0;
 /// without scrolling", not "how little of the window can it cover".
 const CARD_MAX_WIDTH: f32 = 1180.0;
 const CARD_MAX_HEIGHT: f32 = 860.0;
-const CARD_ROUNDING: f32 = 14.0;
+const CARD_ROUNDING: u8 = 14;
 const CONFIRM_WIDTH: f32 = 470.0;
 
 /// How long the card takes to settle in. Long enough to read as motion,
@@ -156,6 +164,9 @@ pub(super) fn modal_is_open(app: &GuiApp) -> bool {
 pub(super) fn confirm_kind(app: &GuiApp) -> Option<ConfirmKind> {
     if app.pending_delete.is_some() {
         return Some(ConfirmKind::Delete);
+    }
+    if app.tools.pending_cleanup.is_some() {
+        return Some(ConfirmKind::Cleanup);
     }
     app.tools.pending.map(ConfirmKind::WindowsTool)
 }
@@ -187,7 +198,7 @@ pub(super) fn draw_modal(app: &mut GuiApp, ctx: &egui::Context) {
 fn advance_backdrop(app: &mut GuiApp, ctx: &egui::Context) -> bool {
     match &mut app.backdrop {
         Backdrop::Idle => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             app.backdrop = Backdrop::Requested { frames_waited: 0 };
             ctx.request_repaint();
             false
@@ -232,10 +243,19 @@ pub(crate) fn install_backdrop(
 /// Target width of the downscaled snapshot.
 ///
 /// The blur is done at this size and stretched back up, which is what
-/// makes a whole-window gaussian cheap: three box passes over ~220x140
-/// pixels is tens of thousands of operations, not tens of millions, and
-/// it happens once per modal open rather than per frame.
-const BLUR_WIDTH: usize = 220;
+/// makes a whole-window gaussian cheap: a few box passes over a
+/// several-hundred-pixel-wide image is tens of thousands of operations,
+/// not tens of millions, and it happens once per modal open rather than
+/// per frame.
+///
+/// It is also the blur's strength dial, which is not obvious: the
+/// downscale factor multiplies the radius below, so at 220 a window
+/// 1280px wide was blurred with an effective radius around 20 screen
+/// pixels — enough that the app behind the card stopped reading as the
+/// app and became a wash of colour. 440 halves the factor and so halves
+/// the smear, leaving the window recognisable behind the card while
+/// still pushing it clearly behind it.
+const BLUR_WIDTH: usize = 440;
 
 /// Box-blur passes. Three approximates a gaussian closely enough that
 /// nothing about the result reads as "boxy" once it is stretched back up.
@@ -248,6 +268,7 @@ fn blur(image: &egui::ColorImage) -> egui::ColorImage {
     if src_w == 0 || src_h == 0 {
         return egui::ColorImage {
             size: [0, 0],
+            source_size: egui::Vec2::ZERO,
             pixels: Vec::new(),
         };
     }
@@ -288,6 +309,7 @@ fn blur(image: &egui::ColorImage) -> egui::ColorImage {
     }
     egui::ColorImage {
         size: [w, h],
+        source_size: egui::vec2(src_w as f32, src_h as f32),
         pixels,
     }
 }
@@ -325,7 +347,7 @@ fn box_pass(src: &[Color32], w: usize, h: usize, horizontal: bool) -> Vec<Color3
 
 fn draw_scrim(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
     let palette = palette();
-    let screen = ctx.screen_rect();
+    let screen = ctx.viewport_rect();
     let response = egui::Area::new(egui::Id::new("modal_scrim"))
         .order(egui::Order::Middle)
         .fixed_pos(screen.min)
@@ -379,7 +401,7 @@ pub(super) fn dismiss_top(app: &mut GuiApp) {
 
 fn draw_card(app: &mut GuiApp, ctx: &egui::Context, page: ModalPage, opening: f32) {
     let palette = palette();
-    let screen = ctx.screen_rect();
+    let screen = ctx.viewport_rect();
     let size = Vec2::new(
         (screen.width() * 0.92).min(CARD_MAX_WIDTH),
         (screen.height() * 0.90).min(CARD_MAX_HEIGHT),
@@ -411,14 +433,14 @@ fn draw_card(app: &mut GuiApp, ctx: &egui::Context, page: ModalPage, opening: f3
 }
 
 fn card_frame(palette: Palette) -> Frame {
-    Frame::none()
+    Frame::NONE
         .fill(palette.panel)
-        .rounding(egui::Rounding::same(CARD_ROUNDING))
+        .corner_radius(egui::CornerRadius::same(CARD_ROUNDING))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .shadow(egui::epaint::Shadow {
-            offset: Vec2::new(0.0, 16.0),
-            blur: 44.0,
-            spread: 0.0,
+            offset: [0, 16],
+            blur: 44,
+            spread: 0,
             color: Color32::from_black_alpha(if palette.mode.is_dark() { 160 } else { 60 }),
         })
 }
@@ -426,15 +448,15 @@ fn card_frame(palette: Palette) -> Frame {
 fn draw_nav(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
     let palette = palette();
     let height = ui.available_height();
-    Frame::none()
+    Frame::NONE
         .fill(palette.app)
-        .rounding(egui::Rounding {
-            nw: CARD_ROUNDING - 1.0,
-            sw: CARD_ROUNDING - 1.0,
-            ne: 0.0,
-            se: 0.0,
+        .corner_radius(egui::CornerRadius {
+            nw: CARD_ROUNDING - 1,
+            sw: CARD_ROUNDING - 1,
+            ne: 0,
+            se: 0,
         })
-        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_MD))
+        .inner_margin(Margin::symmetric(px(SPACE_MD), px(SPACE_MD)))
         .show(ui, |ui| {
             ui.set_width(NAV_WIDTH);
             ui.set_min_height(height);
@@ -469,7 +491,7 @@ fn nav_row(ui: &mut egui::Ui, selected: bool, page: ModalPage) -> egui::Response
     const ICON_INSET: f32 = 10.0;
     const HEIGHT: f32 = 34.0;
     let palette = palette();
-    let galley = egui::WidgetText::from(page.label()).into_galley(
+    let galley = egui::WidgetText::from(&page.label()).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,
@@ -484,7 +506,7 @@ fn nav_row(ui: &mut egui::Ui, selected: bool, page: ModalPage) -> egui::Response
             hover_fill(ui, &response, Color32::TRANSPARENT, palette.hover)
         };
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(7.0), fill);
+            .rect_filled(rect, egui::CornerRadius::same(7), fill);
         // The bar is what carries "you are here" at a glance; the fill
         // alone is a subtle enough difference that a fast scan down the
         // rail misses it. It grows out of the middle as the page changes,
@@ -572,12 +594,12 @@ fn draw_page_body(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage, card_hei
             .max_height(remaining)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                Frame::none()
+                Frame::NONE
                     .inner_margin(Margin {
-                        left: BODY_PAD,
-                        right: BODY_PAD,
-                        top: 14.0,
-                        bottom: BODY_PAD,
+                        left: px(BODY_PAD),
+                        right: px(BODY_PAD),
+                        top: px(SPACE_MD),
+                        bottom: px(BODY_PAD),
                     })
                     .show(ui, |ui| {
                         fill_width(ui);
@@ -619,7 +641,7 @@ pub(super) fn confirm_card(
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
     let palette = palette();
-    let screen = ctx.screen_rect();
+    let screen = ctx.viewport_rect();
     let width = CONFIRM_WIDTH.min(screen.width() - 40.0).max(240.0);
     let lift = (1.0 - opening) * 14.0;
     egui::Area::new(egui::Id::new(id))
@@ -632,7 +654,7 @@ pub(super) fn confirm_card(
             ui.set_opacity(opening);
             ui.set_max_width(width);
             card_frame(palette)
-                .inner_margin(Margin::same(SPACE_LG))
+                .inner_margin(Margin::same(px(SPACE_LG)))
                 .show(ui, |ui| {
                     ui.set_width(width - 40.0);
                     add_contents(ui);
@@ -667,10 +689,10 @@ impl Tone {
 
 pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
     let (tone, fill, text_color) = tone.colors();
-    Frame::none()
+    Frame::NONE
         .fill(fill)
-        .rounding(egui::Rounding::same(7.0))
-        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_SM))
+        .corner_radius(egui::CornerRadius::same(7))
+        .inner_margin(Margin::symmetric(px(SPACE_MD), px(SPACE_SM)))
         .stroke(Stroke::new(1.0_f32, tone))
         .show(ui, |ui| {
             fill_width(ui);
@@ -686,7 +708,7 @@ pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
 /// separate windows could not offer.
 pub(super) fn page_link(ui: &mut egui::Ui, page: ModalPage) -> bool {
     let palette = palette();
-    let galley = egui::WidgetText::from(page.label()).into_galley(
+    let galley = egui::WidgetText::from(&page.label()).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,

@@ -214,7 +214,12 @@ impl Icon {
             ));
         };
         let box_outline = |x1: f32, y1: f32, x2: f32, y2: f32, radius: f32| {
-            painter.rect_stroke(Rect::from_min_max(p(x1, y1), p(x2, y2)), radius, s);
+            painter.rect_stroke(
+                Rect::from_min_max(p(x1, y1), p(x2, y2)),
+                radius,
+                s,
+                egui::StrokeKind::Middle,
+            );
         };
 
         match self {
@@ -477,8 +482,8 @@ mod tests {
         // colour on screen. A tile dropped here would show up as the
         // frame colour behind it and nowhere else.
         let context = egui::Context::default();
-        let output = context.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 paint_brand(
                     ui.painter(),
                     egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::Vec2::splat(64.0)),
@@ -486,6 +491,7 @@ mod tests {
             });
         });
 
+        output.textures_delta.clear();
         let painted: Vec<egui::Color32> = output
             .shapes
             .iter()
@@ -517,8 +523,8 @@ mod tests {
     fn every_icon_renders_vector_shapes() {
         for icon in Icon::ALL {
             let context = egui::Context::default();
-            let output = context.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     icon.paint(
                         ui.painter(),
                         egui::Rect::from_min_size(egui::pos2(4.0, 4.0), egui::Vec2::splat(16.0)),
@@ -526,6 +532,7 @@ mod tests {
                     );
                 });
             });
+            output.textures_delta.clear();
             assert!(!output.shapes.is_empty(), "{icon:?} painted no shapes");
         }
     }

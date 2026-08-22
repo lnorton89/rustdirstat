@@ -181,6 +181,25 @@ items, including library code that merely happens to be test-gated.
 The result should be that no caller of one of these needs `unsafe`
 itself, and no test body contains any.
 
+**The window is built to hold 120 FPS — an 8.33 ms frame — *while a scan
+is running*.** That is the number the rest of these rules serve, and it is
+`theme::FRAME_BUDGET` rather than folklore: five checks in
+`gui/ui/tests.rs` measure against it (a still window rebuilding nothing, a
+frame over a quarter-million nodes drawing only what fits, the median
+frame idle and under a live scan, and a busy app asking for the *next*
+frame rather than one on a 33 ms timer). `docs/PERFORMANCE.md` §0 says
+what each one actually guarantees.
+
+**A scan fills the tree in as it goes, and that is why the caches have a
+generation.** `scanner::scan_streaming` publishes each finished top-level
+child; `GuiApp::attach_child` pushes it into the tree *in place* (O(1),
+never a copy — a partial tree of nine million nodes cannot be cloned per
+update). In-place growth keeps the `Arc`'s address, which is what both
+caches key off, so `RowKey` and `TreemapKey` carry `tree_generation` and
+it is bumped on every mutation. `Arc::get_mut` is what makes the mutation
+safe: a frame where a worker still holds a clone defers its children to
+the next one rather than blocking. See `docs/PERFORMANCE.md` §0c.
+
 **Never recompute something tree-sized inside a draw call.** The GUI is
 immediate mode: `gui::ui::draw` runs in full every frame. A scan of a
 whole drive is ~9M nodes, so anything O(tree) in a draw path freezes the
@@ -274,10 +293,18 @@ twenty-nine were snapped to the nearest step, ties rounding up. `BODY_PAD`
 is now `SPACE_LG` rather than a number of its own.
 
 So there is no literal spacing left in `src/gui`: the only bare number in
-a `Margin` is a `0.0`, which is an absent margin rather than a step. If
+a `Margin` is a `0`, which is an absent margin rather than a step. If
 you find yourself wanting a value between two steps, the answer is one of
 the two steps — that is what makes the toolbar, the status bar, every
 pane heading, and now every modal page share one column.
+
+Two mechanics from egui 0.31 sit under that. A `Margin` is measured in
+whole pixels (`i8`), so the scale crosses into it through `theme::px`
+rather than through an `as i8` at each call site. And **a `Frame`'s
+stroke counts as part of its padding**: a 1px border on a pane frame
+insets its content to 13px and silently breaks the shared column, which
+is why `panel_frame` and the three chrome frames carry no stroke and the
+line between panes is the `Panel`'s own separator instead.
 
 **Every hover fades; nothing switches.** Hoverable surfaces route their
 highlight through `hover_t` / `hover_fill` in `src/gui/ui/widgets.rs`,
@@ -307,13 +334,33 @@ its call site. Bars are solid rather than floating on purpose: a floating
 bar is invisible until the pointer is already on it, so a table with
 columns past its edge looks like it has simply lost them.
 
-**There is one modal, not several.** `app.modal: Option<ModalPage>`
-selects a page of a single card (`src/gui/ui/modal.rs`, contents in
-`pages.rs`); confirmations layer above it off `pending_delete` /
-`pending_windows_tool`. Do not add an `egui::Window` — that is what the
-six unaligned, unscrollable, non-modal dialogs this replaced all were.
-`handle_shortcuts` returns early while a modal is open, so a new
-shortcut is automatically blocked during a confirmation.
+**There is one modal, and one window that is deliberately not modal.**
+`app.modal: Option<ModalPage>` selects a page of a single card
+(`src/gui/ui/modal.rs`, contents in `pages.rs`); confirmations layer above
+it off `pending_delete` / `pending_windows_tool`. `handle_shortcuts`
+returns early while a modal is open, so a new shortcut is automatically
+blocked during a confirmation.
+
+The exception is **Properties** (`src/gui/ui/properties.rs`), which is an
+`egui::Window` on purpose: it describes the current selection, and the
+way people use it is to leave it open while clicking through the tree,
+which a modal forbids. It also has to *earn* that place — an inspector
+that repeats the columns is a second copy of the highlighted row. What it
+shows is what a grid cannot: the full path, both sizes at once with the
+gap between them named, the share of the volume, a folder's own category
+breakdown, and the things nobody can store per node because there are
+nine million of them — link count, created and accessed times,
+attributes, asked of the filesystem once per selection and cached against
+it. It lives in `app.properties`, separate from
+`app.modal`, so `modal_is_open` stays false and every shortcut keeps
+working while it is up — `shortcuts_still_work_while_the_inspector_is_open`
+and `the_properties_window_leaves_the_app_usable` pin both halves.
+
+That is the whole list. Anything else that wants to be a window is what
+the six unaligned, unscrollable dialogs the modal replaced all were, and
+the answer is a modal page. The bar for a second exception is that the
+surface describes something the user is still in the middle of changing —
+Properties is the only one here that does.
 
 **A right-to-left region inside a top-aligned horizontal claims the
 parent's whole remaining height.** In a scroll area that is the rest of
@@ -378,16 +425,27 @@ proportional, so padding with spaces aligns nothing. Use `menu_action`,
 icon / label / shortcut as real columns. `menu_rows_align_and_keep_shortcuts_off_their_labels`
 in `src/gui/ui/tests.rs` guards this.
 
-**The menu bar's own styling has to be set from inside `menu::bar`.**
-egui's `set_menu_style` runs on the child `Ui` as that call's first act,
-so button padding, item spacing, and widget rounding configured on the
-way in are all silently discarded. `draw_menu_bar` sets them on the child
-instead, and squares the rounding off — the app rounds widgets by 6,
-which under a top-level menu name paints a pill floating in the strip
-rather than a bar responding. The panel frame carries no vertical margin
-for the same reason: the highlight *is* the button's background, so any
-margin shows as a gap it cannot reach.
-`menu_bar_highlights_are_square_and_fill_the_bar` measures both.
+**The menu bar's styling goes through `MenuBar::style`, and its frame
+carries no vertical margin and no stroke.** egui applies a menu bar's
+style modifier *after* entering the bar's own scope, so anything set on
+the surrounding `Ui` is discarded — `menu_bar_style` in
+`gui/ui/chrome.rs` is handed to `MenuBar::style` instead, and calls
+egui's own `menu_style` first because a modifier replaces the default
+rather than adding to it. It squares the widget rounding off: the app
+rounds widgets by 6, which under a top-level menu name paints a pill
+floating in the strip rather than a bar responding. The frame claims no
+vertical margin because the highlight *is* the button's background, so
+any margin shows as a gap it cannot reach — and no stroke, because since
+egui 0.31 a frame's stroke width is padding too and put that gap back.
+The rule under the bar is the `Panel`'s own separator line, which is
+painted outside the content. `menu_bar_highlights_are_square_and_fill_the_bar`
+measures all of it.
+
+**A menu closes on `ui.close()`, and only there.** egui 0.32 made
+`CloseOnClick` the default, which would dismiss the menu under a size
+choice or a view toggle — rows that are deliberately flippable several at
+a time. `menu_config` in `chrome.rs` asks for `CloseOnClickOutside`
+instead, so the rows that *should* dismiss the menu say so themselves.
 
 **A shortcut shown in a menu must exist in `handle_shortcuts`**
 (`src/gui/ui/actions.rs`). The menus advertise `Ctrl+O`, `F5`, `Ctrl+C`,
@@ -419,8 +477,8 @@ directory tan is load-bearing: without it an ordinary `.wav` tile is
 hard to tell from a folder tile beside it.
 
 **A pathname and a filesystem object are different things.** `Node`
-holds `file_id` — `(st_dev, st_ino)` on Unix, `None` on Windows —
-captured at scan time. Duplicates use it to tell two hard links to one
+holds `file_id` — `(st_dev, st_ino)` on Unix, volume serial plus
+file index on Windows — captured at scan time. Duplicates use it to tell two hard links to one
 file from two real copies: a same-content group whose names all share
 one inode is not reclaimable space, and `DupGroup::reclaimable` counts
 `distinct_inodes - 1`, not `files.len() - 1`. The scanner stays on the
@@ -463,6 +521,16 @@ places.
 goes in its group, not at the top level — that is what forty-odd flat
 fields prefixed `duplicate_` and `search_` turned into.
 
+**A file name is attacker-controlled text, and `cleanups` is where that
+bites.** Anyone who can write into a scanned directory chooses what a
+cleanup substitutes — an unzipped archive is enough. So `src/cleanups.rs`
+never builds a command line as text: argv arrays only, no `sh -c`, no
+`cmd /c`, no splitting a configured string into arguments, and
+substitution that happens *inside* one argument so a name can never
+become a second one. An unknown placeholder is an error rather than an
+empty string. The reasoning is `docs/CLEANUPS_THREAT_MODEL.md`; if you
+change this module, change that document in the same commit.
+
 **A destructive confirmation only answers to the keys it offers.** The
 delete and Windows-tool prompts advertise `[Y]es`, `[E]mpty`, `[N]o`;
 anything else — an arrow key, F5, a stray modifier — leaves the dialog
@@ -487,23 +555,23 @@ global. Keep taking that lock in new rendering tests.
 - **Nodes do not store their own path.** `Tree::path_for` rebuilds it from
   child indices. A `PathBuf` per node dominates memory on a large scan.
   Selections are therefore `Vec<usize>` index paths, not paths.
-- **The egui stack is held at 0.29, and moving it is a project, not a
-  chore.** Measured against 0.36: 135 compile errors, but the count is
-  not the problem. Three subsystems are redesigned rather than renamed.
-  `eframe::App::update(ctx, frame)` becomes `ui(ui, frame)`, so the
-  whole draw path threads a `Ui` where it currently threads a `Context`.
-  `SidePanel` and `TopBottomPanel` no longer exist — one `Panel::left/
-  right/top/bottom(id)` replaces them, taking a `Ui`. The menu system is
-  gone and rebuilt: no `menu::bar`, no `close_menu` (29 call sites), a
-  new `MenuBar`/`MenuButton`/`MenuConfig` instead.
-  That last one is why this needs its own branch and a person watching
-  the window: several rules above — `set_menu_style` having to run
-  inside `menu::bar`, the square menu-bar highlights, the column-based
-  menu rows — describe an API that no longer exists, and the tests
-  pinning them would have to be re-derived rather than merely fixed.
-  The mechanical part is genuinely mechanical: `Rounding` →
-  `CornerRadius` (now `u8`, not `f32`), `Frame::none()` → `Frame::NONE`,
-  an extra `StrokeKind` argument on the painter's rect calls.
+- **The egui stack is on 0.36, and it got there in 0.3.0.** It was held
+  at 0.29 for two releases because moving it is a project rather than a
+  bump; the migration is done and the notes below are what it changed, so
+  a reader of old code (or an old branch) can tell which world they are
+  in. `eframe::App` split `update` into `logic(ctx, frame)` and
+  `ui(ui, frame)`, so the draw path threads a `Ui`; `SidePanel` and
+  `TopBottomPanel` became one `Panel::left/right/top/bottom(id)` taking
+  that `Ui`; the menu system was rebuilt around
+  `MenuBar`/`MenuButton`/`MenuConfig`, with `close_menu` replaced by
+  `ui.close()`. Mechanically: `Rounding` → `CornerRadius` (`u8`),
+  `Margin` and `Shadow` in whole pixels (`i8`/`u8`), `Frame::none()` →
+  `Frame::NONE`, an explicit `StrokeKind` on every painted rect stroke,
+  `Context::style` → `global_style`, `screen_rect` → `viewport_rect`,
+  `wants_keyboard_input` → `egui_wants_keyboard_input`, and `Context::run`
+  → `run_ui` in tests. Two behaviours changed under the API and are worth
+  knowing: a `Frame`'s stroke width now counts as padding, and menus
+  close on click by default.
 - **`crossterm` uses the `use-dev-tty` feature.** Not about `/dev/tty` —
   it avoids a real event-loss bug in the default mio backend. The long
   comment in `Cargo.toml` explains it; `tests/quit_stress.rs` is the

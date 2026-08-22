@@ -105,9 +105,26 @@ pub(super) fn row_hover_edge(painter: &egui::Painter, response: &egui::Response,
     let inset = (1.0 - t) * edge.height() * 0.5;
     painter.rect_filled(
         edge.shrink2(Vec2::new(0.0, inset)),
-        egui::Rounding::same(1.5),
+        egui::CornerRadius::same(2),
         palette().accent.gamma_multiply(t),
     );
+}
+
+/// The "there is nothing here yet" state, centred with its own icon.
+///
+/// Shared rather than written twice: the Properties inspector and the
+/// modal pages both need it, and two hand-laid versions drift — the
+/// second one always ends up a different distance from its heading.
+pub(super) fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, body: &str) {
+    let palette = palette();
+    ui.add_space(SPACE_LG);
+    ui.vertical_centered(|ui| {
+        paint_inline_icon(ui, icon, 38.0, palette.secondary_text);
+        ui.add_space(SPACE_MD);
+        ui.label(RichText::new(title).strong());
+        ui.add_space(SPACE_XS);
+        ui.label(RichText::new(body).color(palette.secondary_text));
+    });
 }
 
 pub(super) fn view_icon(view: FileView) -> Icon {
@@ -143,8 +160,13 @@ pub(super) fn view_tab(ui: &mut egui::Ui, selected: bool, view: FileView) -> egu
         } else {
             Stroke::NONE
         };
-        ui.painter()
-            .rect(rect, egui::Rounding::same(6.0), fill, stroke);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(6),
+            fill,
+            stroke,
+            egui::StrokeKind::Middle,
+        );
         let color = if selected {
             palette().on_accent
         } else {
@@ -172,7 +194,10 @@ pub(super) fn view_tab(ui: &mut egui::Ui, selected: bool, view: FileView) -> egu
     }
     #[cfg(test)]
     probe(&TEST_VIEW_TAB_RECTS).push((view, rect));
-    response.on_hover_text(format!("Show {}", view.label()))
+    response.on_hover_text(crate::i18n::tr_with(
+        "tooltip.show_view",
+        &[("view", &view.label())],
+    ))
 }
 
 pub(super) fn tool(ui: &mut egui::Ui, icon: Icon, tip: &str) -> egui::Response {
@@ -237,7 +262,7 @@ pub(super) fn expand_toggle(ui: &mut egui::Ui, id: egui::Id, expanded: bool) -> 
     if hot.a() > 0 {
         ui.painter().rect_filled(
             egui::Rect::from_center_size(center, Vec2::splat(EXPAND_TOGGLE_WIDTH)),
-            egui::Rounding::same(5.0),
+            egui::CornerRadius::same(5),
             hot,
         );
     }
@@ -433,12 +458,13 @@ pub(super) fn menu_item(
             if t > 0.0 {
                 ui.painter().rect(
                     rect.expand(visuals.expansion),
-                    visuals.rounding,
+                    visuals.corner_radius,
                     visuals.weak_bg_fill.gamma_multiply(t),
                     Stroke::new(
                         visuals.bg_stroke.width,
                         visuals.bg_stroke.color.gamma_multiply(t),
                     ),
+                    egui::StrokeKind::Middle,
                 );
             }
             let color = if enabled {
@@ -591,7 +617,7 @@ pub(super) fn sortable_header(
             hover_fill(ui, &response, palette().raised, palette().hover)
         };
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(4.0), fill);
+            .rect_filled(rect, egui::CornerRadius::same(4), fill);
         let text_pos = egui::pos2(
             rect.left() + HEADER_TEXT_INSET,
             rect.center().y - galley.size().y * 0.5,
@@ -643,7 +669,7 @@ pub(super) fn table_header_label(ui: &mut egui::Ui, label: &str) {
     let (rect, _) = ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(4.0), palette().raised);
+            .rect_filled(rect, egui::CornerRadius::same(4), palette().raised);
         ui.painter().galley(
             egui::pos2(
                 rect.left() + HEADER_TEXT_INSET,
@@ -720,6 +746,7 @@ pub(super) fn truncate_for_width(
     // A galley already knows where each character sits: `Row::glyphs` is
     // one entry per `char`, positioned from the galley's own origin. So
     // the cut point is a scan over that, not a search over re-layouts.
+    let font_for_check = font.clone();
     let ellipsis_width = painter
         .layout_no_wrap(ELLIPSIS.to_string(), font, Color32::WHITE)
         .rect
@@ -742,7 +769,41 @@ pub(super) fn truncate_for_width(
         return String::new();
     }
     kept.push(ELLIPSIS);
+
+    // The scan above adds up advance widths; a laid-out string is not
+    // always exactly that sum. Shaping can kern the last kept character
+    // against the ellipsis, and the galley's rect carries the final
+    // glyph's side bearing — egui 0.36 lays "a-rather-l…" out 0.8px wider
+    // than its own advances predict, which is enough to fail the promise
+    // this function exists to keep.
+    //
+    // So the scan is the estimate and this is the check: lay the result
+    // out once, and give back characters until it really fits. It
+    // normally costs one layout and no iterations at all, and it is only
+    // reached for labels that are being truncated anyway.
+    while measured_width(&kept, &font_for_check, painter) > max_w {
+        let Some(cut) = kept
+            .char_indices()
+            .rev()
+            .find(|(_, c)| *c != ELLIPSIS)
+            .map(|(index, _)| index)
+        else {
+            return String::new();
+        };
+        kept.remove(cut);
+        if kept.chars().all(|c| c == ELLIPSIS) {
+            return String::new();
+        }
+    }
     kept
+}
+
+/// Width of one laid-out line, for [`truncate_for_width`]'s final check.
+fn measured_width(text: &str, font: &egui::FontId, painter: &egui::Painter) -> f32 {
+    painter
+        .layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE)
+        .rect
+        .width()
 }
 
 /// The character [`truncate_for_width`] cuts with.

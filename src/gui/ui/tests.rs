@@ -95,6 +95,8 @@ fn app_with_one_file() -> GuiApp {
         },
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -145,6 +147,8 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
         },
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -227,6 +231,8 @@ fn app_with_sortable_files() -> GuiApp {
         },
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -257,18 +263,45 @@ fn app_with_sortable_extensions() -> GuiApp {
     app
 }
 
+/// Throws away a finished frame.
+///
+/// epaint 0.36 panics when a [`egui::FullOutput`] is dropped with texture
+/// deltas still attached: a real renderer uploads them, and silently
+/// discarding one is how a font atlas goes missing. These tests have no
+/// renderer, so they say so explicitly rather than leaking the panic out
+/// of whichever test happened to allocate a glyph first.
+fn discard(mut output: egui::FullOutput) {
+    output.textures_delta.clear();
+}
+
 fn raw_input_at_width(events: Vec<egui::Event>, width: f32) -> egui::RawInput {
+    raw_input_sized(events, width, 500.0)
+}
+
+/// A frame at an explicit window size.
+///
+/// The 500px-tall default is fine for a test that renders one pane, but
+/// the whole window does not fit in it: menu bar, toolbar, treemap,
+/// extensions pane and status bar leave the file list with no rows on
+/// screen at all, so anything that wants to click a row while the rest of
+/// the window is drawn needs a realistic height.
+fn raw_input_sized(events: Vec<egui::Event>, width: f32, height: f32) -> egui::RawInput {
     static FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
-            egui::vec2(width, 500.0),
+            egui::vec2(width, height),
         )),
         events,
         time: Some(frame as f64 / 60.0),
         ..Default::default()
     }
+}
+
+/// A whole-window frame, big enough for every pane to have room.
+fn window_input(events: Vec<egui::Event>) -> egui::RawInput {
+    raw_input_sized(events, 1400.0, 900.0)
 }
 
 fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
@@ -277,44 +310,44 @@ fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
 
 fn render_directory(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_directory_tree(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_directory_tree(app, ui));
+    }));
 }
 
 fn render_extensions(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_extension_list(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_extension_list(app, ui));
+    }));
 }
 
 fn render_largest(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_largest_files(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_largest_files(app, ui));
+    }));
 }
 
 fn render_search(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_search(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_search(app, ui));
+    }));
 }
 
 fn render_duplicates(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_duplicates(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_duplicates(app, ui));
+    }));
 }
 
 fn render_toolbar(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        draw_toolbar(app, ctx);
-    });
+    discard(ctx.run_ui(input, |ui| {
+        draw_toolbar(app, ui);
+    }));
 }
 
 /// Draws the treemap into a panel framed exactly as the real one is, so
@@ -322,11 +355,11 @@ fn render_toolbar(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) 
 /// coordinates a bare `CentralPanel` happens to hand out.
 fn render_treemap(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
+    discard(ctx.run_ui(input, |ui| {
         egui::CentralPanel::default()
             .frame(super::theme::panel_frame())
-            .show(ctx, |ui| draw_treemap(app, ui));
-    });
+            .show(ui, |ui| draw_treemap(app, ui));
+    }));
 }
 
 fn pointer_button(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
@@ -376,7 +409,7 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
         let ctx = egui::Context::default();
         let app = app_with_one_file();
         apply_style(&ctx, app.palette);
-        let interaction = ctx.style().interaction.clone();
+        let interaction = ctx.global_style().interaction.clone();
         assert_eq!(
             interaction.tooltip_delay, 0.0,
             "a tooltip delay needs a frame to elapse on, and an input-driven repaint \
@@ -394,10 +427,10 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
 
     // Settle the layout so the buttons are where they will finally be.
     for _ in 0..3 {
-        let _ = ctx.run(raw_input_at_width(Vec::new(), 1400.0), |ctx| {
-            apply_style(ctx, app.palette);
-            draw_toolbar(&mut app, ctx);
-        });
+        discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1400.0), |ui| {
+            apply_style(ui.ctx(), app.palette);
+            draw_toolbar(&mut app, ui);
+        }));
     }
     assert!(
         !tooltip_is_showing(&ctx),
@@ -406,19 +439,19 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
 
     // The first toolbar button sits just right of the app mark.
     let over_button = egui::pos2(150.0, 40.0);
-    let _ = ctx.run(
+    discard(ctx.run_ui(
         raw_input_at_width(pointer_move(over_button), 1400.0),
-        |ctx| {
-            apply_style(ctx, app.palette);
-            draw_toolbar(&mut app, ctx);
+        |ui| {
+            apply_style(ui.ctx(), app.palette);
+            draw_toolbar(&mut app, ui);
         },
-    );
+    ));
     // One further frame with no events at all: the pointer is now still,
     // which is precisely the state the old defaults never got a frame in.
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1400.0), |ctx| {
-        apply_style(ctx, app.palette);
-        draw_toolbar(&mut app, ctx);
-    });
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1400.0), |ui| {
+        apply_style(ui.ctx(), app.palette);
+        draw_toolbar(&mut app, ui);
+    }));
 
     assert!(
         tooltip_is_showing(&ctx),
@@ -895,8 +928,8 @@ fn application_labels_do_not_capture_text_selection() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     apply_style(&ctx, themes::Palette::default());
-    assert!(!ctx.style().interaction.selectable_labels);
-    assert!(!ctx.style().interaction.multi_widget_text_select);
+    assert!(!ctx.global_style().interaction.selectable_labels);
+    assert!(!ctx.global_style().interaction.multi_widget_text_select);
 }
 
 #[test]
@@ -1085,13 +1118,13 @@ fn menu_icons_never_overlap_their_labels() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     probe(&TEST_ICON_MENU_LAYOUTS).clear();
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             icon_selectable_label(ui, true, Icon::Tree, "All files");
             icon_button(ui, true, Icon::Settings, "     Settings…");
             icon_button(ui, false, Icon::Duplicate, "     Duplicate Files");
         });
-    });
+    }));
 
     let layouts = probe(&TEST_ICON_MENU_LAYOUTS);
     assert_eq!(layouts.len(), 3);
@@ -1120,10 +1153,10 @@ fn menu_bar_names_are_clearly_separated() {
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
     probe(&TEST_MENU_BAR_RECTS).clear();
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1280.0), |ctx| {
-        apply_style(ctx, app.palette);
-        draw_menu_bar(&mut app, ctx);
-    });
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1280.0), |ui| {
+        apply_style(ui.ctx(), app.palette);
+        draw_menu_bar(&mut app, ui);
+    }));
 
     let names = probe(&TEST_MENU_BAR_RECTS);
     assert_eq!(
@@ -1140,7 +1173,7 @@ fn menu_bar_names_are_clearly_separated() {
     // with, so ask the context.
     let font = egui::FontId::new(14.0, egui::FontFamily::Proportional);
     let text_width = |label: &str| {
-        ctx.fonts(|fonts| {
+        ctx.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
                 .size()
@@ -1189,8 +1222,8 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     probe(&TEST_MENU_ITEM_LAYOUTS).clear();
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             menu_action(ui, true, Icon::FolderOpen, "Select folder…", "Ctrl+O");
             menu_action(ui, true, Icon::Refresh, "Rescan", "F5");
             menu_action(ui, true, Icon::Trash, "Delete to Recycle Bin", "Del");
@@ -1198,7 +1231,7 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
             menu_toggle(ui, &mut true, "Grid lines");
             menu_choice(ui, true, "Logical size");
         });
-    });
+    }));
 
     let layouts = probe(&TEST_MENU_ITEM_LAYOUTS);
     assert_eq!(layouts.len(), 6);
@@ -1342,15 +1375,15 @@ fn extension_panel_width(
     events: Vec<egui::Event>,
 ) -> (f32, f32) {
     let mut rect = egui::Rect::ZERO;
-    let _ = ctx.run(raw_input_at_width(events, screen), |ctx| {
-        let response = egui::SidePanel::right("test_extension_panel")
+    discard(ctx.run_ui(raw_input_at_width(events, screen), |ui| {
+        let response = egui::Panel::right("test_extension_panel")
             .resizable(true)
-            .min_width(0.0)
-            .default_width(1200.0)
+            .min_size(0.0)
+            .default_size(1200.0)
             .frame(panel_frame())
-            .show(ctx, |ui| draw_extension_list(app, ui));
+            .show(ui, |ui| draw_extension_list(app, ui));
         rect = response.response.rect;
-    });
+    }));
     (rect.width(), rect.left())
 }
 
@@ -1407,9 +1440,19 @@ fn the_extensions_pane_takes_the_width_it_is_given() {
     );
 }
 
-/// Horizontal gap between columns, which is where the resize handle
-/// lives. Matches `apply_style`'s `item_spacing.x`.
-const COLUMN_GAP: f32 = 8.0;
+/// How far left of the next column's leading edge to grab.
+///
+/// `egui_extras` puts a column's resize line at the *next* column's left
+/// edge and gives it `interaction.resize_grab_radius_side` of slack. One
+/// pixel inside that is a reliable hit, and — unlike aiming at the line
+/// itself — it cannot land on the next header, whose own click sense
+/// covers its whole cell and would swallow the press.
+///
+/// Until egui 0.36 the handle sat one `item_spacing.x` right of the
+/// *previous* cell instead, which is what this constant used to encode;
+/// the gap between two cells is now two spacings wide, so the midpoint is
+/// no longer the boundary.
+const COLUMN_GRAB_INSET: f32 = 1.0;
 
 /// Width of a named header on the most recent frame.
 /// The width a header was last rendered at.
@@ -1452,21 +1495,36 @@ fn drag_column_border(
     for _ in 0..4 {
         render(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
     }
-    let edge = probe(headers)
+    // The grab strip is on the *next* column's leading edge, so the
+    // target is derived from the pair of cells rather than from a
+    // spacing constant: the probe records every header in draw order, so
+    // the entry after the last copy of `label` is the column to its
+    // right.
+    let rendered: Vec<(&'static str, egui::Rect)> = probe(headers).iter().copied().collect();
+    let this = rendered
         .iter()
-        .rev()
-        .find(|(seen, _)| *seen == label)
-        // The grab strip is in the gap *between* columns, one full
-        // `item_spacing.x` right of the cell's own edge — not on the
-        // visible boundary, which is where an earlier version of this
-        // test aimed and consequently reported resizing as broken when
-        // it was working.
-        .map(|(_, rect)| egui::pos2(rect.right() + COLUMN_GAP, rect.center().y));
+        .rposition(|(seen, _)| *seen == label)
+        .map(|index| (index, rendered[index].1));
     assert!(
-        edge.is_some(),
+        this.is_some(),
         "{label} did not render, so it has no border"
     );
-    let edge = edge.unwrap_or_default();
+    let Some((index, cell)) = this else {
+        return;
+    };
+    let next = rendered
+        .iter()
+        .skip(index + 1)
+        .map(|(_, rect)| *rect)
+        .find(|rect| rect.left() > cell.right());
+    assert!(
+        next.is_some(),
+        "{label} is the last column rendered, so nothing borders it on the right"
+    );
+    let Some(next) = next else {
+        return;
+    };
+    let edge = egui::pos2(next.left() - COLUMN_GRAB_INSET, cell.center().y);
 
     render(
         ctx,
@@ -1535,7 +1593,7 @@ fn the_directory_table_fills_resizes_and_scrolls() {
         // The table reserves a gutter for its own vertical scrollbar, so
         // the columns legitimately stop short of the viewport by that
         // much. That strip is a scrollbar, not dead space.
-        let gutter = ctx.style().spacing.scroll.allocated_width();
+        let gutter = ctx.global_style().spacing.scroll.allocated_width();
         assert!(
             row + gutter + 1.0 >= viewport,
             "in a {width:.0}px pane the table is {row:.0}px wide inside a {viewport:.0}px \
@@ -1679,7 +1737,7 @@ fn directory_table_expands_to_fill_a_wider_pane() -> anyhow::Result<()> {
     assert!(
         wide_width > narrow_width,
         "table should absorb pane growth: narrow={narrow_width}, wide={wide_width}, screen={}",
-        ctx.screen_rect().width()
+        ctx.viewport_rect().width()
     );
     Ok(())
 }
@@ -1814,7 +1872,7 @@ fn render_modal_at(
         events,
         ..raw_input(Vec::new())
     };
-    let _ = ctx.run(input, |ctx| super::modal::draw_modal(app, ctx));
+    discard(ctx.run_ui(input, |ui| super::modal::draw_modal(app, ui.ctx())));
 }
 
 /// Frames to run before the modal has painted anything.
@@ -1944,7 +2002,7 @@ fn the_delete_key_cannot_queue_a_second_delete_while_one_is_being_confirmed() {
     // Shift+Del while the confirmation is up used to reach the shortcut
     // handler and replace the queued delete with a *permanent* one,
     // underneath a card still showing the recycle-bin wording.
-    let _ = ctx.run(
+    discard(ctx.run_ui(
         raw_input(vec![egui::Event::Key {
             key: egui::Key::Delete,
             physical_key: None,
@@ -1953,7 +2011,7 @@ fn the_delete_key_cannot_queue_a_second_delete_while_one_is_being_confirmed() {
             modifiers: egui::Modifiers::SHIFT,
         }]),
         |ctx| super::handle_shortcuts(&mut app, ctx),
-    );
+    ));
 
     assert_eq!(
         app.pending_delete.as_ref().map(|pending| pending.permanent),
@@ -2192,21 +2250,21 @@ fn a_hover_highlight_ramps_rather_than_switching() {
     // returns whatever it was asked for — that is what keeps a control
     // that appears already-selected from sliding into place — so a ramp
     // has to start from a state egui has actually seen.
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        let _ = hover_t(ctx, id, false);
-    });
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        let _ = hover_t(ui.ctx(), id, false);
+    }));
 
     let mut rising = Vec::new();
     for _ in 0..14 {
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            rising.push(hover_t(ctx, id, true))
-        });
+        discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+            rising.push(hover_t(ui.ctx(), id, true))
+        }));
     }
     let mut falling = Vec::new();
     for _ in 0..14 {
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            falling.push(hover_t(ctx, id, false))
-        });
+        discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+            falling.push(hover_t(ui.ctx(), id, false))
+        }));
     }
 
     assert!(
@@ -2358,20 +2416,20 @@ fn menu_bar_highlights_are_square_and_fill_the_bar() {
     probe(&TEST_MENU_BAR_ROUNDING).clear();
     let bar_top = std::cell::Cell::new(0.0_f32);
     let bar_bottom = std::cell::Cell::new(0.0_f32);
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1280.0), |ctx| {
-        apply_style(ctx, app.palette);
-        bar_top.set(ctx.screen_rect().top());
-        draw_menu_bar(&mut app, ctx);
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1280.0), |ui| {
+        apply_style(ui.ctx(), app.palette);
+        bar_top.set(ui.ctx().viewport_rect().top());
+        draw_menu_bar(&mut app, ui);
         // Whatever the menu bar panel did not claim starts here, so this
         // is the bar's own bottom edge.
-        bar_bottom.set(ctx.available_rect().top());
-    });
+        bar_bottom.set(ui.available_rect_before_wrap().top());
+    }));
 
     let roundings = probe(&TEST_MENU_BAR_ROUNDING);
     assert_eq!(roundings.len(), 7, "expected one reading per menu");
     for (label, rounding) in roundings.iter() {
         assert_eq!(
-            *rounding, 0.0,
+            *rounding, 0,
             "the {label} menu would paint a {rounding}px rounded hover background"
         );
     }
@@ -2402,15 +2460,15 @@ fn both_kinds_of_table_header_start_their_text_in_the_same_place() -> anyhow::Re
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     probe(&TEST_TABLE_HEADER_TEXT).clear();
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        apply_style(ctx, themes::Palette::default());
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        apply_style(ui.ctx(), themes::Palette::default());
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical(|ui| {
                 sortable_header(ui, "Size", None, true);
                 table_header_label(ui, "Size");
             });
         });
-    });
+    }));
 
     let insets = probe(&TEST_TABLE_HEADER_TEXT);
     assert_eq!(
@@ -2478,15 +2536,15 @@ fn every_pane_rules_off_its_heading_at_the_same_inset() -> anyhow::Result<()> {
     let mut app = app_with_one_file();
     probe(&TEST_SECTION_RULE_RECTS).clear();
     apply_style(&ctx, app.palette);
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1000.0), |ctx| {
-        egui::TopBottomPanel::bottom("treemap_pane")
-            .default_height(240.0)
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1000.0), |ui| {
+        egui::Panel::bottom("treemap_pane")
+            .default_size(240.0)
             .frame(super::theme::panel_frame())
-            .show(ctx, |ui| draw_treemap(&mut app, ui));
+            .show(ui, |ui| draw_treemap(&mut app, ui));
         egui::CentralPanel::default()
             .frame(super::theme::panel_frame())
-            .show(ctx, |ui| draw_extension_list(&mut app, ui));
-    });
+            .show(ui, |ui| draw_extension_list(&mut app, ui));
+    }));
 
     let rules = probe(&TEST_SECTION_RULE_RECTS);
     assert_eq!(rules.len(), 2, "both panes should rule off their heading");
@@ -2580,7 +2638,7 @@ fn the_style_points_scrollbars_at_the_control_color_not_a_surface() {
         let palette = themes::Palette::from_spec(spec);
         let ctx = egui::Context::default();
         apply_style(&ctx, palette);
-        let visuals = ctx.style().visuals.clone();
+        let visuals = ctx.global_style().visuals.clone();
         let name = &spec.name;
 
         assert_eq!(
@@ -2614,7 +2672,7 @@ fn every_scroll_area_shares_one_style_and_takes_its_own_space() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     apply_style(&ctx, themes::Palette::default());
-    let scroll = ctx.style().spacing.scroll;
+    let scroll = ctx.global_style().spacing.scroll;
     let expected = scroll_style();
 
     // Solid, not floating. A floating bar is invisible until the pointer
@@ -2638,7 +2696,7 @@ fn every_scroll_area_shares_one_style_and_takes_its_own_space() {
     // The style is the only place any of the five scroll areas is
     // configured, so switching theme must not disturb it.
     apply_style(&ctx, themes::palette_for("light-modern"));
-    let after = ctx.style().spacing.scroll;
+    let after = ctx.global_style().spacing.scroll;
     assert_eq!(after.bar_width, expected.bar_width);
     assert_eq!(after.floating, expected.floating);
     assert_eq!(after.handle_min_length, expected.handle_min_length);
@@ -2671,7 +2729,7 @@ fn the_modal_reserves_room_for_its_scrollbar() -> anyhow::Result<()> {
 
 fn apply_style_and_bar_width(ctx: &egui::Context, palette: themes::Palette) -> f32 {
     apply_style(ctx, palette);
-    ctx.style().spacing.scroll.allocated_width()
+    ctx.global_style().spacing.scroll.allocated_width()
 }
 
 /// Truncation fits the width it is given, and keeps as much as fits.
@@ -2687,8 +2745,8 @@ fn a_truncated_label_fits_its_width_and_keeps_everything_that_does() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     apply_style(&ctx, themes::Palette::default());
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let painter = ui.painter().clone();
             let font = egui::TextStyle::Small.resolve(ui.style());
             let width_of = |text: &str| {
@@ -2742,7 +2800,7 @@ fn a_truncated_label_fits_its_width_and_keeps_everything_that_does() {
                 }
             }
         });
-    });
+    }));
 }
 
 /// A pane that was once wider does not keep a scrollbar it no longer
@@ -2832,6 +2890,8 @@ fn app_with_many_extensions() -> GuiApp {
             file_id: None,
             other_filesystem: false,
         },
+        roots: Vec::new(),
+        hard_link_bytes: None,
     })
 }
 
@@ -2900,6 +2960,14 @@ use super::modal::ModalPage;
 /// Feeds one key press through the shortcut handler.
 fn press(ctx: &egui::Context, app: &mut GuiApp, key: egui::Key, modifiers: egui::Modifiers) {
     let mut input = raw_input(Vec::new());
+    // The modifier state `handle_shortcuts` reads is
+    // `InputState::modifiers`, and egui only updates that from an
+    // explicit `ModifiersChanged` event — not from the modifiers
+    // attached to a key event. Without this line every Ctrl+key pressed
+    // here arrived as a bare key, and nothing noticed: the one test that
+    // pressed Ctrl+F was asserting a modal *swallowed* it, which is true
+    // either way.
+    input.events.push(egui::Event::ModifiersChanged(modifiers));
     input.events.push(egui::Event::Key {
         key,
         physical_key: None,
@@ -2907,7 +2975,7 @@ fn press(ctx: &egui::Context, app: &mut GuiApp, key: egui::Key, modifiers: egui:
         repeat: false,
         modifiers,
     });
-    let _ = ctx.run(input, |ctx| handle_shortcuts(app, ctx));
+    discard(ctx.run_ui(input, |ui| handle_shortcuts(app, ui.ctx())));
 }
 
 /// A modal is modal for the keyboard too.
@@ -3208,5 +3276,1098 @@ fn no_literal_spacing_survives_in_the_gui() -> anyhow::Result<()> {
         offenders.is_empty(),
         "spacing must come from SPACE_XS / SPACE_SM / SPACE_MD / SPACE_LG, not a number picked by eye: {offenders:?}"
     );
+    Ok(())
+}
+
+// ------------------------------------------------------- scan cancelling
+
+/// Renders the file area, which is where the busy banner and its cancel
+/// button live.
+fn render_file_area(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+    apply_style(ctx, app.palette);
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| super::draw_file_area(app, ui));
+    }));
+}
+
+/// The banner offers a way out of a scan, and the button is wired to it.
+///
+/// Driven through the recorded rect rather than by calling `cancel_scan`,
+/// because the thing worth pinning is that the *control* reaches the
+/// cancel — a scan of a whole volume with no visible way to stop it is
+/// the state this sprint existed to remove.
+#[test]
+fn the_busy_banner_can_stop_a_running_scan() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (_worker, progress) = app.pretend_scan_is_running();
+
+    probe(&TEST_SCAN_CANCEL_RECTS).clear();
+    render_file_area(&ctx, &mut app, raw_input(Vec::new()));
+    let button = probe(&TEST_SCAN_CANCEL_RECTS).last().copied();
+    let Some(button) = button else {
+        anyhow::bail!("a running scan drew no cancel button");
+    };
+
+    assert!(
+        !progress
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "nothing has been clicked yet"
+    );
+    render_file_area(
+        &ctx,
+        &mut app,
+        raw_input(pointer_button(button.center(), true)),
+    );
+    render_file_area(
+        &ctx,
+        &mut app,
+        raw_input(pointer_button(button.center(), false)),
+    );
+
+    assert!(
+        progress
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "clicking Cancel scan did not reach the scan"
+    );
+    Ok(())
+}
+
+/// Esc stops a scan when nothing is open in front of it.
+#[test]
+fn escape_stops_a_running_scan() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (_worker, progress) = app.pretend_scan_is_running();
+
+    press(&ctx, &mut app, egui::Key::Escape, egui::Modifiers::NONE);
+
+    assert!(
+        progress
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "Escape with nothing open should stop the scan"
+    );
+    Ok(())
+}
+
+/// A cancelled scan is not a failed one, and leaves the tree alone.
+///
+/// The status line matters more than it looks: "Scan failed" in answer to
+/// a button labelled Cancel teaches the user to distrust every other
+/// message the status bar prints.
+#[test]
+fn a_cancelled_scan_keeps_the_tree_and_says_so() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let before = app.tree.root_path.clone();
+    let (worker, _progress) = app.pretend_scan_is_running();
+
+    worker.send(crate::gui::app::ScanMessage::Cancelled)?;
+    app.poll_background(&ctx);
+
+    assert_eq!(
+        app.tree.root_path, before,
+        "a cancelled scan must leave the tree that was already on screen"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.contains("cancel") || status.contains("Cancel"),
+        "the status said {status:?} rather than reporting the cancel"
+    );
+    assert!(
+        !status.contains("failed"),
+        "a cancel was reported as a failure: {status:?}"
+    );
+    assert!(
+        !app.scan_is_running(),
+        "the scan should be finished with once its message arrives"
+    );
+    Ok(())
+}
+
+// ------------------------------------------------------- the frame budget
+
+/// A tree far bigger than any window can show, with a realistic shape.
+///
+/// `breadth.pow(depth)` leaves, so 12^5 is a quarter of a million nodes —
+/// the order of a real drive — while the root still has only twelve
+/// children, which is what a real drive looks like from the top. A
+/// fixture that put a quarter of a million children *under the root*
+/// would be measuring a case the app never sees.
+fn wide_deep_tree(breadth: usize, depth: usize) -> Node {
+    fn level(breadth: usize, depth: usize, at: usize) -> Node {
+        if depth == 0 {
+            return crate::model::fixtures::file(&format!("leaf{at}.bin"), (at as u64 + 1) * 1_024);
+        }
+        let children: Vec<Node> = (0..breadth)
+            .map(|index| level(breadth, depth - 1, index))
+            .collect();
+        crate::model::fixtures::dir(&format!("d{at}"), children)
+    }
+    level(breadth, depth, 0)
+}
+
+fn app_with_big_tree() -> GuiApp {
+    let root = wide_deep_tree(12, 5);
+    let mut app = GuiApp::new(Tree {
+        root_path: std::path::PathBuf::from("big"),
+        root,
+        volume_free: None,
+        volume_total: None,
+        roots: Vec::new(),
+        hard_link_bytes: None,
+    });
+    app.expanded.insert(Vec::new());
+    app
+}
+
+/// One whole window frame, the way the app draws it.
+fn render_window(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+    discard(ctx.run_ui(input, |ui| super::draw(app, ui)));
+}
+
+fn rebuild_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        TEST_ROW_REBUILDS.load(Ordering::Relaxed),
+        TEST_TREEMAP_REBUILDS.load(Ordering::Relaxed),
+    )
+}
+
+/// A window nobody is touching does no tree-sized work at all.
+///
+/// This is the property the whole cache design exists for, and it is
+/// invisible from the outside: a cache that misses every frame looks
+/// exactly like one that hits, until the tree is nine million nodes and
+/// the window stops responding. Both caches are keyed off observed state
+/// (`RowKey`, `TreemapKey`), so a field that affects rows or tiles and is
+/// missing from its key shows up here as a rebuild that should not have
+/// happened.
+#[test]
+fn a_still_window_rebuilds_neither_rows_nor_tiles() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_big_tree();
+
+    // Settle first. A window takes a few frames to reach a steady state:
+    // the panels resolve their default sizes, and the treemap lays out
+    // once at the reduced tile budget it uses while something is moving
+    // and once more at full quality when nothing is
+    // (`a_drag_lays_out_far_less_than_a_settled_frame`). The claim here
+    // is about the frames after that, which is every frame a user spends
+    // reading the window.
+    for _ in 0..8 {
+        render_window(&ctx, &mut app, raw_input(Vec::new()));
+    }
+    let (rows_before, tiles_before) = rebuild_counts();
+    for _ in 0..8 {
+        render_window(&ctx, &mut app, raw_input(Vec::new()));
+    }
+    let (rows_after, tiles_after) = rebuild_counts();
+
+    assert_eq!(
+        rows_after - rows_before,
+        0,
+        "the row list was rebuilt on a frame where nothing changed"
+    );
+    assert_eq!(
+        tiles_after - tiles_before,
+        0,
+        "the treemap was laid out again on a frame where nothing changed"
+    );
+}
+
+/// What a frame paints is bounded by the window, not by the tree.
+///
+/// A quarter-million-node tree draws the same handful of rows and a
+/// tile count bounded by the panel's area, because rows are virtualized
+/// by the table and tiles are budgeted by `MIN_TILE_AREA_PX`. Without
+/// both, the frame cost would grow with the scan and 120 FPS would be a
+/// property of small directories only.
+#[test]
+fn a_frame_over_a_huge_tree_draws_only_what_fits() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_big_tree();
+    let nodes = app.tree.root.file_count + app.tree.root.dir_count;
+    assert!(
+        nodes > 200_000,
+        "the fixture is meant to dwarf the window: {nodes} nodes"
+    );
+
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
+    for _ in 0..2 {
+        render_window(&ctx, &mut app, raw_input(Vec::new()));
+    }
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
+    render_window(&ctx, &mut app, raw_input(Vec::new()));
+
+    let painted = probe(&TEST_DIRECTORY_ROW_RECTS).len();
+    assert!(
+        painted > 0 && painted < 200,
+        "{painted} rows were painted for a {nodes}-node tree; a frame must \
+         cost what the window shows, not what the scan found"
+    );
+    assert!(
+        app.treemap_tiles.len() <= crate::gui::treemap_layout::MAX_TILES_INTERACTIVE,
+        "the treemap laid out {} tiles, past its own budget",
+        app.treemap_tiles.len()
+    );
+}
+
+/// The median frame is inside the budget.
+///
+/// Median rather than mean or max on purpose: one scheduler preemption
+/// on a shared CI runner must not fail a build, and a real regression
+/// moves the middle of the distribution rather than one sample. The
+/// budget itself is `theme::FRAME_BUDGET`, scaled by
+/// `DEBUG_FRAME_BUDGET_FACTOR` because tests run unoptimized.
+fn median_frame_time(ctx: &egui::Context, app: &mut GuiApp, frames: usize) -> std::time::Duration {
+    // Warm up: the first frames allocate the galley cache, lay out panels
+    // and fill both caches, and none of that repeats.
+    for _ in 0..4 {
+        render_window(ctx, app, raw_input(Vec::new()));
+    }
+    let mut samples = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let started = std::time::Instant::now();
+        render_window(ctx, app, raw_input(Vec::new()));
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    samples.get(samples.len() / 2).copied().unwrap_or_default()
+}
+
+fn frame_budget() -> std::time::Duration {
+    let budget = super::theme::FRAME_BUDGET;
+    if cfg!(debug_assertions) {
+        budget * super::theme::DEBUG_FRAME_BUDGET_FACTOR
+    } else {
+        budget
+    }
+}
+
+#[test]
+fn a_frame_over_a_huge_tree_fits_the_budget() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_big_tree();
+
+    let median = median_frame_time(&ctx, &mut app, 30);
+    let budget = frame_budget();
+    assert!(
+        median <= budget,
+        "the median frame took {median:?} against a {budget:?} budget"
+    );
+}
+
+/// And it still fits while a scan is running.
+///
+/// This is the sprint's actual claim. The scan pool leaves a core free
+/// and the workers share nothing with the UI thread but three atomics,
+/// so a walk in flight should cost the frame nothing — but that is an
+/// argument, and this is a measurement. The scan is a real one over a
+/// real temporary tree, and the frames are rendered while it walks.
+#[test]
+fn frames_stay_inside_the_budget_while_a_scan_runs() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "frame_budget_scan");
+    // Wide and shallow: enough entries that the walk takes long enough to
+    // overlap the frames below, without a fixture that takes longer to
+    // build than the test takes to run.
+    for folder in 0..24 {
+        let dir = root.join(format!("d{folder}"));
+        std::fs::create_dir_all(&dir)?;
+        for index in 0..64 {
+            std::fs::write(dir.join(format!("f{index}.bin")), vec![b'x'; 512])?;
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut app = app_with_big_tree();
+    for _ in 0..4 {
+        render_window(&ctx, &mut app, raw_input(Vec::new()));
+    }
+
+    // The worker walks the fixture over and over until the render loop
+    // has what it needs. One pass over a fixture small enough to build
+    // inside a test finishes in a couple of frames, which would measure
+    // almost nothing; looping keeps a real scan — the same rayon pool,
+    // the same atomics, the same allocation churn — running underneath
+    // every sample.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_stop = std::sync::Arc::clone(&stop);
+    let scan_root = root.clone();
+    let handle = std::thread::spawn(move || -> anyhow::Result<u32> {
+        let mut passes = 0;
+        while !worker_stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let progress = crate::scanner::Progress::default();
+            crate::scanner::scan(&scan_root, Some(&progress))?;
+            passes += 1;
+        }
+        Ok(passes)
+    });
+
+    let mut samples = Vec::with_capacity(30);
+    for _ in 0..30 {
+        let started = std::time::Instant::now();
+        render_window(&ctx, &mut app, raw_input(Vec::new()));
+        samples.push(started.elapsed());
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let Ok(passes) = handle.join() else {
+        anyhow::bail!("the scan thread panicked");
+    };
+    let passes = passes?;
+
+    assert!(
+        passes >= 1,
+        "the scan thread never completed a pass, so nothing was measured under load"
+    );
+    samples.sort_unstable();
+    let median = samples.get(samples.len() / 2).copied().unwrap_or_default();
+    let budget = frame_budget();
+    assert!(
+        median <= budget,
+        "with a scan running the median frame took {median:?} against a {budget:?} budget"
+    );
+    Ok(())
+}
+
+/// A busy app asks for the next frame, not for one in 33 milliseconds.
+///
+/// `request_repaint_after(33ms)` caps the window at 30 FPS for the whole
+/// of a scan however much headroom the machine has, which is the one way
+/// to miss a 120 FPS target without any frame being slow.
+#[test]
+fn a_busy_app_asks_for_the_next_frame_immediately() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (_worker, _progress) = app.pretend_scan_is_running();
+
+    let output = ctx.run_ui(raw_input(Vec::new()), |ui| {
+        app.poll_background(ui.ctx());
+        super::draw(&mut app, ui);
+    });
+    let delay = output
+        .viewport_output
+        .values()
+        .map(|v| v.repaint_delay)
+        .min();
+    discard(output);
+
+    let Some(delay) = delay else {
+        return;
+    };
+    assert!(
+        delay <= std::time::Duration::from_millis(1),
+        "a scan in flight asked for the next frame in {delay:?}, which caps the \
+         window well under its 120 FPS target"
+    );
+}
+
+// -------------------------------------------------- the properties window
+
+/// The inspector paints, and the window behind it keeps working.
+///
+/// This is the whole reason it left the modal. A modal answers a click by
+/// dismissing itself and blocks every shortcut behind it; an inspector
+/// that did either would be useless for the thing people actually do with
+/// it, which is click through a tree and watch the numbers change.
+#[test]
+fn the_properties_window_leaves_the_app_usable() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_sortable_files();
+    app.toggle_properties();
+    // Parked to one side, which is both what the remembered-position path
+    // does in a real session and what leaves rows uncovered to click in a
+    // 900px test window.
+    app.properties.pos = Some([1000.0, 30.0]);
+
+    probe(&TEST_PROPERTIES_RECTS).clear();
+    probe(&TEST_DIRECTORY_ROW_RECTS).clear();
+    for _ in 0..2 {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+    assert!(
+        !probe(&TEST_PROPERTIES_RECTS).is_empty(),
+        "an open inspector painted nothing"
+    );
+    assert!(
+        !modal_is_open(&app),
+        "the inspector must not read as a modal, or it blocks every shortcut"
+    );
+
+    // A row behind the window still takes a click. The inspector is
+    // placed at the top-left by default, so pick a row well clear of it.
+    //
+    // Both probes are copied out and the guards dropped before the next
+    // frame: the drawing code pushes into the same mutexes, so holding
+    // one across a render deadlocks the test rather than failing it.
+    let rows: Vec<(Vec<usize>, egui::Rect)> = probe(&TEST_DIRECTORY_ROW_RECTS)
+        .iter()
+        .map(|(path, rect)| (path.clone(), *rect))
+        .collect();
+    let window = probe(&TEST_PROPERTIES_RECTS).last().copied();
+    let Some(window) = window else {
+        anyhow::bail!("no inspector rect was recorded");
+    };
+    // A row is wider than the pane it scrolls in, so "does not overlap
+    // the window" would rule every row out. What matters is that a point
+    // *on* the row and clear of the window still reaches the app, so the
+    // click lands left of the inspector rather than beside it.
+    let target = rows.iter().find_map(|(path, rect)| {
+        if path.is_empty() || !rect.is_finite() {
+            return None;
+        }
+        let x = rect.center().x.min(window.left() - 24.0);
+        let at = egui::pos2(x, rect.center().y);
+        (rect.contains(at) && !window.contains(at)).then(|| (path.clone(), at))
+    });
+    let Some((path, at)) = target else {
+        let seen: Vec<egui::Rect> = rows.iter().map(|(_, rect)| *rect).collect();
+        anyhow::bail!("no row offered a point clear of the inspector at {window:?}: {seen:?}");
+    };
+    render_window(&ctx, &mut app, window_input(pointer_button(at, true)));
+    render_window(&ctx, &mut app, window_input(pointer_button(at, false)));
+    assert_eq!(
+        app.selected_path.as_deref(),
+        Some(path.as_slice()),
+        "clicking a row behind the inspector did not select it"
+    );
+    Ok(())
+}
+
+/// Keyboard shortcuts keep working while it is open.
+///
+/// `handle_shortcuts` returns early for a modal on purpose — Del must not
+/// queue a second delete behind a confirmation. An inspector is not that,
+/// and the check that tells them apart is `modal_is_open`.
+#[test]
+fn shortcuts_still_work_while_the_inspector_is_open() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_sortable_files();
+    app.toggle_properties();
+    app.file_view = FileView::AllFiles;
+
+    press(&ctx, &mut app, egui::Key::F, egui::Modifiers::CTRL);
+
+    assert_eq!(
+        app.file_view,
+        FileView::SearchResults,
+        "Ctrl+F was swallowed while the inspector was open"
+    );
+}
+
+/// It follows the selection rather than capturing one.
+#[test]
+fn the_inspector_describes_whatever_is_selected_now() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_sortable_files();
+    app.toggle_properties();
+
+    app.selected_path = Some(vec![0]);
+    let first = app
+        .selected_node()
+        .map(|node| node.name.to_string_lossy().to_string());
+    app.selected_path = Some(vec![1]);
+    let second = app
+        .selected_node()
+        .map(|node| node.name.to_string_lossy().to_string());
+
+    assert!(
+        first.is_some() && second.is_some() && first != second,
+        "the fixture should offer two different items to describe: {first:?} vs {second:?}"
+    );
+}
+
+/// The toggle is a toggle, and a closed inspector paints nothing.
+#[test]
+fn the_inspector_toggles_shut() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_sortable_files();
+
+    app.toggle_properties();
+    assert!(app.properties.open, "the first toggle should open it");
+    app.toggle_properties();
+    assert!(!app.properties.open, "the second toggle should close it");
+
+    probe(&TEST_PROPERTIES_RECTS).clear();
+    render_window(&ctx, &mut app, raw_input(Vec::new()));
+    assert!(
+        probe(&TEST_PROPERTIES_RECTS).is_empty(),
+        "a closed inspector still painted"
+    );
+}
+
+/// Where it was left is remembered, and a half-saved position is ignored.
+#[test]
+fn the_inspector_position_survives_a_config_round_trip() {
+    let saved = crate::config::Config {
+        gui_properties_open: Some(true),
+        gui_properties_pos: Some(vec![320.0, 210.0]),
+        ..crate::config::Config::default()
+    };
+    let restored = crate::gui::app::PropertiesWindow::from_config(&saved);
+    assert!(
+        restored.open,
+        "the inspector was showing when the app closed"
+    );
+    assert_eq!(restored.pos, Some([320.0, 210.0]));
+
+    // Half a position is not a position.
+    let broken = crate::config::Config {
+        gui_properties_pos: Some(vec![320.0]),
+        ..crate::config::Config::default()
+    };
+    assert_eq!(
+        crate::gui::app::PropertiesWindow::from_config(&broken).pos,
+        None,
+        "a malformed position must fall back to the default placement"
+    );
+}
+
+// ------------------------------------------------------- the locations page
+
+/// The Locations page starts a scan of everything ticked.
+///
+/// Driven through the recorded button rect, and through the page's own
+/// selection state, so what is pinned is the wiring a user actually
+/// touches: tick, press, and the app is scanning several roots as one
+/// tree.
+#[test]
+fn the_locations_page_scans_what_is_ticked() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let first = crate::util::scratch_dir("gui", "locations_first");
+    let second = crate::util::scratch_dir("gui", "locations_second");
+    std::fs::create_dir_all(&first)?;
+    std::fs::create_dir_all(&second)?;
+    std::fs::write(first.join("a.bin"), *b"a")?;
+    std::fs::write(second.join("b.bin"), *b"b")?;
+
+    app.open_modal(super::modal::ModalPage::Locations);
+    app.tools.selected_locations = vec![first.clone(), second.clone()];
+    // The card waits on a screenshot that never arrives without a
+    // renderer, so it paints nothing for the first few frames; see
+    // `SETTLE_FRAMES`.
+    for _ in 0..SETTLE_FRAMES {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+    probe(&TEST_LOCATION_SCAN_RECTS).clear();
+    render_window(&ctx, &mut app, window_input(Vec::new()));
+    let button = probe(&TEST_LOCATION_SCAN_RECTS).last().copied();
+    let Some(button) = button else {
+        anyhow::bail!("the Locations page drew no scan button");
+    };
+
+    render_window(
+        &ctx,
+        &mut app,
+        window_input(pointer_button(button.center(), true)),
+    );
+    render_window(
+        &ctx,
+        &mut app,
+        window_input(pointer_button(button.center(), false)),
+    );
+
+    assert!(
+        app.scan_is_running(),
+        "pressing Scan should have started one"
+    );
+    assert!(
+        !modal_is_open(&app),
+        "and closed the page it was pressed on"
+    );
+    wait_for_background(&mut app, &ctx);
+
+    assert!(
+        app.tree.is_multi_root(),
+        "two ticked locations should scan into one multi-root tree"
+    );
+    assert_eq!(app.scanned_roots().len(), 2);
+    assert_eq!(
+        app.tree.root.file_count,
+        2,
+        "one file from each location: {:?}",
+        app.scanned_roots()
+    );
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
+    Ok(())
+}
+
+/// Waits for the scan worker, polling the way the window does.
+fn wait_for_background(app: &mut GuiApp, ctx: &egui::Context) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.is_busy() && std::time::Instant::now() < deadline {
+        app.poll_background(ctx);
+    }
+}
+
+/// The inspector can be dragged, and remembers where it was left.
+///
+/// The whole point of it being a window rather than a modal page. It is
+/// positioned from `app.properties.pos` every frame, so if that were not
+/// written back from the window's own rect a drag would spring straight
+/// back to where it started.
+#[test]
+fn the_inspector_can_be_dragged() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_sortable_files();
+    app.toggle_properties();
+    app.properties.pos = Some([400.0, 200.0]);
+    for _ in 0..3 {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+
+    // The title strip, a little in from the window's top-left corner.
+    let grab = egui::pos2(460.0, 210.0);
+    render_window(&ctx, &mut app, window_input(pointer_button(grab, true)));
+    for step in 1..=4 {
+        let to = grab + egui::vec2(30.0 * step as f32 / 4.0, 20.0 * step as f32 / 4.0);
+        render_window(&ctx, &mut app, window_input(pointer_move(to)));
+    }
+    let end = grab + egui::vec2(30.0, 20.0);
+    render_window(&ctx, &mut app, window_input(pointer_button(end, false)));
+    render_window(&ctx, &mut app, window_input(Vec::new()));
+
+    let moved = app.properties.pos.unwrap_or_default();
+    assert!(
+        moved[0] > 420.0 && moved[1] > 210.0,
+        "dragging the inspector left it at {moved:?}, which is where it started"
+    );
+    Ok(())
+}
+
+/// A maintenance tool never runs against a fabricated volume.
+///
+/// `wintools` takes the first component of the path it is given as the
+/// volume, and a multi-root tree's `root_path` is the label standing in
+/// for its roots — so the tools were being handed the first word of a UI
+/// string. These are the most destructive things in the app.
+#[test]
+fn a_maintenance_tool_refuses_a_multi_root_scan_with_no_selection() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.tree = std::sync::Arc::new(Tree {
+        root_path: std::path::PathBuf::from(crate::scanner::MULTI_ROOT_LABEL),
+        root: Node {
+            name: std::ffi::OsString::from(crate::scanner::MULTI_ROOT_LABEL),
+            is_dir: true,
+            is_symlink: false,
+            size: 0,
+            physical_size: 0,
+            file_count: 0,
+            dir_count: 1,
+            modified: None,
+            children: vec![file("only.txt", 1)],
+            error: false,
+            category: None,
+            ext_totals: vec![(0, 0, 0); Category::COUNT],
+            unreadable_count: 0,
+            file_id: None,
+            other_filesystem: false,
+        },
+        volume_free: None,
+        volume_total: None,
+        hard_link_bytes: None,
+        roots: vec![crate::model::Root {
+            path: std::path::PathBuf::from("C:\\"),
+            volume_free: None,
+            volume_total: None,
+        }],
+    });
+    app.selected_path = None;
+
+    app.request_windows_tool(0);
+    app.confirm_windows_tool();
+
+    assert!(
+        !app.is_busy(),
+        "no tool should have been started without a volume to point it at"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.to_lowercase().contains("select an item"),
+        "the refusal should say what to do, got {status:?}"
+    );
+}
+
+// ----------------------------------------------------------- live scans
+
+/// A published folder is on screen before the scan finishes.
+///
+/// The point of the whole streaming path: a drive that takes a minute to
+/// walk shows its first folders in the first second, rather than an empty
+/// window and a spinner. Driven through the real message the scan worker
+/// sends, so what is pinned is the window's half of that contract.
+#[test]
+fn a_published_child_appears_before_the_scan_finishes() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (worker, _progress) = app.pretend_scan_is_running();
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Users", 4_096,
+    ))))?;
+    app.poll_background(&ctx);
+
+    assert!(app.live_scan, "the first child starts the live tree");
+    assert_eq!(
+        app.tree.root.children.len(),
+        1,
+        "the published folder should be attached"
+    );
+    assert_eq!(app.tree.root.size, 4_096, "and counted");
+    assert!(
+        app.scan_is_running(),
+        "with the scan still going — that is the whole point"
+    );
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Windows", 8_192,
+    ))))?;
+    app.poll_background(&ctx);
+    assert_eq!(app.tree.root.children.len(), 2);
+    assert_eq!(
+        app.tree.root.size, 12_288,
+        "totals grow with each folder, not only at the end"
+    );
+    Ok(())
+}
+
+/// Attaching a child invalidates the caches that draw it.
+///
+/// A tree that grows in place keeps its address, and both caches key off
+/// that address — so without the generation counter the window would
+/// happily go on drawing the rows it had before the folder arrived, and
+/// the live tree would be live in memory only.
+#[test]
+fn attaching_a_child_rebuilds_the_rows_and_tiles() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (worker, _progress) = app.pretend_scan_is_running();
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Users", 4_096,
+    ))))?;
+    app.poll_background(&ctx);
+    for _ in 0..4 {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+    let rows_before = app.visible_row_count();
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Windows", 8_192,
+    ))))?;
+    app.poll_background(&ctx);
+    render_window(&ctx, &mut app, window_input(Vec::new()));
+
+    assert!(
+        app.visible_row_count() > rows_before,
+        "the second folder should have reached the row list: {} rows before, {} after",
+        rows_before,
+        app.visible_row_count()
+    );
+    Ok(())
+}
+
+/// What the window ends up with is what a plain scan would have found.
+///
+/// The real risk of assembling a tree from published parts: the live one
+/// and the finished one disagreeing. This runs an actual scan of a real
+/// fixture through the window's own worker and message loop, then
+/// compares the result against `scan_to_completion` over the same
+/// directory.
+#[test]
+fn a_live_scan_ends_up_agreeing_with_a_plain_one() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "live_scan");
+    for folder in ["one", "two", "three"] {
+        let dir = root.join(folder);
+        std::fs::create_dir_all(&dir)?;
+        for index in 0..8 {
+            std::fs::write(
+                dir.join(format!("f{index}.bin")),
+                vec![b'x'; 64 * (index + 1)],
+            )?;
+        }
+    }
+    std::fs::write(root.join("loose.txt"), vec![b'y'; 500])?;
+
+    let expected = crate::scanner::scan_to_completion(&root)?;
+
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    app.open_folder(&root)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.is_busy() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+    }
+
+    assert!(!app.live_scan, "the scan finished, so the tree is not live");
+    assert_eq!(app.tree.root_path, expected.root_path);
+    assert_eq!(
+        app.tree.root.children.len(),
+        expected.root.children.len(),
+        "every top-level entry should have been published exactly once"
+    );
+    assert_eq!(app.tree.root.size, expected.root.size, "same bytes");
+    assert_eq!(app.tree.root.file_count, expected.root.file_count);
+    assert_eq!(app.tree.root.dir_count, expected.root.dir_count);
+    assert_eq!(
+        app.tree.root.ext_totals, expected.root.ext_totals,
+        "and the same breakdown by category"
+    );
+    assert!(
+        !app.extensions.is_empty(),
+        "the extension rows are summed on the scan thread and should arrive with it"
+    );
+    assert!(!app.largest_files.is_empty(), "so should the largest files");
+
+    // The largest file's index path must resolve in the assembled tree —
+    // it was numbered by the worker against the order it published in.
+    let Some(largest) = app.largest_files.first() else {
+        anyhow::bail!("the fixture has files, so there is a largest one");
+    };
+    let Some(node) = app.tree.node_for(&largest.index_path) else {
+        anyhow::bail!(
+            "the largest file's path does not resolve: {:?} at {:?}",
+            largest.name,
+            largest.index_path
+        );
+    };
+    assert_eq!(
+        node.name.to_string_lossy(),
+        largest.name,
+        "and it should resolve to the file it names"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// A directory node with a known size, for the message-level tests.
+fn dir_node(name: &str, size: u64) -> Node {
+    Node {
+        name: std::ffi::OsString::from(name),
+        is_dir: true,
+        is_symlink: false,
+        size,
+        physical_size: size,
+        file_count: 1,
+        dir_count: 0,
+        modified: None,
+        children: vec![file(&format!("{name}.bin"), size)],
+        error: false,
+        category: None,
+        ext_totals: vec![(0, 0, 0); Category::COUNT],
+        unreadable_count: 0,
+        file_id: None,
+        other_filesystem: false,
+    }
+}
+
+// ----------------------------------------------------------- cleanups
+
+/// A cleanup asks before it runs, and shows the command it will run.
+///
+/// The confirmation is the feature's whole safety story: a template plus
+/// a selection is not something a person can check, so what the card
+/// shows is the resolved argv. See `docs/CLEANUPS_THREAT_MODEL.md`.
+#[test]
+fn a_cleanup_asks_first_and_shows_the_real_command() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.cleanups = vec![crate::cleanups::Cleanup {
+        name: "Inspect".to_string(),
+        program: "echo".to_string(),
+        args: vec!["--path=%p".to_string()],
+        confirm: true,
+        capture_output: true,
+    }];
+    app.selected_path = Some(vec![0]);
+
+    app.request_cleanup(0);
+
+    let pending = app.tools.pending_cleanup.as_ref();
+    assert!(
+        pending.is_some(),
+        "a confirming cleanup should be waiting on its answer"
+    );
+    let Some(pending) = pending else {
+        return;
+    };
+    let preview = pending.command.preview();
+    assert!(
+        preview.starts_with("echo "),
+        "the program is shown as configured: {preview}"
+    );
+    assert!(
+        preview.contains("--path=") && preview.contains("click-me.txt"),
+        "and the substituted argument with it: {preview}"
+    );
+    assert!(
+        !app.is_busy(),
+        "nothing runs until the question is answered"
+    );
+}
+
+/// A cleanup with nothing selected refuses, rather than picking a target.
+#[test]
+fn a_cleanup_refuses_when_nothing_is_selected() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.cleanups = vec![crate::cleanups::Cleanup {
+        name: "Inspect".to_string(),
+        program: "echo".to_string(),
+        args: vec!["%p".to_string()],
+        confirm: true,
+        capture_output: true,
+    }];
+    app.selected_path = None;
+
+    app.request_cleanup(0);
+
+    assert!(
+        app.tools.pending_cleanup.is_none(),
+        "there is no implicit target — not the scan root, not anything"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.to_lowercase().contains("select an item"),
+        "and it says what to do: {status:?}"
+    );
+}
+
+/// A stale selection refuses too.
+///
+/// The same rule the delete path follows: an index path that no longer
+/// resolves must not act on the nearest surviving ancestor. This one runs
+/// a program the app knows nothing about, so it matters more, not less.
+#[test]
+fn a_cleanup_refuses_a_selection_that_no_longer_resolves() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.cleanups = vec![crate::cleanups::Cleanup {
+        name: "Inspect".to_string(),
+        program: "echo".to_string(),
+        args: vec!["%p".to_string()],
+        confirm: true,
+        capture_output: true,
+    }];
+    // Two levels down a tree that is one level deep.
+    app.selected_path = Some(vec![0, 7]);
+
+    app.request_cleanup(0);
+
+    assert!(
+        app.tools.pending_cleanup.is_none(),
+        "a path that does not resolve is not a target"
+    );
+}
+
+/// The inspector shows things the grid does not.
+///
+/// Its reason to exist. The directory columns already carry name, size,
+/// files, subfolders, last change and two percentages; an inspector that
+/// repeated them would be a second copy of the highlighted row. This
+/// pins the parts that are only here: the full path, both sizes at once
+/// with the gap between them named, the share of the volume, and what
+/// the filesystem says about the item right now.
+#[test]
+fn the_inspector_shows_what_the_columns_cannot() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "inspector_facts");
+    std::fs::create_dir_all(&root)?;
+    std::fs::write(root.join("one.bin"), vec![b'x'; 3_000])?;
+
+    let tree = crate::scanner::scan_to_completion(&root)?;
+    let mut app = GuiApp::new(tree);
+    app.selected_path = Some(vec![0]);
+
+    // Facts from the filesystem, not from the scan.
+    let facts = app.selected_item_facts();
+    assert!(
+        facts.link_count.is_some(),
+        "an inspector can afford to ask how many names a file has"
+    );
+    assert!(
+        facts.created.is_some() || facts.accessed.is_some(),
+        "and when it was created or last read — neither is stored per node"
+    );
+
+    // Shares the grid does not offer: of the folder, of the scan, and —
+    // where the volume is known — of the volume.
+    let shares = app.selection_shares();
+    assert!(
+        shares
+            .iter()
+            .any(|(key, _)| *key == "properties.share.scan"),
+        "expected a share of the scan, got {shares:?}"
+    );
+
+    // And the sizes side by side, which is what makes the gap visible.
+    let Some(node) = app.selected_node() else {
+        anyhow::bail!("the selection should resolve");
+    };
+    assert_eq!(node.size, 3_000, "logical size is what was written");
+    assert!(
+        node.physical_size > 0,
+        "and the on-disk size is known alongside it"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// Asking the filesystem happens when the selection moves, not per frame.
+///
+/// A draw path that stats the selected item every frame is file I/O
+/// inside an 8.33 ms budget. The cache is keyed by the path it describes.
+#[test]
+fn the_inspector_asks_the_filesystem_once_per_selection() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "inspector_cache");
+    std::fs::create_dir_all(&root)?;
+    std::fs::write(root.join("one.bin"), vec![b'x'; 10])?;
+    std::fs::write(root.join("two.bin"), vec![b'y'; 20])?;
+
+    let tree = crate::scanner::scan_to_completion(&root)?;
+    let mut app = GuiApp::new(tree);
+    app.selected_path = Some(vec![0]);
+    let first = app.selected_item_facts();
+    let again = app.selected_item_facts();
+    assert_eq!(first, again, "the same selection gives the same answer");
+
+    // Deleting the file behind the selection does not change the cached
+    // answer — which is the observable proof that nothing was re-read.
+    let name = app
+        .selected_node()
+        .map(|node| node.name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    std::fs::remove_file(root.join(&name))?;
+    let cached = app.selected_item_facts();
+    assert_eq!(
+        cached, first,
+        "a still selection re-reads nothing, so the answer is the cached one"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }

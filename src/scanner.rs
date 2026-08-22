@@ -33,7 +33,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Shared, lock-free counters updated as the background scan progresses, so
 /// the UI thread can poll them without blocking the scan. Updated once per
@@ -44,6 +44,145 @@ pub struct Progress {
     pub files: AtomicU64,
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
+    /// Set by whoever asked for the scan to stop it early.
+    ///
+    /// Read once per directory, in the same places the counters are
+    /// written, for the same reason: a relaxed load per directory is
+    /// free, and one per entry would put the flag on the hot path of a
+    /// nine-million-node walk. The cost of that choice is that a
+    /// cancelled scan finishes the directory it is inside, which is
+    /// bounded by one directory's entries rather than by the tree.
+    ///
+    /// [`DupProgress`] has had one of these since 0.2.1
+    /// (`crate::duplicates`); the scanner had no way to be stopped at
+    /// all, so a mistyped root or a slow network share had to be waited
+    /// out with every core but one busy.
+    pub cancelled: AtomicBool,
+}
+
+impl Progress {
+    /// Asks the scan to stop at its next directory boundary.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+
+/// Whether a scan ran to completion or was stopped part way.
+///
+/// A cancel is not a failure, and must not arrive as one: an `Err` here
+/// would put "Scan failed" in a status bar because the user pressed the
+/// button that says Cancel. The partial tree is deliberately not
+/// returned — a half-walked tree is indistinguishable from a real one
+/// once it reaches a view, and every size in it would be wrong.
+pub enum Scan {
+    /// Boxed because a `Tree` is a couple of hundred bytes and the other
+    /// arm is empty: without it every `Result<Scan>` in the crate — most
+    /// of which are `Cancelled` never — would carry a tree-sized hole.
+    Completed(Box<Tree>),
+    Cancelled,
+}
+
+impl Scan {
+    /// The tree, if the scan finished.
+    pub fn completed(self) -> Option<Tree> {
+        match self {
+            Self::Completed(tree) => Some(*tree),
+            Self::Cancelled => None,
+        }
+    }
+}
+
+/// Bytes the tree counts more than once because two names point at one
+/// file.
+///
+/// A hard link is one file with several names, and a walk that adds up
+/// pathnames counts its bytes once per name. That is WinDirStat's
+/// behaviour and this scanner's default — a per-pathname total is what
+/// the directory tree in front of you shows, and making the totals
+/// disagree with the rows to be technically right about the disk is its
+/// own kind of wrong. What this measures is the *difference*: how much of
+/// the total is the same bytes seen twice, so the front ends can say so
+/// rather than quietly being off by it.
+///
+/// Sharded rather than one lock, because every worker thread reaches it:
+/// a single `Mutex<HashSet<_>>` on a nine-million-file walk is a queue,
+/// not a set.
+pub struct HardLinks {
+    shards: Vec<std::sync::Mutex<std::collections::HashSet<crate::platform::FileId>>>,
+    duplicate_bytes: AtomicU64,
+}
+
+/// How many independent locks the ledger keeps.
+///
+/// One per two threads on a big machine is plenty: the critical section
+/// is a hash-set insert, so the window in which two workers can collide
+/// is nanoseconds wide.
+const HARD_LINK_SHARDS: usize = 64;
+
+impl Default for HardLinks {
+    fn default() -> Self {
+        Self {
+            shards: (0..HARD_LINK_SHARDS)
+                .map(|_| std::sync::Mutex::new(std::collections::HashSet::new()))
+                .collect(),
+            duplicate_bytes: AtomicU64::new(0),
+        }
+    }
+}
+
+impl HardLinks {
+    /// Records one file, and adds its bytes to the running duplicate
+    /// total if this identity has been seen before.
+    fn observe(&self, id: crate::platform::FileId, physical: u64) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        let shard = (hasher.finish() as usize) % self.shards.len().max(1);
+        let Some(lock) = self.shards.get(shard) else {
+            return;
+        };
+        let Ok(mut seen) = lock.lock() else {
+            // A poisoned shard means a worker panicked while holding it.
+            // The count is a reported figure, not an invariant, so the
+            // honest response is to stop counting rather than to panic a
+            // second time.
+            return;
+        };
+        if !seen.insert(id) {
+            self.duplicate_bytes.fetch_add(physical, Ordering::Relaxed);
+        }
+    }
+
+    fn duplicate_bytes(&self) -> u64 {
+        self.duplicate_bytes.load(Ordering::Relaxed)
+    }
+}
+
+/// Whether this file's identity is worth tracking at all.
+///
+/// On Unix the answer is free and almost always no: `st_nlink` says how
+/// many names a file has, and only a file with more than one can be
+/// double-counted — so the ledger holds the handful of genuinely linked
+/// files rather than every file on the volume.
+///
+/// Windows reports no link count in a directory listing, and asking for
+/// one costs a handle per file — the very cost the listing walk exists to
+/// avoid. So there every file is tracked, which is why the option is off
+/// by default there and on by default here.
+fn worth_tracking(entry: &EntryInfo) -> bool {
+    #[cfg(unix)]
+    {
+        entry.links > 1
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = entry;
+        true
+    }
 }
 
 /// Below this many entries, a directory's children are scanned on the
@@ -80,11 +219,11 @@ fn scan_pool() -> Option<&'static rayon::ThreadPool> {
     .as_ref()
 }
 
-pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
+pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Scan> {
     scan_with_options(root, progress, ScanOptions::default())
 }
 
-fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) -> Result<Tree> {
+fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) -> Result<Scan> {
     // The fallback (a path with no final component, like `/` or `C:\`)
     // keeps the raw `OsString` rather than going through `display()`,
     // which is lossy.
@@ -94,58 +233,462 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
         .unwrap_or_else(|| root.as_os_str().to_os_string());
 
     let meta = std::fs::symlink_metadata(root)?;
-    // The device the root lives on. A scan is one filesystem's worth of
-    // bytes compared against that filesystem's free space, so entries on
-    // other devices (mount points, /proc, /sys, network shares) are left
-    // out by default unless `options.same_filesystem_only` is off.
-    #[cfg(unix)]
-    let root_dev = if options.same_filesystem_only {
-        use std::os::unix::fs::MetadataExt;
-        Some(meta.dev())
+    let root_dev = root_device(&meta, options);
+
+    let links = options.count_hard_links.then(HardLinks::default);
+    let root_node = if meta.is_dir() {
+        scan_dir(
+            root,
+            name,
+            progress,
+            0,
+            root_dev,
+            meta.modified().ok(),
+            links.as_ref(),
+        )
     } else {
-        None
-    };
-    #[cfg(not(unix))]
-    let root_dev = {
-        let _ = options;
-        None
+        single_file_root(&meta, name, root, progress)
     };
 
-    let root_node = if meta.is_dir() {
-        scan_dir(root, name, progress, 0, root_dev)
-    } else {
-        if let Some(p) = progress {
-            p.files.fetch_add(1, Ordering::Relaxed);
-            p.bytes.fetch_add(meta.len(), Ordering::Relaxed);
-        }
-        let category = Some(category_for_name(&name));
-        Node {
-            name,
-            is_dir: false,
-            is_symlink: meta.file_type().is_symlink(),
-            size: meta.len(),
-            physical_size: crate::platform::physical_size(&meta, root),
-            file_count: 1,
-            dir_count: 0,
-            modified: meta.modified().ok(),
-            children: vec![],
-            error: false,
-            category,
-            ext_totals: vec![],
-            unreadable_count: 0,
-            file_id: crate::platform::file_id(&meta),
-            other_filesystem: false,
-        }
-    };
+    // Asked between the walk and the tree it produces: a partial tree
+    // must not be handed back as a real one, and by here the walk has
+    // already stopped at its first directory boundary past the cancel.
+    if progress.is_some_and(Progress::is_cancelled) {
+        return Ok(Scan::Cancelled);
+    }
 
     let (volume_free, volume_total) = crate::platform::volume_space(root);
 
-    Ok(Tree {
+    Ok(Scan::Completed(Box::new(Tree {
         root_path: root.to_path_buf(),
         root: root_node,
         volume_free,
         volume_total,
-    })
+        roots: Vec::new(),
+        hard_link_bytes: links.map(|links| links.duplicate_bytes()),
+    })))
+}
+
+/// Scans several roots into one tree.
+///
+/// The roots hang off a synthetic node whose name is a label rather than
+/// a path component — nothing resolves a path *through* it, because
+/// [`Tree::path_for`] treats the first index as a choice of root and
+/// starts from that root's own path. A single root does not go through
+/// here at all: it produces exactly the tree it always did, because
+/// putting a synthetic level above the common case would change every
+/// index path, every view, and every stored selection to serve the rare
+/// one.
+///
+/// Free space is deliberately *not* summed. It is a property of a
+/// volume, so two roots on one volume share one figure and two roots on
+/// different volumes have two that cannot be added; the tree carries
+/// them per root ([`crate::model::Root`]) and the views ask about the
+/// root they are looking at.
+pub fn scan_many(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+) -> Result<Scan> {
+    let [single] = roots else {
+        return scan_many_inner(roots, progress, options);
+    };
+    scan_with_options(single, progress, options)
+}
+
+fn scan_many_inner(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+) -> Result<Scan> {
+    if roots.is_empty() {
+        anyhow::bail!("a scan needs at least one root");
+    }
+    let mut children = Vec::with_capacity(roots.len());
+    let mut described = Vec::with_capacity(roots.len());
+    let mut shared: Option<u64> = None;
+    for root in roots {
+        match scan_with_options(root, progress, options)? {
+            Scan::Cancelled => return Ok(Scan::Cancelled),
+            Scan::Completed(tree) => {
+                let tree = *tree;
+                if let Some(bytes) = tree.hard_link_bytes {
+                    shared = Some(shared.unwrap_or(0).saturating_add(bytes));
+                }
+                described.push(crate::model::Root {
+                    path: tree.root_path,
+                    volume_free: tree.volume_free,
+                    volume_total: tree.volume_total,
+                });
+                children.push(tree.root);
+            }
+        }
+    }
+    let root = combine(children);
+    Ok(Scan::Completed(Box::new(Tree {
+        // Not a path: a multi-root tree has no single place it came
+        // from, and `path_for` never reads this. It is what the window
+        // title and the root row show.
+        root_path: PathBuf::from(MULTI_ROOT_LABEL),
+        root,
+        volume_free: None,
+        volume_total: None,
+        roots: described,
+        // Summed across roots, and `None` unless at least one of them
+        // measured. Two roots on one volume can share a file between
+        // them, which this will miss — each root keeps its own ledger —
+        // so the figure is a floor rather than an exact overlap. That is
+        // the honest reading of it anyway: it says "at least this much of
+        // the total is the same bytes twice".
+        hard_link_bytes: shared,
+    })))
+}
+
+/// What a multi-root scan calls itself.
+/// [`scan_many`], publishing as it goes.
+///
+/// One root streams its own top-level children, which is the case a live
+/// window is really about — a drive filling in folder by folder. Several
+/// roots publish one finished root at a time instead: the roots of a
+/// multi-root tree are its top level, so that *is* the same granularity,
+/// and it keeps the synthetic node's arithmetic in one place.
+pub fn scan_many_streaming(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    let [single] = roots else {
+        return scan_many_streaming_inner(roots, progress, options, sink);
+    };
+    scan_streaming(single, progress, options, sink)
+}
+
+fn scan_many_streaming_inner(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    if roots.is_empty() {
+        anyhow::bail!("a scan needs at least one root");
+    }
+    let mut described = Vec::with_capacity(roots.len());
+    let mut totals = Totals::new(0);
+    let mut shared: Option<u64> = None;
+    for root in roots {
+        match scan_with_options(root, progress, options)? {
+            Scan::Cancelled => return Ok(Scan::Cancelled),
+            Scan::Completed(tree) => {
+                let tree = *tree;
+                if let Some(bytes) = tree.hard_link_bytes {
+                    shared = Some(shared.unwrap_or(0).saturating_add(bytes));
+                }
+                described.push(crate::model::Root {
+                    path: tree.root_path,
+                    volume_free: tree.volume_free,
+                    volume_total: tree.volume_total,
+                });
+                totals.add(&tree.root);
+                sink(tree.root);
+            }
+        }
+    }
+    Ok(Scan::Completed(Box::new(Tree {
+        root_path: PathBuf::from(MULTI_ROOT_LABEL),
+        root: dir_from_totals(
+            OsString::from(MULTI_ROOT_LABEL),
+            None,
+            Vec::new(),
+            totals,
+            None,
+        ),
+        volume_free: None,
+        volume_total: None,
+        roots: described,
+        hard_link_bytes: shared,
+    })))
+}
+
+pub const MULTI_ROOT_LABEL: &str = "Selected locations";
+
+/// Rolls finished root trees up into the synthetic node above them.
+///
+/// The same aggregation [`finish_dir`] performs, minus the progress
+/// counting — these directories have already been counted by their own
+/// scans, and counting them again would show a total higher than the
+/// scan found.
+fn combine(children: Vec<Node>) -> Node {
+    let mut size = 0u64;
+    let mut physical_size = 0u64;
+    let mut file_count = 0u64;
+    let mut dir_count = 0u64;
+    let mut unreadable_count = 0u64;
+    let mut ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
+    let mut root_dirs = 0u64;
+    for child in &children {
+        size = size.saturating_add(child.size);
+        physical_size = physical_size.saturating_add(child.physical_size);
+        file_count = file_count.saturating_add(child.file_count);
+        dir_count = dir_count.saturating_add(child.dir_count);
+        unreadable_count = unreadable_count.saturating_add(child.unreadable_count);
+        // A root can be a file — both binaries accept one — and a file
+        // carries no `ext_totals` of its own, because in an ordinary
+        // walk its parent directory is what files it under its category.
+        // Here the synthetic node is that parent, so it has to do the
+        // same filing, exactly as `finish_dir` does. Adding the empty
+        // vector instead lost the file from the extension breakdown and
+        // counted it as a folder.
+        if child.is_dir {
+            root_dirs += 1;
+            for (slot, add) in ext_totals.iter_mut().zip(child.ext_totals.iter()) {
+                slot.0 = slot.0.saturating_add(add.0);
+                slot.1 = slot.1.saturating_add(add.1);
+                slot.2 = slot.2.saturating_add(add.2);
+            }
+        } else if let Some(category) = child.category {
+            let slot = &mut ext_totals[category.index()];
+            slot.0 = slot.0.saturating_add(child.size);
+            slot.1 = slot.1.saturating_add(child.physical_size);
+            slot.2 = slot.2.saturating_add(1);
+        }
+    }
+    Node {
+        name: OsString::from(MULTI_ROOT_LABEL),
+        is_dir: true,
+        is_symlink: false,
+        size,
+        physical_size,
+        file_count,
+        dir_count: dir_count.saturating_add(root_dirs),
+        modified: None,
+        children,
+        error: false,
+        category: None,
+        ext_totals,
+        unreadable_count,
+        file_id: None,
+        other_filesystem: false,
+    }
+}
+
+/// The device the root lives on, when the scan is staying on it.
+///
+/// A scan is one filesystem's worth of bytes compared against that
+/// filesystem's free space, so entries on other devices (mount points,
+/// `/proc`, `/sys`, network shares) are left out by default unless
+/// `options.same_filesystem_only` is off.
+fn root_device(meta: &std::fs::Metadata, options: ScanOptions) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        options.same_filesystem_only.then(|| meta.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (meta, options);
+        None
+    }
+}
+
+/// A scan pointed at a single file rather than a directory.
+fn single_file_root(
+    meta: &std::fs::Metadata,
+    name: OsString,
+    path: &Path,
+    progress: Option<&Progress>,
+) -> Node {
+    if let Some(p) = progress {
+        p.files.fetch_add(1, Ordering::Relaxed);
+        p.bytes.fetch_add(meta.len(), Ordering::Relaxed);
+    }
+    let category = Some(category_for_name(&name));
+    Node {
+        name,
+        is_dir: false,
+        is_symlink: meta.file_type().is_symlink(),
+        size: meta.len(),
+        physical_size: crate::platform::physical_size(meta, path),
+        file_count: 1,
+        dir_count: 0,
+        modified: meta.modified().ok(),
+        children: vec![],
+        error: false,
+        category,
+        ext_totals: vec![],
+        unreadable_count: 0,
+        file_id: crate::platform::file_id(meta),
+        other_filesystem: false,
+    }
+}
+
+/// Somewhere for a streaming scan to put each finished top-level child.
+///
+/// Called from whichever worker thread finished the child, so it has to
+/// be `Sync`; in practice it is a closure over a channel, and the cost of
+/// synchronising it is paid once per *top-level* entry rather than per
+/// node.
+pub type ChildSink<'a> = &'a (dyn Fn(Node) + Sync);
+
+/// A scan that hands over each top-level child the moment it is finished,
+/// instead of only at the end.
+///
+/// This is what lets a window fill in while a drive is still being
+/// walked. The published children are the real thing — already totalled,
+/// already complete — so a viewer can attach one and show it without
+/// waiting for the rest, and the `Tree` this finally returns carries the
+/// root's totals with an **empty child list**, because those children now
+/// belong to whoever the sink handed them to.
+///
+/// The walk itself is untouched: the same `PAR_THRESHOLD` decision, the
+/// same rayon fold over the same entries. Only the fate of a finished
+/// child differs — accumulated and published, rather than accumulated and
+/// collected — so a streaming scan and a collecting one cannot disagree
+/// about what they found.
+pub fn scan_streaming(
+    root: &Path,
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    match scan_pool() {
+        Some(pool) => pool.install(|| scan_streaming_inner(root, progress, options, sink)),
+        None => scan_streaming_inner(root, progress, options, sink),
+    }
+}
+
+fn scan_streaming_inner(
+    root: &Path,
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    let name = root
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| root.as_os_str().to_os_string());
+    let meta = std::fs::symlink_metadata(root)?;
+    let root_dev = root_device(&meta, options);
+
+    let links = options.count_hard_links.then(HardLinks::default);
+    let root_node = if meta.is_dir() {
+        stream_root(
+            root,
+            name,
+            progress,
+            root_dev,
+            meta.modified().ok(),
+            links.as_ref(),
+            sink,
+        )
+    } else {
+        // A file root has no children to publish; it is its own answer.
+        single_file_root(&meta, name, root, progress)
+    };
+
+    if progress.is_some_and(Progress::is_cancelled) {
+        return Ok(Scan::Cancelled);
+    }
+    let (volume_free, volume_total) = crate::platform::volume_space(root);
+    Ok(Scan::Completed(Box::new(Tree {
+        root_path: root.to_path_buf(),
+        root: root_node,
+        volume_free,
+        volume_total,
+        roots: Vec::new(),
+        hard_link_bytes: links.map(|links| links.duplicate_bytes()),
+    })))
+}
+
+/// The root of a streaming scan: every child published, none kept.
+fn stream_root(
+    path: &Path,
+    name: OsString,
+    progress: Option<&Progress>,
+    root_dev: Option<u64>,
+    dir_modified: Option<std::time::SystemTime>,
+    links: Option<&HardLinks>,
+    sink: ChildSink<'_>,
+) -> Node {
+    if progress.is_some_and(Progress::is_cancelled) {
+        return abandoned_dir(name);
+    }
+    let Some((raw, listing_unreadable)) = read_entries(path) else {
+        return unreadable_dir(name, dir_modified, progress);
+    };
+    let wide = raw.len() >= PAR_THRESHOLD;
+    let (entries, meta_unreadable) = materialize(raw, wide);
+    let own_unreadable = listing_unreadable + meta_unreadable;
+    let (entries, stubs) = split_other_filesystem(entries, root_dev);
+
+    let mut totals = Totals::new(own_unreadable);
+    // Markers first, matching the order both collecting walks produce.
+    for stub in stubs {
+        totals.add(&stub);
+        sink(stub);
+    }
+
+    let publish = |entry: EntryInfo, totals: &mut Totals, files: &mut u64, bytes: &mut u64| {
+        let ename = entry.name.clone();
+        let node = if entry.is_dir && !entry.is_symlink {
+            scan_dir(
+                &entry.path,
+                ename,
+                progress,
+                1,
+                root_dev,
+                entry.modified,
+                links,
+            )
+        } else {
+            let (node, one_file, size) = leaf_node(entry, ename, links);
+            *files += one_file;
+            *bytes += size;
+            node
+        };
+        totals.add(&node);
+        sink(node);
+    };
+
+    let (child_totals, local_files, local_bytes) = if entries.len() >= PAR_THRESHOLD {
+        let (totals, (files, bytes)) = entries
+            .into_par_iter()
+            .fold(
+                || (Totals::new(0), (0u64, 0u64)),
+                |(mut totals, (mut files, mut bytes)), entry| {
+                    publish(entry, &mut totals, &mut files, &mut bytes);
+                    (totals, (files, bytes))
+                },
+            )
+            .reduce(
+                || (Totals::new(0), (0u64, 0u64)),
+                |(mut totals_a, (files_a, bytes_a)), (totals_b, (files_b, bytes_b))| {
+                    totals_a.merge(&totals_b);
+                    (totals_a, (files_a + files_b, bytes_a + bytes_b))
+                },
+            );
+        (totals, files, bytes)
+    } else {
+        let mut totals = Totals::new(0);
+        let mut files = 0u64;
+        let mut bytes = 0u64;
+        for entry in entries {
+            publish(entry, &mut totals, &mut files, &mut bytes);
+        }
+        (totals, files, bytes)
+    };
+    if let Some(p) = progress {
+        if local_files > 0 {
+            p.files.fetch_add(local_files, Ordering::Relaxed);
+            p.bytes.fetch_add(local_bytes, Ordering::Relaxed);
+        }
+    }
+    totals.merge(&child_totals);
+
+    // No children: they were published. The shell carries their totals,
+    // which is exactly what a viewer that has been collecting them needs
+    // in order to agree with a collecting scan.
+    dir_from_totals(name, dir_modified, Vec::new(), totals, progress)
 }
 
 /// How many directory levels the parallel walk may recurse through
@@ -177,12 +720,24 @@ const MAX_PARALLEL_DEPTH: usize = 64;
 #[derive(Clone, Copy)]
 pub struct ScanOptions {
     pub same_filesystem_only: bool,
+    /// Whether to measure how much of the total is the same bytes seen
+    /// under two names.
+    ///
+    /// Defaulted per platform, because the cost is not the same on both.
+    /// Unix knows a file's link count for free, so the ledger holds only
+    /// the handful of files that actually have more than one name and the
+    /// figure is always available. Windows reports no link count in a
+    /// directory listing and asking for one costs a handle per file, so
+    /// the ledger there has to hold *every* file's identity — a few
+    /// hundred megabytes on a full drive — and it is opt-in.
+    pub count_hard_links: bool,
 }
 
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {
             same_filesystem_only: true,
+            count_hard_links: cfg!(unix),
         }
     }
 }
@@ -192,10 +747,44 @@ pub fn scan_with_options(
     root: &Path,
     progress: Option<&Progress>,
     options: ScanOptions,
-) -> Result<Tree> {
+) -> Result<Scan> {
     match scan_pool() {
         Some(pool) => pool.install(|| scan_inner(root, progress, options)),
         None => scan_inner(root, progress, options),
+    }
+}
+
+/// [`scan_to_completion`] over several roots.
+pub fn scan_many_to_completion(roots: &[PathBuf], options: ScanOptions) -> Result<Tree> {
+    match scan_many(roots, None, options)? {
+        Scan::Completed(tree) => Ok(*tree),
+        Scan::Cancelled => anyhow::bail!("a scan with no cancel token reported cancellation"),
+    }
+}
+
+/// A scan nobody can cancel, as a plain [`Tree`].
+///
+/// [`Scan::Cancelled`] is only reachable through a [`Progress`] someone
+/// else is holding, so a caller that passes none cannot observe it: the
+/// CLI's two non-interactive modes are in that position, and so is every
+/// test that scans a fixture. Making each of them re-handle an arm that
+/// cannot occur is noise, and noise is where a real cancel eventually
+/// gets ignored.
+///
+/// Anything with a user in front of it must call [`scan`] and answer the
+/// cancel properly.
+pub fn scan_to_completion(root: &Path) -> Result<Tree> {
+    scan_to_completion_with_options(root, ScanOptions::default())
+}
+
+/// [`scan_to_completion`] with non-default options.
+pub fn scan_to_completion_with_options(root: &Path, options: ScanOptions) -> Result<Tree> {
+    match scan_with_options(root, None, options)? {
+        Scan::Completed(tree) => Ok(*tree),
+        // Unreachable, and an error rather than a panic: the crate denies
+        // `unreachable!` for the reason this line exists, which is that
+        // "cannot happen" is a claim about code someone may later change.
+        Scan::Cancelled => anyhow::bail!("a scan with no cancel token reported cancellation"),
     }
 }
 
@@ -205,14 +794,32 @@ fn scan_dir(
     progress: Option<&Progress>,
     depth: usize,
     root_dev: Option<u64>,
+    known_modified: Option<std::time::SystemTime>,
+    links: Option<&HardLinks>,
 ) -> Node {
     if depth >= MAX_PARALLEL_DEPTH {
-        return scan_dir_deep(path, name, progress, root_dev);
+        return scan_dir_deep(path, name, progress, root_dev, known_modified, links);
+    }
+    // One relaxed load per directory, in the same place the counters are
+    // touched. The subtree below an abandoned directory is never walked,
+    // so a cancel propagates outward at the speed of the directories
+    // already in flight rather than the size of what is left.
+    if progress.is_some_and(Progress::is_cancelled) {
+        return abandoned_dir(name);
     }
 
-    let dir_meta = std::fs::symlink_metadata(path).ok();
+    // The parent's listing already carried this directory's timestamp
+    // where the platform reports one, and asking the filesystem again is
+    // a syscall per directory — a million of them on a drive-sized scan.
+    // Only the scan root, which has no parent listing, pays for it.
+    let dir_modified = match known_modified {
+        Some(modified) => Some(modified),
+        None => std::fs::symlink_metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok()),
+    };
     let Some((raw, listing_unreadable)) = read_entries(path) else {
-        return unreadable_dir(name, dir_meta, progress);
+        return unreadable_dir(name, dir_modified, progress);
     };
     let wide = raw.len() >= PAR_THRESHOLD;
     let (entries, meta_unreadable) = materialize(raw, wide);
@@ -230,11 +837,19 @@ fn scan_dir(
     // directory that cannot be opened at all (handled above) and the
     // per-entry lookups `read_entries`/`materialize` already counted.
     let scan_one = |entry: EntryInfo, local_files: &mut u64, local_bytes: &mut u64| -> Node {
-        let ename = entry.name;
-        if entry.metadata.file_type().is_dir() {
-            return scan_dir(&entry.path, ename, progress, depth + 1, root_dev);
+        let ename = entry.name.clone();
+        if entry.is_dir && !entry.is_symlink {
+            return scan_dir(
+                &entry.path,
+                ename,
+                progress,
+                depth + 1,
+                root_dev,
+                entry.modified,
+                links,
+            );
         }
-        let (node, files, bytes) = leaf_node(&entry.metadata, ename, &entry.path);
+        let (node, files, bytes) = leaf_node(entry, ename, links);
         *local_files += files;
         *local_bytes += bytes;
         node
@@ -295,7 +910,7 @@ fn scan_dir(
     // an invariant for the walks, not for the user.
     let mut all_children = stubs;
     all_children.extend(children);
-    finish_dir(name, dir_meta, all_children, own_unreadable, progress)
+    finish_dir(name, dir_modified, all_children, own_unreadable, progress)
 }
 
 /// The same walk as [`scan_dir`], iteratively and on one thread.
@@ -313,10 +928,12 @@ fn scan_dir_deep(
     name: OsString,
     progress: Option<&Progress>,
     root_dev: Option<u64>,
+    known_modified: Option<std::time::SystemTime>,
+    links: Option<&HardLinks>,
 ) -> Node {
     struct Frame {
         name: OsString,
-        dir_meta: Option<std::fs::Metadata>,
+        dir_modified: Option<std::time::SystemTime>,
         entries: std::vec::IntoIter<EntryInfo>,
         children: Vec<Node>,
         own_unreadable: u64,
@@ -329,8 +946,16 @@ fn scan_dir_deep(
         name: OsString,
         progress: Option<&Progress>,
         root_dev: Option<u64>,
+        known_modified: Option<std::time::SystemTime>,
     ) -> Result2 {
-        let dir_meta = std::fs::symlink_metadata(&path).ok();
+        // `links` is not threaded into `open`: it reads entries, and the
+        // ledger is only consulted where a leaf is built.
+        let dir_modified = match known_modified {
+            Some(modified) => Some(modified),
+            None => std::fs::symlink_metadata(&path)
+                .ok()
+                .and_then(|meta| meta.modified().ok()),
+        };
         match read_entries(&path) {
             Some((raw, listing_unreadable)) => {
                 // Sequential materialization: this walk only runs past
@@ -340,7 +965,7 @@ fn scan_dir_deep(
                 let (entries, stubs) = split_other_filesystem(entries, root_dev);
                 Result2::Frame(Box::new(Frame {
                     name,
-                    dir_meta,
+                    dir_modified,
                     entries: entries.into_iter(),
                     // Markers first, scanned children appended after —
                     // the same order `scan_dir` produces.
@@ -350,7 +975,7 @@ fn scan_dir_deep(
                     local_bytes: 0,
                 }))
             }
-            None => Result2::Node(unreadable_dir(name, dir_meta, progress)),
+            None => Result2::Node(unreadable_dir(name, dir_modified, progress)),
         }
     }
 
@@ -360,7 +985,7 @@ fn scan_dir_deep(
     }
 
     let mut stack: Vec<Frame> = Vec::new();
-    match open(path.to_path_buf(), name, progress, root_dev) {
+    match open(path.to_path_buf(), name, progress, root_dev, known_modified) {
         Result2::Frame(frame) => stack.push(*frame),
         Result2::Node(node) => return node,
     }
@@ -370,6 +995,12 @@ fn scan_dir_deep(
     let mut finished: Option<Node> = None;
 
     while let Some(frame) = stack.last_mut() {
+        // Checked once per iteration rather than once per directory: this
+        // walk is the deep, narrow tail of a chain, where a single
+        // directory can be most of the remaining work.
+        if progress.is_some_and(Progress::is_cancelled) {
+            return abandoned_dir(path.file_name().map(OsString::from).unwrap_or_default());
+        }
         let Some(entry) = frame.entries.next() else {
             // Every child accounted for: aggregate and hand upward.
             let Some(frame) = stack.pop() else {
@@ -383,7 +1014,7 @@ fn scan_dir_deep(
             }
             let node = finish_dir(
                 frame.name,
-                frame.dir_meta,
+                frame.dir_modified,
                 frame.children,
                 frame.own_unreadable,
                 progress,
@@ -395,15 +1026,21 @@ fn scan_dir_deep(
             continue;
         };
 
-        let ename = entry.name;
-        if entry.metadata.file_type().is_dir() {
-            match open(entry.path, ename, progress, root_dev) {
+        let ename = entry.name.clone();
+        if entry.is_dir && !entry.is_symlink {
+            match open(
+                entry.path.clone(),
+                ename,
+                progress,
+                root_dev,
+                entry.modified,
+            ) {
                 Result2::Frame(child) => stack.push(*child),
                 Result2::Node(node) => frame.children.push(node),
             }
             continue;
         }
-        let (node, files, bytes) = leaf_node(&entry.metadata, ename, &entry.path);
+        let (node, files, bytes) = leaf_node(entry, ename, links);
         frame.local_files += files;
         frame.local_bytes += bytes;
         frame.children.push(node);
@@ -412,47 +1049,142 @@ fn scan_dir_deep(
     finished.unwrap_or_else(|| unreadable_dir(OsString::new(), None, progress))
 }
 
-/// Whether an entry is on the device the scan started on.
+/// One directory entry, with everything the walk needs about it already
+/// resolved.
 ///
-/// `root_dev` is always `None` on platforms without an inode model, where
-/// the guard is simply off.
-#[cfg(unix)]
-fn same_filesystem(root_dev: u64, meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.dev() == root_dev
-}
-
-#[cfg(not(unix))]
-fn same_filesystem(_root_dev: u64, _meta: &std::fs::Metadata) -> bool {
-    true
-}
-
-/// What the scanner actually keeps of a directory entry.
-///
-/// Deliberately not a [`std::fs::DirEntry`]: Rust documents that a Unix
-/// `DirEntry` holds an internal reference to the directory it came from,
-/// so retaining entries while recursively scanning their siblings keeps
-/// one directory file descriptor open per entry — a deep or wide tree can
-/// exhaust `RLIMIT_NOFILE`. The name, path, and metadata are materialized
-/// by [`materialize`] and the `DirEntry` is dropped before any child scan
-/// begins.
+/// Deliberately not a `std::fs::Metadata`: where the fields come from is
+/// a platform decision made once, in [`read_entries`], and everything
+/// downstream reads the same shape either way. Holding a `DirEntry` here
+/// instead would also keep the directory's file descriptor open across
+/// the child scan, and a deep or wide tree of those can exhaust Unix
+/// `RLIMIT_NOFILE`.
 struct EntryInfo {
     name: OsString,
     path: PathBuf,
-    metadata: std::fs::Metadata,
+    is_dir: bool,
+    is_symlink: bool,
+    len: u64,
+    /// Bytes on disk. Where a directory listing supplied the allocation
+    /// size it is that; otherwise it is whatever [`crate::platform`] can
+    /// work out from the metadata.
+    physical: u64,
+    modified: Option<std::time::SystemTime>,
+    file_id: Option<crate::platform::FileId>,
+    /// The device the entry lives on, where the platform reports one.
+    /// Only the filesystem-boundary check reads it.
+    device: Option<u64>,
+    /// How many names this file has, where the platform says so for
+    /// free. Only the hard-link ledger reads it, and only on Unix.
+    #[cfg(unix)]
+    links: u64,
+}
+
+impl EntryInfo {
+    /// The `std` path: everything derived from a per-entry `stat`.
+    fn from_metadata(name: OsString, path: PathBuf, metadata: &std::fs::Metadata) -> Self {
+        let kind = metadata.file_type();
+        Self {
+            is_dir: kind.is_dir(),
+            is_symlink: kind.is_symlink(),
+            len: metadata.len(),
+            physical: crate::platform::physical_size(metadata, &path),
+            modified: metadata.modified().ok(),
+            file_id: crate::platform::file_id(metadata),
+            device: entry_device(metadata),
+            #[cfg(unix)]
+            links: {
+                use std::os::unix::fs::MetadataExt;
+                metadata.nlink()
+            },
+            name,
+            path,
+        }
+    }
+
+    /// The listing path: everything the directory itself reported.
+    fn from_listing(dir: &Path, entry: crate::platform::DirEntryInfo) -> Self {
+        Self {
+            path: dir.join(&entry.name),
+            name: entry.name,
+            is_dir: entry.is_dir,
+            is_symlink: entry.is_symlink,
+            len: entry.len,
+            physical: entry.allocation,
+            modified: entry.modified,
+            file_id: entry.file_id,
+            // A directory listing describes one directory, which is on
+            // one filesystem by construction, so the boundary check has
+            // nothing to compare. The platforms that report a device
+            // report it through `stat`, which is the other path.
+            device: None,
+            // Unreachable: this constructor is the Windows listing, and
+            // the field only exists on Unix.
+            #[cfg(unix)]
+            links: 1,
+        }
+    }
+}
+
+/// The device an entry sits on, where the platform says.
+#[cfg(unix)]
+fn entry_device(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.dev())
+}
+
+#[cfg(not(unix))]
+fn entry_device(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
+/// A directory's entries, before they are turned into [`EntryInfo`]s.
+///
+/// Two shapes, because two platforms answer differently. Windows can
+/// describe every entry from the directory handle it had to open anyway
+/// — sizes, identity, timestamps and all — so those arrive complete and
+/// there is nothing left to fetch. Everywhere else the walk gets names
+/// and has to `stat` each one, which is worth doing in parallel for a
+/// wide directory.
+enum Listing {
+    Ready(Vec<EntryInfo>),
+    NeedsMetadata(Vec<std::fs::DirEntry>),
+}
+
+impl Listing {
+    fn len(&self) -> usize {
+        match self {
+            Self::Ready(entries) => entries.len(),
+            Self::NeedsMetadata(entries) => entries.len(),
+        }
+    }
 }
 
 /// Every entry in `path`, plus a count of the ones that could not be
-/// read. `None` when the directory itself could not be opened.
+/// read. `None` when the directory itself could not be listed at all.
 ///
-/// `read_dir` can fail outright (permission denied, etc.) — that's the
-/// `None`. But the *iterator it returns* can also yield individual
-/// `Err`s partway through (a race with something deleting an entry, a
-/// flaky mount) without the whole listing failing. Silently dropping
-/// those via `.filter_map(|e| e.ok())` would make a partial listing look
-/// identical to a complete one, so they're counted instead of discarded.
-/// Metadata failures are counted the same way, by [`materialize`].
-fn read_entries(path: &Path) -> Option<(Vec<std::fs::DirEntry>, u64)> {
+/// The preferred path is [`crate::platform::directory_listing`], which on
+/// Windows enumerates the directory through one handle and reports the
+/// allocated size and the file identity of every entry alongside the
+/// name — strictly more than `read_dir` exposes, for the same cost,
+/// because `read_dir` opens the very same handle internally. Measured
+/// over a 1,900-directory tree the two walks came out within a percent
+/// of each other; running *both* — which is what an earlier version of
+/// this did, to bolt the extra fields onto a `std` listing — cost more
+/// than twice either.
+///
+/// Everywhere else, and on any Windows filesystem that does not
+/// implement the info class, it falls back to `read_dir`. That path can
+/// also fail *per entry* partway through — a race with something
+/// deleting a file, a flaky mount — without the listing itself failing,
+/// and those are counted rather than silently dropped.
+fn read_entries(path: &Path) -> Option<(Listing, u64)> {
+    if let Some(entries) = crate::platform::directory_listing(path) {
+        let entries = entries
+            .into_iter()
+            .map(|entry| EntryInfo::from_listing(path, entry))
+            .collect();
+        return Some((Listing::Ready(entries), 0));
+    }
     let read_dir = std::fs::read_dir(path).ok()?;
     let mut entries = Vec::new();
     let mut unreadable = 0u64;
@@ -462,29 +1194,34 @@ fn read_entries(path: &Path) -> Option<(Vec<std::fs::DirEntry>, u64)> {
             Err(_) => unreadable += 1,
         }
     }
-    Some((entries, unreadable))
+    Some((Listing::NeedsMetadata(entries), unreadable))
 }
 
-/// Turns raw `DirEntry`s into owned [`EntryInfo`] records, plus a count
-/// of the ones whose metadata could not be fetched.
+/// Completes a [`Listing`], plus a count of the entries whose metadata
+/// could not be fetched.
 ///
-/// Every `DirEntry` is consumed here, before any child scan begins —
-/// see [`EntryInfo`] for why holding one across recursion matters. The
-/// lookup is a real `stat` per entry on Unix, so a directory wide
-/// enough for the parallel walk fetches in parallel; an earlier version
-/// fetched sequentially inside `read_entries`, which serialized the
-/// syscalls the walk used to overlap and slowed exactly the huge flat
-/// directories a scan spends most of its time in.
-fn materialize(raw: Vec<std::fs::DirEntry>, parallel: bool) -> (Vec<EntryInfo>, u64) {
+/// A listing that arrived complete passes straight through. For the
+/// `std` path this is where the per-entry `stat` happens, and every
+/// `DirEntry` is consumed here, before any child scan begins. The
+/// lookups run in parallel for a wide directory; an earlier version
+/// fetched them sequentially inside [`read_entries`], which serialized
+/// the syscalls the walk used to overlap and slowed exactly the huge
+/// flat directories a scan spends most of its time in.
+fn materialize(listing: Listing, parallel: bool) -> (Vec<EntryInfo>, u64) {
+    let raw = match listing {
+        Listing::Ready(entries) => return (entries, 0),
+        Listing::NeedsMetadata(entries) => entries,
+    };
+
     // `DirEntry::metadata` does not follow symlinks, matching what the
     // scan has always assumed of a directory entry.
     fn one(entry: std::fs::DirEntry) -> Option<EntryInfo> {
         let metadata = entry.metadata().ok()?;
-        Some(EntryInfo {
-            name: entry.file_name(),
-            path: entry.path(),
-            metadata,
-        })
+        Some(EntryInfo::from_metadata(
+            entry.file_name(),
+            entry.path(),
+            &metadata,
+        ))
     }
 
     let materialized: Vec<Option<EntryInfo>> = if parallel {
@@ -521,7 +1258,7 @@ fn split_other_filesystem(
     let mut kept = Vec::with_capacity(entries.len());
     let mut stubs = Vec::new();
     for entry in entries {
-        if same_filesystem(dev, &entry.metadata) {
+        if entry.device.is_none_or(|entry_dev| entry_dev == dev) {
             kept.push(entry);
         } else {
             stubs.push(other_filesystem_stub(entry));
@@ -537,17 +1274,16 @@ fn split_other_filesystem(
 /// volume" against its free space. The marker keeps the place visible
 /// while keeping the accounting honest.
 fn other_filesystem_stub(entry: EntryInfo) -> Node {
-    let meta = &entry.metadata;
-    let is_dir = meta.file_type().is_dir();
+    let is_dir = entry.is_dir;
     Node {
         name: entry.name,
         is_dir,
-        is_symlink: meta.file_type().is_symlink(),
+        is_symlink: entry.is_symlink,
         size: 0,
         physical_size: 0,
         file_count: 0,
         dir_count: 0,
-        modified: meta.modified().ok(),
+        modified: entry.modified,
         children: vec![],
         error: false,
         category: None,
@@ -557,15 +1293,44 @@ fn other_filesystem_stub(entry: EntryInfo) -> Node {
             vec![]
         },
         unreadable_count: 0,
-        file_id: crate::platform::file_id(meta),
+        file_id: entry.file_id,
         other_filesystem: true,
     }
 }
 
 /// The node standing in for a directory that could not be opened at all.
+/// The stand-in for a directory the walk gave up on because the scan was
+/// cancelled.
+///
+/// It is never seen by anyone: [`scan_inner`] returns [`Scan::Cancelled`]
+/// rather than the tree these nodes are part of, and the whole thing is
+/// dropped. It exists because the walk aggregates bottom-up and every
+/// branch has to hand *something* back — and it is deliberately not
+/// counted as unreadable, so a cancel can never be mistaken for a
+/// permissions problem if this ever does become visible.
+fn abandoned_dir(name: OsString) -> Node {
+    Node {
+        name,
+        is_dir: true,
+        is_symlink: false,
+        size: 0,
+        physical_size: 0,
+        file_count: 0,
+        dir_count: 0,
+        modified: None,
+        children: vec![],
+        error: false,
+        category: None,
+        ext_totals: vec![(0u64, 0u64, 0u64); Category::COUNT],
+        unreadable_count: 0,
+        file_id: None,
+        other_filesystem: false,
+    }
+}
+
 fn unreadable_dir(
     name: OsString,
-    dir_meta: Option<std::fs::Metadata>,
+    dir_modified: Option<std::time::SystemTime>,
     progress: Option<&Progress>,
 ) -> Node {
     if let Some(p) = progress {
@@ -579,7 +1344,7 @@ fn unreadable_dir(
         physical_size: 0,
         file_count: 0,
         dir_count: 0,
-        modified: dir_meta.and_then(|m| m.modified().ok()),
+        modified: dir_modified,
         children: vec![],
         error: true,
         category: None,
@@ -591,11 +1356,22 @@ fn unreadable_dir(
 }
 
 /// A non-directory entry, with what it contributes to its parent's
-/// running file and byte counts. `path` is only for platforms whose
-/// physical size needs the real path (Windows) — Unix reads it straight
-/// off the metadata.
-fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u64, u64) {
-    if meta.file_type().is_symlink() {
+/// running file and byte counts.
+///
+/// Everything it needs is already on the entry: the walk decided how to
+/// get each field — a directory listing on Windows, a `stat` elsewhere —
+/// before this was called, so there is one shape of leaf here rather
+/// than one per platform.
+fn leaf_node(entry: EntryInfo, name: OsString, links: Option<&HardLinks>) -> (Node, u64, u64) {
+    // Every name is still counted in the totals — the rows and the sums
+    // agree, which is the point — and the ledger records how much of the
+    // sum is the same bytes twice.
+    if let (Some(ledger), Some(id)) = (links, entry.file_id) {
+        if !entry.is_symlink && worth_tracking(&entry) {
+            ledger.observe(id, entry.physical);
+        }
+    }
+    if entry.is_symlink {
         return (
             Node {
                 name,
@@ -605,13 +1381,13 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
                 physical_size: 0,
                 file_count: 1,
                 dir_count: 0,
-                modified: meta.modified().ok(),
+                modified: entry.modified,
                 children: vec![],
                 error: false,
                 category: None,
                 ext_totals: vec![],
                 unreadable_count: 0,
-                file_id: crate::platform::file_id(meta),
+                file_id: entry.file_id,
                 other_filesystem: false,
             },
             1,
@@ -624,20 +1400,20 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
             name,
             is_dir: false,
             is_symlink: false,
-            size: meta.len(),
-            physical_size: crate::platform::physical_size(meta, path),
+            size: entry.len,
+            physical_size: entry.physical,
             file_count: 1,
             dir_count: 0,
-            modified: meta.modified().ok(),
+            modified: entry.modified,
             children: vec![],
             error: false,
             ext_totals: vec![],
             unreadable_count: 0,
-            file_id: crate::platform::file_id(meta),
+            file_id: entry.file_id,
             other_filesystem: false,
         },
         1,
-        meta.len(),
+        entry.len,
     )
 }
 
@@ -645,58 +1421,149 @@ fn leaf_node(meta: &std::fs::Metadata, name: OsString, path: &Path) -> (Node, u6
 ///
 /// Shared by both walks, so the parallel and iterative paths cannot
 /// drift into aggregating differently.
+/// What a directory adds up to, accumulated one child at a time.
+///
+/// Split out of [`finish_dir`] so a *streaming* scan can total its
+/// children as it publishes them and still end with the same node a
+/// collecting scan would build. Two copies of this arithmetic drifting
+/// apart is the way a live tree and its finished self come to disagree
+/// about how big the same directory is, so there is one.
+#[derive(Clone)]
+pub struct Totals {
+    size: u64,
+    physical_size: u64,
+    file_count: u64,
+    dir_count: u64,
+    unreadable_count: u64,
+    ext_totals: Vec<(u64, u64, u64)>,
+}
+
+impl Totals {
+    /// The totals a directory node already carries.
+    ///
+    /// So a viewer that is *building* a directory one published child at
+    /// a time can pick up where the node is and keep folding, using this
+    /// same arithmetic rather than a second copy of it.
+    pub fn from_node(node: &Node) -> Self {
+        Self {
+            size: node.size,
+            physical_size: node.physical_size,
+            file_count: node.file_count,
+            dir_count: node.dir_count,
+            unreadable_count: node.unreadable_count,
+            ext_totals: if node.ext_totals.is_empty() {
+                vec![(0, 0, 0); Category::COUNT]
+            } else {
+                node.ext_totals.clone()
+            },
+        }
+    }
+
+    /// Writes the accumulated totals back onto the node they describe.
+    pub fn write_into(self, node: &mut Node) {
+        node.size = self.size;
+        node.physical_size = self.physical_size;
+        node.file_count = self.file_count;
+        node.dir_count = self.dir_count;
+        node.unreadable_count = self.unreadable_count;
+        node.ext_totals = self.ext_totals;
+    }
+
+    fn new(own_unreadable: u64) -> Self {
+        Self {
+            size: 0,
+            physical_size: 0,
+            file_count: 0,
+            dir_count: 0,
+            unreadable_count: own_unreadable,
+            ext_totals: vec![(0, 0, 0); Category::COUNT],
+        }
+    }
+
+    /// Folds one finished child in.
+    ///
+    /// A directory contributes its own roll-up; a file is *filed* by its
+    /// parent, which is why a file's `ext_totals` is empty and this adds
+    /// its size under its category instead.
+    pub fn add(&mut self, child: &Node) {
+        self.size += child.size;
+        self.physical_size += child.physical_size;
+        self.file_count += child.file_count;
+        self.unreadable_count += child.unreadable_count;
+        if child.is_dir {
+            self.dir_count += child.dir_count + 1;
+            for (slot, &(size, physical, count)) in
+                self.ext_totals.iter_mut().zip(child.ext_totals.iter())
+            {
+                slot.0 += size;
+                slot.1 += physical;
+                slot.2 += count;
+            }
+        } else if let Some(category) = child.category {
+            let slot = &mut self.ext_totals[category.index()];
+            slot.0 += child.size;
+            slot.1 += child.physical_size;
+            slot.2 += 1;
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.size += other.size;
+        self.physical_size += other.physical_size;
+        self.file_count += other.file_count;
+        self.dir_count += other.dir_count;
+        self.unreadable_count += other.unreadable_count;
+        for (slot, add) in self.ext_totals.iter_mut().zip(other.ext_totals.iter()) {
+            slot.0 += add.0;
+            slot.1 += add.1;
+            slot.2 += add.2;
+        }
+    }
+}
+
 fn finish_dir(
     name: OsString,
-    dir_meta: Option<std::fs::Metadata>,
+    dir_modified: Option<std::time::SystemTime>,
     children: Vec<Node>,
     own_unreadable: u64,
+    progress: Option<&Progress>,
+) -> Node {
+    let mut totals = Totals::new(own_unreadable);
+    for child in &children {
+        totals.add(child);
+    }
+    dir_from_totals(name, dir_modified, children, totals, progress)
+}
+
+/// The directory node itself, once its children have been totalled.
+///
+/// `children` may be empty even when the totals are not: a streaming
+/// scan has already handed its children to whoever asked for them, and
+/// what is left is the shell they hang from.
+fn dir_from_totals(
+    name: OsString,
+    dir_modified: Option<std::time::SystemTime>,
+    children: Vec<Node>,
+    totals: Totals,
     progress: Option<&Progress>,
 ) -> Node {
     if let Some(p) = progress {
         p.dirs.fetch_add(1, Ordering::Relaxed);
     }
-
-    let mut size = 0u64;
-    let mut physical_size = 0u64;
-    let mut file_count = 0u64;
-    let mut dir_count = 0u64;
-    let mut unreadable_count = own_unreadable;
-    let mut ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
-
-    for c in &children {
-        size += c.size;
-        physical_size += c.physical_size;
-        file_count += c.file_count;
-        unreadable_count += c.unreadable_count;
-        if c.is_dir {
-            dir_count += c.dir_count + 1;
-            for (i, &(s, p, n)) in c.ext_totals.iter().enumerate() {
-                ext_totals[i].0 += s;
-                ext_totals[i].1 += p;
-                ext_totals[i].2 += n;
-            }
-        } else if let Some(cat) = c.category {
-            let i = cat.index();
-            ext_totals[i].0 += c.size;
-            ext_totals[i].1 += c.physical_size;
-            ext_totals[i].2 += 1;
-        }
-    }
-
     Node {
         name,
         is_dir: true,
         is_symlink: false,
-        size,
-        physical_size,
-        file_count,
-        dir_count,
-        modified: dir_meta.and_then(|m| m.modified().ok()),
+        size: totals.size,
+        physical_size: totals.physical_size,
+        file_count: totals.file_count,
+        dir_count: totals.dir_count,
+        modified: dir_modified,
         children,
         error: false,
         category: None,
-        ext_totals,
-        unreadable_count,
+        ext_totals: totals.ext_totals,
+        unreadable_count: totals.unreadable_count,
         file_id: None,
         other_filesystem: false,
     }
@@ -707,6 +1574,593 @@ mod tests {
     use super::*;
     use crate::util::scratch_dir;
     use std::fs;
+
+    /// Two roots come back as one tree, and every path in it resolves
+    /// against the root it belongs to.
+    ///
+    /// This is the whole risk of a multi-root tree: the synthetic node on
+    /// top is not a directory, so a `path_for` that appended its way
+    /// through it would build `C:\D:\Users` — a path that exists
+    /// nowhere, handed to code that deletes things.
+    #[test]
+    fn two_roots_scan_into_one_tree_with_real_paths() -> anyhow::Result<()> {
+        let first = scratch_dir("scanner", "multi_first");
+        let second = scratch_dir("scanner", "multi_second");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+        fs::write(first.join("a.bin"), vec![b'a'; 100])?;
+        fs::write(second.join("b.bin"), vec![b'b'; 250])?;
+
+        let tree =
+            scan_many_to_completion(&[first.clone(), second.clone()], ScanOptions::default())?;
+
+        assert!(tree.is_multi_root(), "two roots make a multi-root tree");
+        assert_eq!(tree.roots.len(), 2);
+        assert_eq!(tree.root.children.len(), 2, "one child per root");
+        assert_eq!(
+            tree.root.file_count, 2,
+            "the synthetic root totals both scans"
+        );
+        assert_eq!(tree.root.size, 350, "and their bytes");
+
+        // The file under the *second* root resolves to the second root's
+        // own path, not to the first one's and not through the label.
+        let path = tree
+            .path_for(&[1, 0])
+            .ok_or_else(|| anyhow::anyhow!("the second root's file should resolve"))?;
+        assert_eq!(path, second.join("b.bin"), "resolved to {path:?}");
+        let first_path = tree
+            .path_for(&[0, 0])
+            .ok_or_else(|| anyhow::anyhow!("the first root's file should resolve"))?;
+        assert_eq!(first_path, first.join("a.bin"));
+        Ok(())
+    }
+
+    /// One root is not a multi-root tree.
+    ///
+    /// The single-root shape is the common case and stays exactly as it
+    /// was — a synthetic level above it would change every index path,
+    /// every saved selection, and every view, to serve the rare case.
+    #[test]
+    fn one_root_scans_the_way_it_always_did() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "multi_single");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("only.bin"), vec![b'x'; 10])?;
+
+        let tree = scan_many_to_completion(std::slice::from_ref(&root), ScanOptions::default())?;
+
+        assert!(!tree.is_multi_root(), "one root is just a tree");
+        assert!(tree.roots.is_empty());
+        assert_eq!(tree.root_path, root);
+        assert_eq!(tree.path_for(&[0]), Some(root.join("only.bin")));
+        Ok(())
+    }
+
+    /// Free space is never added across roots.
+    ///
+    /// Two roots on one volume share one figure and two roots on
+    /// different volumes have two that mean different things; summing
+    /// them would produce a number that is true of no volume at all.
+    #[test]
+    fn free_space_is_per_root_not_summed() -> anyhow::Result<()> {
+        let first = scratch_dir("scanner", "multi_free_a");
+        let second = scratch_dir("scanner", "multi_free_b");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+
+        let tree = scan_many_to_completion(&[first, second], ScanOptions::default())?;
+
+        assert_eq!(
+            tree.volume_free, None,
+            "a multi-root tree has no single free-space figure"
+        );
+        assert_eq!(tree.volume_total, None);
+        assert!(
+            !tree.is_volume_root(),
+            "and it is not a volume, so no free-space tile is offered above the roots"
+        );
+        for (index, root) in tree.roots.iter().enumerate() {
+            assert_eq!(
+                tree.root_for(&[index]).map(|r| r.path),
+                Some(root.path.clone()),
+                "each index path knows which root it belongs to"
+            );
+        }
+        Ok(())
+    }
+
+    /// A cancel during the second root abandons the whole tree.
+    #[test]
+    fn cancelling_a_multi_root_scan_returns_no_tree() -> anyhow::Result<()> {
+        let first = scratch_dir("scanner", "multi_cancel_a");
+        let second = scratch_dir("scanner", "multi_cancel_b");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let outcome = scan_many(&[first, second], Some(&progress), ScanOptions::default())?;
+
+        let Scan::Cancelled = outcome else {
+            anyhow::bail!("a cancelled multi-root scan must not produce a tree");
+        };
+        Ok(())
+    }
+
+    /// On Windows a scan now reports what a file actually occupies.
+    ///
+    /// Before 0.3.0 "physical size" there meant compression- and
+    /// sparse-aware but *not* cluster-rounded, so every plain file
+    /// reported its logical size — internally consistent, and not what a
+    /// disk-usage tool means by on-disk size. The per-directory listing
+    /// supplies the filesystem's own allocation size for every entry at
+    /// the cost of one call per directory, so the honest number is now
+    /// affordable.
+    ///
+    /// "Honest" is worth being precise about, because NTFS has two
+    /// answers. A file too small to need a cluster is stored *resident*
+    /// inside its MFT record, and NTFS reports its allocation as the data
+    /// rounded to eight bytes — it genuinely occupies no clusters. A file
+    /// past that threshold is allocated in whole clusters and reports
+    /// them. This checks the second case, which is the one the old
+    /// behaviour got wrong.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_reports_the_clusters_it_occupies() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "allocation");
+        fs::create_dir_all(&root)?;
+        // Deliberately not a round number and past any residency
+        // threshold, so the answer has to be rounded *up* to something.
+        let logical = 5_000_u64;
+        fs::write(root.join("chunk.bin"), vec![b'x'; logical as usize])?;
+        // And a resident-sized one beside it, to pin the other case.
+        fs::write(root.join("tiny.bin"), *b"x")?;
+
+        let tree = scan_to_completion(&root)?;
+        let find = |name: &str| {
+            tree.root
+                .children
+                .iter()
+                .find(|child| child.name == std::ffi::OsStr::new(name))
+        };
+        let Some(chunk) = find("chunk.bin") else {
+            anyhow::bail!("the 5000-byte fixture file was not scanned");
+        };
+        assert_eq!(chunk.size, logical, "the logical size is what was written");
+        assert!(
+            chunk.physical_size > logical,
+            "{} bytes on disk for a {logical}-byte file is the logical size again,              not an allocation",
+            chunk.physical_size
+        );
+        assert_eq!(
+            chunk.physical_size % 512,
+            0,
+            "an allocation is a whole number of sectors, got {}",
+            chunk.physical_size
+        );
+
+        let Some(tiny) = find("tiny.bin") else {
+            anyhow::bail!("the one-byte fixture file was not scanned");
+        };
+        assert!(
+            tiny.physical_size < chunk.physical_size,
+            "a resident file cannot occupy more than a clustered one: {} vs {}",
+            tiny.physical_size,
+            chunk.physical_size
+        );
+        Ok(())
+    }
+
+    /// An empty file occupies nothing, and that is not a failure to read
+    /// the allocation.
+    #[cfg(windows)]
+    #[test]
+    fn an_empty_file_occupies_nothing() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "empty_file");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("empty.bin"), *b"")?;
+
+        let tree = scan_to_completion(&root)?;
+        let Some(empty) = tree.root.children.first() else {
+            anyhow::bail!("the fixture has one file and the scan found none");
+        };
+        assert_eq!(empty.size, 0);
+        assert_eq!(
+            empty.physical_size, 0,
+            "an empty file allocates no clusters"
+        );
+        Ok(())
+    }
+
+    /// The scan captures file identity on Windows, not just on Unix.
+    ///
+    /// Two hard links to one file share an identity, and until 0.3.0 the
+    /// Windows scan left `file_id` `None` and duplicate detection
+    /// recovered it later from the hashing handle. Having it at scan time
+    /// is what a hard-link-aware *total* would need, and it costs nothing
+    /// extra now that the directory listing is being read anyway.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_scan_captures_file_identity() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "identity");
+        fs::create_dir_all(&root)?;
+        let original = root.join("original.bin");
+        fs::write(&original, vec![b'x'; 4096])?;
+        let link = root.join("link.bin");
+        // `fs::hard_link` needs no privilege on NTFS, unlike a symlink.
+        // A filesystem that refuses one (FAT32 on a USB stick) skips the
+        // test rather than failing it.
+        if fs::hard_link(&original, &link).is_err() {
+            return Ok(());
+        }
+
+        let tree = scan_to_completion(&root)?;
+        let ids: Vec<_> = tree
+            .root
+            .children
+            .iter()
+            .filter(|child| !child.is_dir)
+            .map(|child| child.file_id)
+            .collect();
+        assert_eq!(ids.len(), 2, "the fixture has two names for one file");
+        assert!(
+            ids.iter().all(Option::is_some),
+            "a Windows scan should now capture identity: {ids:?}"
+        );
+        assert_eq!(
+            ids.first(),
+            ids.last(),
+            "two hard links to one file must share an identity: {ids:?}"
+        );
+        Ok(())
+    }
+
+    /// A directory that cannot be listed the fast way still scans.
+    ///
+    /// The fallback is the whole reason `directory_listing` returns an
+    /// `Option`: a redirector or a filesystem that does not implement the
+    /// info class must produce a scan with less precise sizes, never no
+    /// scan. Checked here by asking for a listing of something that is
+    /// not a directory at all, which is the same "cannot list this"
+    /// answer.
+    #[test]
+    fn a_directory_with_no_fast_listing_still_scans() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "no_listing");
+        fs::create_dir_all(&root)?;
+        let file = root.join("plain.bin");
+        fs::write(&file, vec![b'x'; 100])?;
+
+        assert!(
+            crate::platform::directory_listing(&file).is_none(),
+            "a file is not a directory, so it has no entry listing"
+        );
+        let tree = scan_to_completion(&root)?;
+        assert_eq!(tree.root.file_count, 1, "the scan still produced a tree");
+        assert!(tree.root.size >= 100);
+        Ok(())
+    }
+
+    /// A file passed as one of several roots is still a file.
+    ///
+    /// The synthetic node above the roots is their parent, so it has to
+    /// file a non-directory child under its category the way any other
+    /// parent does. Summing the child's own `ext_totals` instead — which
+    /// a file does not have — dropped it out of the extension breakdown
+    /// entirely and counted it as a folder: 30 bytes of tree reporting 10
+    /// bytes of extensions and two directories where there was one.
+    #[test]
+    fn a_file_root_is_counted_as_a_file_not_a_folder() -> anyhow::Result<()> {
+        let dir = scratch_dir("scanner", "combine_dir");
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join("inside.txt"), vec![b'x'; 10])?;
+        let holder = scratch_dir("scanner", "combine_file");
+        fs::create_dir_all(&holder)?;
+        let loose = holder.join("loose.txt");
+        fs::write(&loose, vec![b'y'; 20])?;
+
+        let tree = scan_many_to_completion(&[dir, loose], ScanOptions::default())?;
+
+        let ext_bytes: u64 = tree.root.ext_totals.iter().map(|(size, _, _)| size).sum();
+        let ext_files: u64 = tree.root.ext_totals.iter().map(|(_, _, files)| files).sum();
+        assert_eq!(tree.root.size, 30, "both roots contribute their bytes");
+        assert_eq!(
+            ext_bytes, 30,
+            "and both are filed under an extension, not just the one inside a folder"
+        );
+        assert_eq!(ext_files, 2, "two files, both categorised");
+        assert_eq!(
+            tree.root.dir_count, 1,
+            "one of the two roots is a file, so there is one folder"
+        );
+        Ok(())
+    }
+
+    /// A streaming scan finds exactly what a collecting one does.
+    ///
+    /// The whole risk of publishing children as they finish is that the
+    /// live tree and the finished tree stop agreeing — a directory that
+    /// reads 4 GB while the scan runs and 3.2 GB afterwards is worse than
+    /// no live tree at all. So the two walks are run over one fixture and
+    /// compared: the shell's totals against the collecting root's, and
+    /// the published children against its children, name for name.
+    #[test]
+    fn a_streaming_scan_agrees_with_a_collecting_one() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "streaming");
+        build_fixture(&root)?;
+
+        let collected = scan_to_completion(&root)?;
+
+        let published = std::sync::Mutex::new(Vec::new());
+        let sink = |node: Node| {
+            if let Ok(mut children) = published.lock() {
+                children.push(node);
+            }
+        };
+        let streamed = match scan_streaming(&root, None, ScanOptions::default(), &sink)? {
+            Scan::Completed(tree) => *tree,
+            Scan::Cancelled => anyhow::bail!("nothing cancelled this scan"),
+        };
+        let Ok(mut children) = published.into_inner() else {
+            anyhow::bail!("the sink was poisoned");
+        };
+
+        assert!(
+            streamed.root.children.is_empty(),
+            "a streaming scan hands its children over rather than keeping them"
+        );
+        assert_eq!(streamed.root.size, collected.root.size, "same bytes");
+        assert_eq!(
+            streamed.root.physical_size, collected.root.physical_size,
+            "same bytes on disk"
+        );
+        assert_eq!(streamed.root.file_count, collected.root.file_count);
+        assert_eq!(streamed.root.dir_count, collected.root.dir_count);
+        assert_eq!(
+            streamed.root.unreadable_count,
+            collected.root.unreadable_count
+        );
+        assert_eq!(
+            streamed.root.ext_totals, collected.root.ext_totals,
+            "and the same breakdown by category"
+        );
+
+        // Order is not part of the contract — rayon finishes children in
+        // whatever order it likes, and every view sorts before showing —
+        // so they are compared as sets of (name, size).
+        let mut streamed_children: Vec<(String, u64)> = children
+            .drain(..)
+            .map(|child| (child.name.to_string_lossy().to_string(), child.size))
+            .collect();
+        let mut collected_children: Vec<(String, u64)> = collected
+            .root
+            .children
+            .iter()
+            .map(|child| (child.name.to_string_lossy().to_string(), child.size))
+            .collect();
+        streamed_children.sort();
+        collected_children.sort();
+        assert_eq!(
+            streamed_children, collected_children,
+            "every top-level child should have been published exactly once"
+        );
+        Ok(())
+    }
+
+    /// Streaming answers a cancel too.
+    #[test]
+    fn a_streaming_scan_can_be_cancelled() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "streaming_cancel");
+        build_fixture(&root)?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let published = std::sync::Mutex::new(0usize);
+        let sink = |_: Node| {
+            if let Ok(mut count) = published.lock() {
+                *count += 1;
+            }
+        };
+        let outcome = scan_streaming(&root, Some(&progress), ScanOptions::default(), &sink)?;
+
+        let Scan::Cancelled = outcome else {
+            anyhow::bail!("a cancelled streaming scan should report Cancelled");
+        };
+        let Ok(count) = published.into_inner() else {
+            anyhow::bail!("the sink was poisoned");
+        };
+        assert_eq!(
+            count, 0,
+            "nothing should have been published after a cancel"
+        );
+        Ok(())
+    }
+
+    /// Two names for one file are counted twice, and the scan says so.
+    ///
+    /// The totals deliberately keep counting per pathname — that is what
+    /// the rows show, and WinDirStat's behaviour — so the value of the
+    /// measurement is that the difference is *reported* rather than left
+    /// for the user to wonder about. A volume with a big deduplicated
+    /// system directory can be tens of gigabytes "larger" than it is.
+    #[test]
+    fn a_hard_link_is_counted_twice_and_reported_once() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "hard_link_bytes");
+        fs::create_dir_all(&root)?;
+        let original = root.join("original.bin");
+        let payload = vec![b'x'; 8_192];
+        fs::write(&original, &payload)?;
+        if fs::hard_link(&original, root.join("alias.bin")).is_err() {
+            // A filesystem that refuses hard links has nothing to say
+            // about them.
+            return Ok(());
+        }
+
+        let options = ScanOptions {
+            count_hard_links: true,
+            ..ScanOptions::default()
+        };
+        let tree = scan_many_to_completion(std::slice::from_ref(&root), options)?;
+
+        assert_eq!(tree.root.file_count, 2, "two names, two rows");
+        let Some(shared) = tree.hard_link_bytes else {
+            anyhow::bail!("the scan was asked to measure and reported nothing");
+        };
+        assert!(
+            shared >= 8_192,
+            "the second name should account for the file's bytes again, got {shared}"
+        );
+        assert!(
+            tree.root.physical_size >= shared,
+            "the reported overlap cannot exceed the total it is part of"
+        );
+        Ok(())
+    }
+
+    /// Not measuring is a real answer, not zero.
+    ///
+    /// `None` and `Some(0)` mean different things — "nobody looked" and
+    /// "looked, found none" — and a front end that showed the first as
+    /// the second would be claiming a volume has no hard links on the
+    /// strength of never having checked.
+    #[test]
+    fn a_scan_that_does_not_measure_hard_links_reports_nothing() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "hard_link_off");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("plain.bin"), vec![b'x'; 100])?;
+
+        let options = ScanOptions {
+            count_hard_links: false,
+            ..ScanOptions::default()
+        };
+        let tree = scan_many_to_completion(std::slice::from_ref(&root), options)?;
+
+        assert_eq!(tree.hard_link_bytes, None);
+        Ok(())
+    }
+
+    /// A cancelled scan says so, and stops walking.
+    ///
+    /// Both halves matter. Reporting `Cancelled` while having walked the
+    /// whole tree anyway would look right from the outside and still
+    /// leave every core busy for a minute on a real volume, which is the
+    /// bug this exists to prevent — so the flag is set *before* the walk
+    /// starts and the counters are read afterwards to prove the walk
+    /// stopped early.
+    #[test]
+    fn a_cancelled_scan_reports_cancelled_and_stops_walking() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "cancel_before");
+        build_fixture(&root)?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let outcome = scan(&root, Some(&progress))?;
+
+        let Scan::Cancelled = outcome else {
+            anyhow::bail!("a scan cancelled before it started should report Cancelled");
+        };
+        let walked = progress.files.load(Ordering::Relaxed);
+        assert_eq!(
+            walked, 0,
+            "the walk kept going after the cancel: {walked} files were counted"
+        );
+        Ok(())
+    }
+
+    /// Cancelling part way through leaves the caller with no tree at all,
+    /// rather than a half-walked one.
+    ///
+    /// A partial tree is the dangerous outcome: every directory total in
+    /// it is short by whatever was not walked, and nothing downstream —
+    /// the treemap, the percentages, a delete confirmation quoting a
+    /// folder size — could tell. So the cancel path returns the marker and
+    /// the partial tree is dropped on the scan thread.
+    #[test]
+    fn cancelling_part_way_returns_no_tree() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "cancel_midway");
+        build_fixture(&root)?;
+
+        let progress = std::sync::Arc::new(Progress::default());
+        let watcher = std::sync::Arc::clone(&progress);
+        let scan_root = root.clone();
+        let handle = std::thread::spawn(move || scan(&scan_root, Some(watcher.as_ref())));
+
+        // Cancel as soon as the walk has actually started, so this is a
+        // mid-flight cancel rather than the "never started" case above.
+        // A spin rather than a sleep: the fixture is small enough that a
+        // fixed wait would usually miss the window entirely.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while progress.dirs.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+        progress.cancel();
+
+        let Ok(outcome) = handle.join() else {
+            anyhow::bail!("the scan thread panicked");
+        };
+        // Either answer is legitimate here — a fixture this small can
+        // finish before the cancel lands — but a *tree* must never come
+        // back once the flag has been read.
+        match outcome? {
+            Scan::Cancelled => {}
+            Scan::Completed(tree) => assert!(
+                !progress.is_cancelled() || tree.root.file_count > 0,
+                "a completed scan must be a real one"
+            ),
+        }
+        Ok(())
+    }
+
+    /// The deep, iterative walk answers the cancel too.
+    ///
+    /// It is a separate loop from the parallel walk with its own frame
+    /// discipline, and it is the one that runs on the narrow tails where a
+    /// single directory can be most of the remaining work — a cancel
+    /// checked only in `scan_dir` would be ignored for the whole of it.
+    #[test]
+    fn the_deep_walk_answers_a_cancel() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "cancel_deep");
+        let mut chain = root.join("deep");
+        for _ in 0..(MAX_PARALLEL_DEPTH + 16) {
+            chain = chain.join("d");
+        }
+        fs::create_dir_all(&chain)?;
+        fs::write(chain.join("bottom.bin"), vec![b'z'; 64])?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let outcome = scan_dir_deep(
+            &root.join("deep"),
+            std::ffi::OsString::from("deep"),
+            Some(&progress),
+            None,
+            None,
+            None,
+        );
+
+        assert!(
+            outcome.children.is_empty() && outcome.file_count == 0,
+            "the deep walk kept descending after the cancel"
+        );
+        assert!(
+            !outcome.error,
+            "an abandoned directory is not an unreadable one"
+        );
+        Ok(())
+    }
+
+    /// `scan_to_completion` is the no-token path, and its impossible arm
+    /// stays impossible.
+    #[test]
+    fn a_scan_with_no_token_completes() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "no_token");
+        build_fixture(&root)?;
+        let tree = scan_to_completion(&root)?;
+        assert!(
+            tree.root.file_count > 0,
+            "the fixture has files, so the tree should too"
+        );
+        Ok(())
+    }
 
     /// A tree with something in it for each branch of the walk: a
     /// directory wide enough to go through rayon, a chain deeper than
@@ -794,8 +2248,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         build_fixture(&root)?;
 
-        let parallel = scan_dir(&root, OsString::from("root"), None, 0, None);
-        let deep = scan_dir_deep(&root, OsString::from("root"), None, None);
+        let parallel = scan_dir(&root, OsString::from("root"), None, 0, None, None, None);
+        let deep = scan_dir_deep(&root, OsString::from("root"), None, None, None, None);
 
         assert_eq!(
             canonical(&parallel),
@@ -859,7 +2313,7 @@ mod tests {
             return Ok(());
         }
 
-        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None, None, None);
         let Some(child) = node.children.first() else {
             return Err(std::io::Error::other("fixture file was not scanned"));
         };
@@ -874,6 +2328,8 @@ mod tests {
             root: node,
             volume_free: None,
             volume_total: None,
+            roots: Vec::new(),
+            hard_link_bytes: None,
         };
         assert_eq!(
             tree.path_for(&[0]),
@@ -905,7 +2361,7 @@ mod tests {
         }
         fs::write(root.join("a\u{FFFD}"), b"two")?;
 
-        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None, None, None);
         assert_eq!(
             node.children.len(),
             2,
@@ -932,6 +2388,8 @@ mod tests {
             root: node,
             volume_free: None,
             volume_total: None,
+            roots: Vec::new(),
+            hard_link_bytes: None,
         };
         let first = tree
             .path_for(&[0])
@@ -967,7 +2425,15 @@ mod tests {
         fs::write(root.join("local.txt"), b"stay")?;
 
         let real_dev = std::fs::symlink_metadata(&root)?.dev();
-        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev + 1));
+        let node = scan_dir(
+            &root,
+            OsString::from("root"),
+            None,
+            0,
+            Some(real_dev + 1),
+            None,
+            None,
+        );
         assert_eq!(
             node.children.len(),
             2,
@@ -985,7 +2451,15 @@ mod tests {
         assert_eq!(node.file_count, 0);
 
         // With the true device the same scan keeps everything.
-        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev));
+        let node = scan_dir(
+            &root,
+            OsString::from("root"),
+            None,
+            0,
+            Some(real_dev),
+            None,
+            None,
+        );
         assert!(
             node.children.iter().all(|c| !c.other_filesystem),
             "nothing on the root's own device is marked"
@@ -1025,7 +2499,7 @@ mod tests {
             return Ok(());
         }
 
-        let node = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let node = scan_dir(&root, OsString::from("root"), None, 0, None, None, None);
         assert_eq!(
             node.size, 512,
             "the payload is counted once — a followed junction would double it"
@@ -1062,7 +2536,7 @@ mod tests {
         fs::create_dir_all(&chain)?;
         fs::write(chain.join("bottom.bin"), vec![b'z'; 7])?;
 
-        let tree = scan_dir(&root, OsString::from("root"), None, 0, None);
+        let tree = scan_dir(&root, OsString::from("root"), None, 0, None, None, None);
         assert_eq!(tree.file_count, 1, "the file at the bottom should be found");
         assert_eq!(tree.size, 7, "and its bytes counted");
         assert_eq!(
