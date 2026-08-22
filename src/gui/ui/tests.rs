@@ -4371,3 +4371,173 @@ fn the_inspector_asks_the_filesystem_once_per_selection() -> anyhow::Result<()> 
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
+
+/// A cancelled live scan does not leave its half-built tree on screen.
+///
+/// Before scans were live, the previous tree was still there to fall back
+/// on and cancelling changed nothing. The first published folder replaces
+/// it now, so a cancel that kept what had arrived would leave a tree whose
+/// totals are short by an unknown amount and which looks exactly like a
+/// finished one — the thing `Scan::Cancelled` exists to prevent.
+#[test]
+fn cancelling_a_live_scan_drops_the_partial_tree() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (worker, _progress) = app.pretend_scan_is_running();
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Users", 4_096,
+    ))))?;
+    app.poll_background(&ctx);
+    assert!(app.live_scan, "the tree is being filled in");
+    assert_eq!(app.tree.root.children.len(), 1);
+
+    worker.send(crate::gui::app::ScanMessage::Cancelled)?;
+    app.poll_background(&ctx);
+
+    assert!(!app.live_scan, "and is no longer");
+    assert!(
+        app.tree.root.children.is_empty(),
+        "a partial tree must not survive the cancel that stopped it"
+    );
+    assert_eq!(
+        app.tree.root.size, 0,
+        "nor the totals it had accumulated so far"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.to_lowercase().contains("cancel"),
+        "and the status says why the window is empty: {status:?}"
+    );
+    Ok(())
+}
+
+/// A failed live scan is treated the same way.
+#[test]
+fn a_failed_live_scan_drops_the_partial_tree() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (worker, _progress) = app.pretend_scan_is_running();
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Users", 4_096,
+    ))))?;
+    app.poll_background(&ctx);
+
+    worker.send(crate::gui::app::ScanMessage::Failed(
+        "disk fell out".to_string(),
+    ))?;
+    app.poll_background(&ctx);
+
+    assert!(!app.live_scan);
+    assert!(app.tree.root.children.is_empty());
+    Ok(())
+}
+
+/// Every largest-file row resolves to the file it names.
+///
+/// The paths in that view are numbered by the scan thread against the
+/// order it publishes in, and the window attaches in the order it
+/// receives — so if those two ever disagree, the rows point into the
+/// wrong subtree and the Cleanup menu acts on the wrong file. The fixture
+/// is wide enough for several workers to be publishing at once.
+#[test]
+fn every_largest_file_row_resolves_to_itself() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "largest_paths");
+    for folder in 0..12 {
+        let dir = root.join(format!("d{folder}"));
+        std::fs::create_dir_all(&dir)?;
+        for index in 0..6 {
+            // Sizes differ per folder so the top-k spans several of them.
+            std::fs::write(
+                dir.join(format!("f{index}.bin")),
+                vec![b'x'; 128 * (folder + 1) * (index + 1)],
+            )?;
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    app.open_folder(&root)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app.is_busy() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+    }
+
+    assert!(
+        !app.largest_files.is_empty(),
+        "the fixture has files, so the view has rows"
+    );
+    for file in &app.largest_files {
+        let Some(node) = app.tree.node_for(&file.index_path) else {
+            anyhow::bail!("{:?} does not resolve at {:?}", file.name, file.index_path);
+        };
+        assert_eq!(
+            node.name.to_string_lossy(),
+            file.name,
+            "row {:?} resolves to {:?} instead",
+            file.name,
+            node.name
+        );
+        assert_eq!(node.size, file.size, "and to a file of the same size");
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// A multi-root scan never shows paths built from its own label.
+///
+/// The roots list is what makes `path_for` resolve against a real root,
+/// and it does not exist until the scan finishes — so a live multi-root
+/// tree would resolve a selection to `Selected locations\...`, a relative
+/// path that the delete and open paths would resolve against the working
+/// directory. Multi-root scans therefore do not stream.
+#[test]
+fn a_multi_root_scan_never_resolves_through_its_label() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let first = crate::util::scratch_dir("gui", "multi_live_a");
+    let second = crate::util::scratch_dir("gui", "multi_live_b");
+    std::fs::create_dir_all(&first)?;
+    std::fs::create_dir_all(&second)?;
+    std::fs::write(first.join("a.bin"), vec![b'a'; 100])?;
+    std::fs::write(second.join("b.bin"), vec![b'b'; 200])?;
+
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    app.open_locations(vec![first.clone(), second.clone()]);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app.is_busy() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+        // At no point may a path be built from the label. Stated that
+        // way rather than "must be absolute", because the tree on screen
+        // until the scan lands is the previous one, whose fixture root is
+        // a Windows-shaped string that is not absolute on Linux.
+        for index in 0..app.tree.root.children.len() {
+            if let Some(path) = app.tree.path_for(&[index]) {
+                assert!(
+                    !path.starts_with(crate::scanner::MULTI_ROOT_LABEL),
+                    "no path may be built from the multi-root label, got {path:?}"
+                );
+            }
+        }
+    }
+
+    assert!(
+        app.tree.is_multi_root(),
+        "the finished tree spans both roots"
+    );
+    let resolved = app.tree.path_for(&[1, 0]);
+    assert_eq!(
+        resolved,
+        Some(second.join("b.bin")),
+        "and resolves against the root the file belongs to"
+    );
+
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
+    Ok(())
+}

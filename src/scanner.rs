@@ -345,13 +345,20 @@ fn scan_many_inner(
 }
 
 /// What a multi-root scan calls itself.
-/// [`scan_many`], publishing as it goes.
+/// [`scan_many`], publishing as it goes — for a single root only.
 ///
 /// One root streams its own top-level children, which is the case a live
-/// window is really about — a drive filling in folder by folder. Several
-/// roots publish one finished root at a time instead: the roots of a
-/// multi-root tree are its top level, so that *is* the same granularity,
-/// and it keeps the synthetic node's arithmetic in one place.
+/// window is really about: a drive filling in folder by folder.
+///
+/// **Several roots deliberately do not stream.** A multi-root tree
+/// resolves paths through its `roots` list, and that list does not exist
+/// until the scan finishes — so a viewer holding published roots before
+/// then would resolve `path_for` against the label standing in for them
+/// and build `Selected locations\Media\movie.mkv`, a *relative* path
+/// that the delete and open paths would then resolve against the process
+/// working directory. Publishing a root at a time also fills the window
+/// in units of whole drives, which is barely "live" anyway. So the
+/// multi-root case waits, and the sink is never called.
 pub fn scan_many_streaming(
     roots: &[PathBuf],
     progress: Option<&Progress>,
@@ -359,55 +366,9 @@ pub fn scan_many_streaming(
     sink: ChildSink<'_>,
 ) -> Result<Scan> {
     let [single] = roots else {
-        return scan_many_streaming_inner(roots, progress, options, sink);
+        return scan_many(roots, progress, options);
     };
     scan_streaming(single, progress, options, sink)
-}
-
-fn scan_many_streaming_inner(
-    roots: &[PathBuf],
-    progress: Option<&Progress>,
-    options: ScanOptions,
-    sink: ChildSink<'_>,
-) -> Result<Scan> {
-    if roots.is_empty() {
-        anyhow::bail!("a scan needs at least one root");
-    }
-    let mut described = Vec::with_capacity(roots.len());
-    let mut totals = Totals::new(0);
-    let mut shared: Option<u64> = None;
-    for root in roots {
-        match scan_with_options(root, progress, options)? {
-            Scan::Cancelled => return Ok(Scan::Cancelled),
-            Scan::Completed(tree) => {
-                let tree = *tree;
-                if let Some(bytes) = tree.hard_link_bytes {
-                    shared = Some(shared.unwrap_or(0).saturating_add(bytes));
-                }
-                described.push(crate::model::Root {
-                    path: tree.root_path,
-                    volume_free: tree.volume_free,
-                    volume_total: tree.volume_total,
-                });
-                totals.add(&tree.root);
-                sink(tree.root);
-            }
-        }
-    }
-    Ok(Scan::Completed(Box::new(Tree {
-        root_path: PathBuf::from(MULTI_ROOT_LABEL),
-        root: dir_from_totals(
-            OsString::from(MULTI_ROOT_LABEL),
-            None,
-            Vec::new(),
-            totals,
-            None,
-        ),
-        volume_free: None,
-        volume_total: None,
-        roots: described,
-        hard_link_bytes: shared,
-    })))
 }
 
 pub const MULTI_ROOT_LABEL: &str = "Selected locations";

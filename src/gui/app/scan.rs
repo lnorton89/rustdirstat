@@ -55,7 +55,6 @@ pub(in crate::gui) enum ScanMessage {
 struct Summaries {
     extensions: HashMap<String, ExtensionRow>,
     largest: Vec<top_files::TopFile>,
-    physical: bool,
     /// How many children have been published, which is also the index the
     /// next one will have once the window attaches it — index paths from
     /// `top_k` are relative to the child they were found in, and have to
@@ -64,22 +63,24 @@ struct Summaries {
 }
 
 impl Summaries {
-    fn new(physical: bool) -> Self {
+    fn new() -> Self {
         Self {
             extensions: HashMap::new(),
             largest: Vec::new(),
-            physical,
             published: 0,
         }
     }
 
-    /// Folds one about-to-be-published child in, and returns the index it
-    /// will occupy.
-    fn add(&mut self, child: &Node) -> usize {
+    /// Folds one about-to-be-published child's summaries in.
+    ///
+    /// Takes the already-computed halves rather than the node, so the two
+    /// whole-subtree walks they come from happen outside the lock this is
+    /// called under.
+    fn merge(&mut self, rows: Vec<ExtensionRow>, largest: Vec<top_files::TopFile>) {
         let index = self.published;
         self.published += 1;
 
-        for row in collect_extension_rows(child, self.physical) {
+        for row in rows {
             let slot = self
                 .extensions
                 .entry(row.extension.clone())
@@ -96,7 +97,7 @@ impl Summaries {
         // A child's own top-k merged into the running one: the largest
         // files overall are among the largest of each part, so keeping
         // `TOP_FILES` per merge is exact rather than an approximation.
-        for mut file in top_files::top_k(child, TOP_FILES) {
+        for mut file in largest {
             let mut absolute = Vec::with_capacity(file.index_path.len() + 1);
             absolute.push(index);
             absolute.extend_from_slice(&file.index_path);
@@ -106,7 +107,6 @@ impl Summaries {
         self.largest
             .sort_by_key(|file| std::cmp::Reverse(file.size));
         self.largest.truncate(TOP_FILES);
-        index
     }
 
     fn finish(self) -> (Vec<ExtensionRow>, Vec<top_files::TopFile>) {
@@ -329,11 +329,27 @@ impl GuiApp {
             // the UI thread to do when the scan lands — which was the
             // whole reason those summaries were computed here in the
             // first place.
-            let summaries = std::sync::Mutex::new(Summaries::new(physical));
+            let summaries = std::sync::Mutex::new(Summaries::new());
             let publish = |node: Node| {
-                if let Ok(mut summaries) = summaries.lock() {
-                    summaries.add(&node);
-                }
+                // Walked *before* the lock is taken: both of these are
+                // O(subtree), and doing them while holding it turns the
+                // tail of a parallel scan into a serial one — every other
+                // worker that finishes a child waits behind whoever
+                // happens to be summing `Windows`.
+                let rows = collect_extension_rows(&node, physical);
+                let largest = top_files::top_k(&node, TOP_FILES);
+                // Numbering and delivery happen under one lock, in that
+                // order. They have to: the index a child is given is the
+                // position the window will attach it at, and if another
+                // worker's send overtook this one between the two, every
+                // `top_k` path from this child would point into a
+                // different subtree — which the Largest Files view then
+                // hands to Open and Delete.
+                let mut summaries = match summaries.lock() {
+                    Ok(summaries) => summaries,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                summaries.merge(rows, largest);
                 let _ = tx.send(ScanMessage::Child(Box::new(node)));
             };
             let scanned = crate::scanner::scan_many_streaming(
@@ -453,6 +469,32 @@ impl GuiApp {
                     .as_ref()
                     .map(|name| format!("Running {name}…"))
             })
+    }
+
+    /// Throws away a tree that was still being filled in.
+    ///
+    /// A scan that was cancelled or failed part way has published real
+    /// folders and abandoned others, so what is on screen is a tree whose
+    /// totals are short by an unknown amount and which looks exactly like
+    /// a finished one. That is the thing `Scan::Cancelled` exists to
+    /// prevent — the scanner refuses to hand back a partial tree, and
+    /// before streaming the window had the previous scan to fall back on.
+    /// It no longer does: the first published child replaced it. So the
+    /// partial tree goes, and what is left is an empty root and a status
+    /// line saying why.
+    ///
+    /// Does nothing for a scan that was not live, where the previous tree
+    /// really is still there, untouched.
+    fn abandon_live_tree(&mut self) {
+        if !self.live_scan {
+            return;
+        }
+        self.live_scan = false;
+        self.pending_children.clear();
+        self.pending_finish = None;
+        let root = self.pending_root.clone();
+        self.replace_tree(Tree::placeholder(root));
+        self.reset_workspace();
     }
 
     /// Adopts the finished shell onto the tree the window has been
@@ -707,15 +749,17 @@ impl GuiApp {
                     self.status = Some("Scan complete".to_string());
                 }
                 ScanMessage::Cancelled => {
-                    // Nothing to restore *to*: the tree on screen is the
-                    // one that was already there, untouched, and the
-                    // capture taken when this scan started describes it.
                     self.restore = None;
-                    self.status = Some("Scan cancelled".to_string());
+                    self.abandon_live_tree();
+                    self.status = Some(crate::i18n::tr("status.scan_cancelled"));
                 }
                 ScanMessage::Failed(error) => {
                     self.restore = None;
-                    self.status = Some(format!("Scan failed: {error}"));
+                    self.abandon_live_tree();
+                    self.status = Some(crate::i18n::tr_with(
+                        "status.scan_failed",
+                        &[("error", &error)],
+                    ));
                 }
             }
         }
