@@ -2432,6 +2432,7 @@ mod tests {
             0,
             Some(real_dev + 1),
             None,
+            None,
         );
         assert_eq!(
             node.children.len(),
