@@ -133,10 +133,17 @@ pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(RichText::new(message).strong());
-                    ui.label(
-                        RichText::new("You can keep browsing the current scan.")
-                            .color(palette().secondary_text),
-                    );
+                    // Two different promises, and saying the wrong one is
+                    // worse than saying nothing: until the first folder
+                    // is published the previous scan is still what is on
+                    // screen, and after it the window is showing the new
+                    // one filling in.
+                    let note = if app.live_scan {
+                        "Folders appear as they finish."
+                    } else {
+                        "You can keep browsing the current scan."
+                    };
+                    ui.label(RichText::new(note).color(palette().secondary_text));
                     // Only a scan can be cancelled, so the button appears
                     // only for one. Duplicate hashing has its own control
                     // and the maintenance tools are someone else's

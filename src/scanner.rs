@@ -144,48 +144,12 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
         .unwrap_or_else(|| root.as_os_str().to_os_string());
 
     let meta = std::fs::symlink_metadata(root)?;
-    // The device the root lives on. A scan is one filesystem's worth of
-    // bytes compared against that filesystem's free space, so entries on
-    // other devices (mount points, /proc, /sys, network shares) are left
-    // out by default unless `options.same_filesystem_only` is off.
-    #[cfg(unix)]
-    let root_dev = if options.same_filesystem_only {
-        use std::os::unix::fs::MetadataExt;
-        Some(meta.dev())
-    } else {
-        None
-    };
-    #[cfg(not(unix))]
-    let root_dev = {
-        let _ = options;
-        None
-    };
+    let root_dev = root_device(&meta, options);
 
     let root_node = if meta.is_dir() {
         scan_dir(root, name, progress, 0, root_dev, meta.modified().ok())
     } else {
-        if let Some(p) = progress {
-            p.files.fetch_add(1, Ordering::Relaxed);
-            p.bytes.fetch_add(meta.len(), Ordering::Relaxed);
-        }
-        let category = Some(category_for_name(&name));
-        Node {
-            name,
-            is_dir: false,
-            is_symlink: meta.file_type().is_symlink(),
-            size: meta.len(),
-            physical_size: crate::platform::physical_size(&meta, root),
-            file_count: 1,
-            dir_count: 0,
-            modified: meta.modified().ok(),
-            children: vec![],
-            error: false,
-            category,
-            ext_totals: vec![],
-            unreadable_count: 0,
-            file_id: crate::platform::file_id(&meta),
-            other_filesystem: false,
-        }
+        single_file_root(&meta, name, root, progress)
     };
 
     // Asked between the walk and the tree it produces: a partial tree
@@ -271,6 +235,66 @@ fn scan_many_inner(
 }
 
 /// What a multi-root scan calls itself.
+/// [`scan_many`], publishing as it goes.
+///
+/// One root streams its own top-level children, which is the case a live
+/// window is really about — a drive filling in folder by folder. Several
+/// roots publish one finished root at a time instead: the roots of a
+/// multi-root tree are its top level, so that *is* the same granularity,
+/// and it keeps the synthetic node's arithmetic in one place.
+pub fn scan_many_streaming(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    let [single] = roots else {
+        return scan_many_streaming_inner(roots, progress, options, sink);
+    };
+    scan_streaming(single, progress, options, sink)
+}
+
+fn scan_many_streaming_inner(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    if roots.is_empty() {
+        anyhow::bail!("a scan needs at least one root");
+    }
+    let mut described = Vec::with_capacity(roots.len());
+    let mut totals = Totals::new(0);
+    for root in roots {
+        match scan_with_options(root, progress, options)? {
+            Scan::Cancelled => return Ok(Scan::Cancelled),
+            Scan::Completed(tree) => {
+                let tree = *tree;
+                described.push(crate::model::Root {
+                    path: tree.root_path,
+                    volume_free: tree.volume_free,
+                    volume_total: tree.volume_total,
+                });
+                totals.add(&tree.root);
+                sink(tree.root);
+            }
+        }
+    }
+    Ok(Scan::Completed(Box::new(Tree {
+        root_path: PathBuf::from(MULTI_ROOT_LABEL),
+        root: dir_from_totals(
+            OsString::from(MULTI_ROOT_LABEL),
+            None,
+            Vec::new(),
+            totals,
+            None,
+        ),
+        volume_free: None,
+        volume_total: None,
+        roots: described,
+    })))
+}
+
 pub const MULTI_ROOT_LABEL: &str = "Selected locations";
 
 /// Rolls finished root trees up into the synthetic node above them.
@@ -331,6 +355,206 @@ fn combine(children: Vec<Node>) -> Node {
         file_id: None,
         other_filesystem: false,
     }
+}
+
+/// The device the root lives on, when the scan is staying on it.
+///
+/// A scan is one filesystem's worth of bytes compared against that
+/// filesystem's free space, so entries on other devices (mount points,
+/// `/proc`, `/sys`, network shares) are left out by default unless
+/// `options.same_filesystem_only` is off.
+fn root_device(meta: &std::fs::Metadata, options: ScanOptions) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        options.same_filesystem_only.then(|| meta.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (meta, options);
+        None
+    }
+}
+
+/// A scan pointed at a single file rather than a directory.
+fn single_file_root(
+    meta: &std::fs::Metadata,
+    name: OsString,
+    path: &Path,
+    progress: Option<&Progress>,
+) -> Node {
+    if let Some(p) = progress {
+        p.files.fetch_add(1, Ordering::Relaxed);
+        p.bytes.fetch_add(meta.len(), Ordering::Relaxed);
+    }
+    let category = Some(category_for_name(&name));
+    Node {
+        name,
+        is_dir: false,
+        is_symlink: meta.file_type().is_symlink(),
+        size: meta.len(),
+        physical_size: crate::platform::physical_size(meta, path),
+        file_count: 1,
+        dir_count: 0,
+        modified: meta.modified().ok(),
+        children: vec![],
+        error: false,
+        category,
+        ext_totals: vec![],
+        unreadable_count: 0,
+        file_id: crate::platform::file_id(meta),
+        other_filesystem: false,
+    }
+}
+
+/// Somewhere for a streaming scan to put each finished top-level child.
+///
+/// Called from whichever worker thread finished the child, so it has to
+/// be `Sync`; in practice it is a closure over a channel, and the cost of
+/// synchronising it is paid once per *top-level* entry rather than per
+/// node.
+pub type ChildSink<'a> = &'a (dyn Fn(Node) + Sync);
+
+/// A scan that hands over each top-level child the moment it is finished,
+/// instead of only at the end.
+///
+/// This is what lets a window fill in while a drive is still being
+/// walked. The published children are the real thing — already totalled,
+/// already complete — so a viewer can attach one and show it without
+/// waiting for the rest, and the `Tree` this finally returns carries the
+/// root's totals with an **empty child list**, because those children now
+/// belong to whoever the sink handed them to.
+///
+/// The walk itself is untouched: the same `PAR_THRESHOLD` decision, the
+/// same rayon fold over the same entries. Only the fate of a finished
+/// child differs — accumulated and published, rather than accumulated and
+/// collected — so a streaming scan and a collecting one cannot disagree
+/// about what they found.
+pub fn scan_streaming(
+    root: &Path,
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    match scan_pool() {
+        Some(pool) => pool.install(|| scan_streaming_inner(root, progress, options, sink)),
+        None => scan_streaming_inner(root, progress, options, sink),
+    }
+}
+
+fn scan_streaming_inner(
+    root: &Path,
+    progress: Option<&Progress>,
+    options: ScanOptions,
+    sink: ChildSink<'_>,
+) -> Result<Scan> {
+    let name = root
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| root.as_os_str().to_os_string());
+    let meta = std::fs::symlink_metadata(root)?;
+    let root_dev = root_device(&meta, options);
+
+    let root_node = if meta.is_dir() {
+        stream_root(root, name, progress, root_dev, meta.modified().ok(), sink)
+    } else {
+        // A file root has no children to publish; it is its own answer.
+        single_file_root(&meta, name, root, progress)
+    };
+
+    if progress.is_some_and(Progress::is_cancelled) {
+        return Ok(Scan::Cancelled);
+    }
+    let (volume_free, volume_total) = crate::platform::volume_space(root);
+    Ok(Scan::Completed(Box::new(Tree {
+        root_path: root.to_path_buf(),
+        root: root_node,
+        volume_free,
+        volume_total,
+        roots: Vec::new(),
+    })))
+}
+
+/// The root of a streaming scan: every child published, none kept.
+fn stream_root(
+    path: &Path,
+    name: OsString,
+    progress: Option<&Progress>,
+    root_dev: Option<u64>,
+    dir_modified: Option<std::time::SystemTime>,
+    sink: ChildSink<'_>,
+) -> Node {
+    if progress.is_some_and(Progress::is_cancelled) {
+        return abandoned_dir(name);
+    }
+    let Some((raw, listing_unreadable)) = read_entries(path) else {
+        return unreadable_dir(name, dir_modified, progress);
+    };
+    let wide = raw.len() >= PAR_THRESHOLD;
+    let (entries, meta_unreadable) = materialize(raw, wide);
+    let own_unreadable = listing_unreadable + meta_unreadable;
+    let (entries, stubs) = split_other_filesystem(entries, root_dev);
+
+    let mut totals = Totals::new(own_unreadable);
+    // Markers first, matching the order both collecting walks produce.
+    for stub in stubs {
+        totals.add(&stub);
+        sink(stub);
+    }
+
+    let publish = |entry: EntryInfo, totals: &mut Totals, files: &mut u64, bytes: &mut u64| {
+        let ename = entry.name.clone();
+        let node = if entry.is_dir && !entry.is_symlink {
+            scan_dir(&entry.path, ename, progress, 1, root_dev, entry.modified)
+        } else {
+            let (node, one_file, size) = leaf_node(entry, ename);
+            *files += one_file;
+            *bytes += size;
+            node
+        };
+        totals.add(&node);
+        sink(node);
+    };
+
+    let (child_totals, local_files, local_bytes) = if entries.len() >= PAR_THRESHOLD {
+        let (totals, (files, bytes)) = entries
+            .into_par_iter()
+            .fold(
+                || (Totals::new(0), (0u64, 0u64)),
+                |(mut totals, (mut files, mut bytes)), entry| {
+                    publish(entry, &mut totals, &mut files, &mut bytes);
+                    (totals, (files, bytes))
+                },
+            )
+            .reduce(
+                || (Totals::new(0), (0u64, 0u64)),
+                |(mut totals_a, (files_a, bytes_a)), (totals_b, (files_b, bytes_b))| {
+                    totals_a.merge(&totals_b);
+                    (totals_a, (files_a + files_b, bytes_a + bytes_b))
+                },
+            );
+        (totals, files, bytes)
+    } else {
+        let mut totals = Totals::new(0);
+        let mut files = 0u64;
+        let mut bytes = 0u64;
+        for entry in entries {
+            publish(entry, &mut totals, &mut files, &mut bytes);
+        }
+        (totals, files, bytes)
+    };
+    if let Some(p) = progress {
+        if local_files > 0 {
+            p.files.fetch_add(local_files, Ordering::Relaxed);
+            p.bytes.fetch_add(local_bytes, Ordering::Relaxed);
+        }
+    }
+    totals.merge(&child_totals);
+
+    // No children: they were published. The shell carries their totals,
+    // which is exactly what a viewer that has been collecting them needs
+    // in order to agree with a collecting scan.
+    dir_from_totals(name, dir_modified, Vec::new(), totals, progress)
 }
 
 /// How many directory levels the parallel walk may recurse through
@@ -1025,6 +1249,106 @@ fn leaf_node(entry: EntryInfo, name: OsString) -> (Node, u64, u64) {
 ///
 /// Shared by both walks, so the parallel and iterative paths cannot
 /// drift into aggregating differently.
+/// What a directory adds up to, accumulated one child at a time.
+///
+/// Split out of [`finish_dir`] so a *streaming* scan can total its
+/// children as it publishes them and still end with the same node a
+/// collecting scan would build. Two copies of this arithmetic drifting
+/// apart is the way a live tree and its finished self come to disagree
+/// about how big the same directory is, so there is one.
+#[derive(Clone)]
+pub struct Totals {
+    size: u64,
+    physical_size: u64,
+    file_count: u64,
+    dir_count: u64,
+    unreadable_count: u64,
+    ext_totals: Vec<(u64, u64, u64)>,
+}
+
+impl Totals {
+    /// The totals a directory node already carries.
+    ///
+    /// So a viewer that is *building* a directory one published child at
+    /// a time can pick up where the node is and keep folding, using this
+    /// same arithmetic rather than a second copy of it.
+    pub fn from_node(node: &Node) -> Self {
+        Self {
+            size: node.size,
+            physical_size: node.physical_size,
+            file_count: node.file_count,
+            dir_count: node.dir_count,
+            unreadable_count: node.unreadable_count,
+            ext_totals: if node.ext_totals.is_empty() {
+                vec![(0, 0, 0); Category::COUNT]
+            } else {
+                node.ext_totals.clone()
+            },
+        }
+    }
+
+    /// Writes the accumulated totals back onto the node they describe.
+    pub fn write_into(self, node: &mut Node) {
+        node.size = self.size;
+        node.physical_size = self.physical_size;
+        node.file_count = self.file_count;
+        node.dir_count = self.dir_count;
+        node.unreadable_count = self.unreadable_count;
+        node.ext_totals = self.ext_totals;
+    }
+
+    fn new(own_unreadable: u64) -> Self {
+        Self {
+            size: 0,
+            physical_size: 0,
+            file_count: 0,
+            dir_count: 0,
+            unreadable_count: own_unreadable,
+            ext_totals: vec![(0, 0, 0); Category::COUNT],
+        }
+    }
+
+    /// Folds one finished child in.
+    ///
+    /// A directory contributes its own roll-up; a file is *filed* by its
+    /// parent, which is why a file's `ext_totals` is empty and this adds
+    /// its size under its category instead.
+    pub fn add(&mut self, child: &Node) {
+        self.size += child.size;
+        self.physical_size += child.physical_size;
+        self.file_count += child.file_count;
+        self.unreadable_count += child.unreadable_count;
+        if child.is_dir {
+            self.dir_count += child.dir_count + 1;
+            for (slot, &(size, physical, count)) in
+                self.ext_totals.iter_mut().zip(child.ext_totals.iter())
+            {
+                slot.0 += size;
+                slot.1 += physical;
+                slot.2 += count;
+            }
+        } else if let Some(category) = child.category {
+            let slot = &mut self.ext_totals[category.index()];
+            slot.0 += child.size;
+            slot.1 += child.physical_size;
+            slot.2 += 1;
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.size += other.size;
+        self.physical_size += other.physical_size;
+        self.file_count += other.file_count;
+        self.dir_count += other.dir_count;
+        self.unreadable_count += other.unreadable_count;
+        for (slot, add) in self.ext_totals.iter_mut().zip(other.ext_totals.iter()) {
+            slot.0 += add.0;
+            slot.1 += add.1;
+            slot.2 += add.2;
+        }
+    }
+}
+
 fn finish_dir(
     name: OsString,
     dir_modified: Option<std::time::SystemTime>,
@@ -1032,51 +1356,42 @@ fn finish_dir(
     own_unreadable: u64,
     progress: Option<&Progress>,
 ) -> Node {
+    let mut totals = Totals::new(own_unreadable);
+    for child in &children {
+        totals.add(child);
+    }
+    dir_from_totals(name, dir_modified, children, totals, progress)
+}
+
+/// The directory node itself, once its children have been totalled.
+///
+/// `children` may be empty even when the totals are not: a streaming
+/// scan has already handed its children to whoever asked for them, and
+/// what is left is the shell they hang from.
+fn dir_from_totals(
+    name: OsString,
+    dir_modified: Option<std::time::SystemTime>,
+    children: Vec<Node>,
+    totals: Totals,
+    progress: Option<&Progress>,
+) -> Node {
     if let Some(p) = progress {
         p.dirs.fetch_add(1, Ordering::Relaxed);
     }
-
-    let mut size = 0u64;
-    let mut physical_size = 0u64;
-    let mut file_count = 0u64;
-    let mut dir_count = 0u64;
-    let mut unreadable_count = own_unreadable;
-    let mut ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
-
-    for c in &children {
-        size += c.size;
-        physical_size += c.physical_size;
-        file_count += c.file_count;
-        unreadable_count += c.unreadable_count;
-        if c.is_dir {
-            dir_count += c.dir_count + 1;
-            for (i, &(s, p, n)) in c.ext_totals.iter().enumerate() {
-                ext_totals[i].0 += s;
-                ext_totals[i].1 += p;
-                ext_totals[i].2 += n;
-            }
-        } else if let Some(cat) = c.category {
-            let i = cat.index();
-            ext_totals[i].0 += c.size;
-            ext_totals[i].1 += c.physical_size;
-            ext_totals[i].2 += 1;
-        }
-    }
-
     Node {
         name,
         is_dir: true,
         is_symlink: false,
-        size,
-        physical_size,
-        file_count,
-        dir_count,
+        size: totals.size,
+        physical_size: totals.physical_size,
+        file_count: totals.file_count,
+        dir_count: totals.dir_count,
         modified: dir_modified,
         children,
         error: false,
         category: None,
-        ext_totals,
-        unreadable_count,
+        ext_totals: totals.ext_totals,
+        unreadable_count: totals.unreadable_count,
         file_id: None,
         other_filesystem: false,
     }
@@ -1384,6 +1699,106 @@ mod tests {
         assert_eq!(
             tree.root.dir_count, 1,
             "one of the two roots is a file, so there is one folder"
+        );
+        Ok(())
+    }
+
+    /// A streaming scan finds exactly what a collecting one does.
+    ///
+    /// The whole risk of publishing children as they finish is that the
+    /// live tree and the finished tree stop agreeing — a directory that
+    /// reads 4 GB while the scan runs and 3.2 GB afterwards is worse than
+    /// no live tree at all. So the two walks are run over one fixture and
+    /// compared: the shell's totals against the collecting root's, and
+    /// the published children against its children, name for name.
+    #[test]
+    fn a_streaming_scan_agrees_with_a_collecting_one() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "streaming");
+        build_fixture(&root)?;
+
+        let collected = scan_to_completion(&root)?;
+
+        let published = std::sync::Mutex::new(Vec::new());
+        let sink = |node: Node| {
+            if let Ok(mut children) = published.lock() {
+                children.push(node);
+            }
+        };
+        let streamed = match scan_streaming(&root, None, ScanOptions::default(), &sink)? {
+            Scan::Completed(tree) => *tree,
+            Scan::Cancelled => anyhow::bail!("nothing cancelled this scan"),
+        };
+        let Ok(mut children) = published.into_inner() else {
+            anyhow::bail!("the sink was poisoned");
+        };
+
+        assert!(
+            streamed.root.children.is_empty(),
+            "a streaming scan hands its children over rather than keeping them"
+        );
+        assert_eq!(streamed.root.size, collected.root.size, "same bytes");
+        assert_eq!(
+            streamed.root.physical_size, collected.root.physical_size,
+            "same bytes on disk"
+        );
+        assert_eq!(streamed.root.file_count, collected.root.file_count);
+        assert_eq!(streamed.root.dir_count, collected.root.dir_count);
+        assert_eq!(
+            streamed.root.unreadable_count,
+            collected.root.unreadable_count
+        );
+        assert_eq!(
+            streamed.root.ext_totals, collected.root.ext_totals,
+            "and the same breakdown by category"
+        );
+
+        // Order is not part of the contract — rayon finishes children in
+        // whatever order it likes, and every view sorts before showing —
+        // so they are compared as sets of (name, size).
+        let mut streamed_children: Vec<(String, u64)> = children
+            .drain(..)
+            .map(|child| (child.name.to_string_lossy().to_string(), child.size))
+            .collect();
+        let mut collected_children: Vec<(String, u64)> = collected
+            .root
+            .children
+            .iter()
+            .map(|child| (child.name.to_string_lossy().to_string(), child.size))
+            .collect();
+        streamed_children.sort();
+        collected_children.sort();
+        assert_eq!(
+            streamed_children, collected_children,
+            "every top-level child should have been published exactly once"
+        );
+        Ok(())
+    }
+
+    /// Streaming answers a cancel too.
+    #[test]
+    fn a_streaming_scan_can_be_cancelled() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "streaming_cancel");
+        build_fixture(&root)?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let published = std::sync::Mutex::new(0usize);
+        let sink = |_: Node| {
+            if let Ok(mut count) = published.lock() {
+                *count += 1;
+            }
+        };
+        let outcome = scan_streaming(&root, Some(&progress), ScanOptions::default(), &sink)?;
+
+        let Scan::Cancelled = outcome else {
+            anyhow::bail!("a cancelled streaming scan should report Cancelled");
+        };
+        let Ok(count) = published.into_inner() else {
+            anyhow::bail!("the sink was poisoned");
+        };
+        assert_eq!(
+            count, 0,
+            "nothing should have been published after a cancel"
         );
         Ok(())
     }

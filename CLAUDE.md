@@ -190,6 +190,16 @@ frame idle and under a live scan, and a busy app asking for the *next*
 frame rather than one on a 33 ms timer). `docs/PERFORMANCE.md` §0 says
 what each one actually guarantees.
 
+**A scan fills the tree in as it goes, and that is why the caches have a
+generation.** `scanner::scan_streaming` publishes each finished top-level
+child; `GuiApp::attach_child` pushes it into the tree *in place* (O(1),
+never a copy — a partial tree of nine million nodes cannot be cloned per
+update). In-place growth keeps the `Arc`'s address, which is what both
+caches key off, so `RowKey` and `TreemapKey` carry `tree_generation` and
+it is bumped on every mutation. `Arc::get_mut` is what makes the mutation
+safe: a frame where a worker still holds a clone defers its children to
+the next one rather than blocking. See `docs/PERFORMANCE.md` §0c.
+
 **Never recompute something tree-sized inside a draw call.** The GUI is
 immediate mode: `gui::ui::draw` runs in full every frame. A scan of a
 whole drive is ~9M nodes, so anything O(tree) in a draw path freezes the

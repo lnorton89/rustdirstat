@@ -13,6 +13,9 @@ use super::*;
 #[derive(PartialEq)]
 pub(in crate::gui) struct TreemapKey {
     tree: usize,
+    /// See [`super::RowKey`]: a live scan grows the tree without moving
+    /// it, so the address is not enough to invalidate the tiles.
+    generation: u64,
     zoom_path: Vec<usize>,
     rect: [i32; 4],
     physical: bool,
@@ -125,6 +128,7 @@ impl GuiApp {
         };
         let key = TreemapKey {
             tree: Arc::as_ptr(&self.tree) as usize,
+            generation: self.tree_generation,
             zoom_path: self.zoom_path.clone(),
             // Rounded to whole pixels because that is the resolution the
             // layout itself quantizes to: a sub-pixel change in the

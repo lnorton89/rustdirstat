@@ -19,10 +19,12 @@ conversation that decided it ends.**
 ## In flight
 
 **0.3.0 — the platform release.** Full detail in
-[`0.3.0_PLAN.md`](0.3.0_PLAN.md).
+[`0.3.0_PLAN.md`](0.3.0_PLAN.md). Sprints past 7 were not in that plan:
+they are its deferred list, being worked through.
 
 | Sprint | Item | State |
 |---|---|---|
+| 8 | A tree that fills in while the scan runs | done |
 | 1 | Leave egui 0.29 behind (0.36) | done |
 | 2 | A scan you can stop (cancellation) | done |
 | 3 | Windows: one handle per directory (allocation size, scan-time file id) | done |
@@ -52,7 +54,6 @@ existing now that the plan is finished with.
 
 | Item | Why not now | Earliest |
 |---|---|---|
-| **A tree that fills in live during the scan** | WinDirStat does this; rustdirstat shows counters and keeps the previous tree interactive. Publishing partial trees needs a snapshot protocol that does not violate "nothing tree-sized in a draw call" — the constraint in [`PERFORMANCE.md`](PERFORMANCE.md) that the whole GUI is built around. | 0.4.0 |
 | **Inode-deduped tree-wide physical totals** | Totals count each hard link once per pathname, which is WinDirStat parity. True inode-deduped accounting needs a tree-wide inode set, which costs real memory on a drive-sized scan. Duplicate *reclaimable* space is already hard-link aware, which is where the number actually misleads. | unscheduled |
 | **User-defined cleanup commands** (WinDirStat's "Cleanups") | A shell-execution surface in an app whose other buttons delete files. Wants a written threat model — argument quoting, what a `%p` expansion may contain, whether a command may run on a multi-selection — before any code. | unscheduled |
 | **Localization** | Both front ends are English-only and nothing is wired for translation; the TUI additionally assumes width-1 glyphs in places `unicode-width` does not cover. | unscheduled |

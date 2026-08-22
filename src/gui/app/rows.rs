@@ -88,6 +88,9 @@ impl TreeRow {
 #[derive(PartialEq)]
 pub(in crate::gui) struct RowKey {
     tree: usize,
+    /// A tree that grows in place keeps its address, so the address
+    /// alone cannot say whether these rows are still the right ones.
+    generation: u64,
     sort: SortMode,
     physical: bool,
     expanded: u64,
@@ -247,9 +250,19 @@ impl GuiApp {
 
     /// Rebuilds [`Self::visible_rows`] if the tree, sort order, size mode,
     /// or expanded set has changed since the last frame.
+    /// How many rows the last refresh produced.
+    ///
+    /// For tests that need to see the row cache actually rebuild; the
+    /// window itself reads `visible_rows` directly.
+    #[cfg(test)]
+    pub(in crate::gui) fn visible_row_count(&self) -> usize {
+        self.visible_rows.len()
+    }
+
     pub(in crate::gui) fn refresh_visible_rows(&mut self) {
         let key = RowKey {
             tree: Arc::as_ptr(&self.tree) as usize,
+            generation: self.tree_generation,
             sort: self.sort,
             physical: self.use_physical,
             expanded: expanded_fingerprint(&self.expanded),

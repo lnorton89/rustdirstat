@@ -388,6 +388,43 @@ impl Tree {
         }
     }
 
+    /// An empty tree for a scan that is about to fill it in.
+    ///
+    /// Like [`Self::placeholder`], but always a directory and without
+    /// asking the filesystem whether it is one: a scan that publishes
+    /// children has already established that, and a live tree whose root
+    /// says `is_dir: false` shows no children at all — the row builder
+    /// stops at a leaf.
+    pub fn live_shell(root_path: PathBuf) -> Self {
+        let name = root_path
+            .file_name()
+            .map(OsString::from)
+            .unwrap_or_else(|| root_path.as_os_str().to_os_string());
+        Self {
+            root: Node {
+                name,
+                is_dir: true,
+                is_symlink: false,
+                size: 0,
+                physical_size: 0,
+                file_count: 0,
+                dir_count: 0,
+                modified: None,
+                children: Vec::new(),
+                error: false,
+                category: None,
+                ext_totals: vec![(0, 0, 0); Category::COUNT],
+                unreadable_count: 0,
+                file_id: None,
+                other_filesystem: false,
+            },
+            root_path,
+            volume_free: None,
+            volume_total: None,
+            roots: Vec::new(),
+        }
+    }
+
     /// Reconstruct the absolute path of the node reached by following
     /// `index_path` (child indices, root to leaf) from the root.
     ///

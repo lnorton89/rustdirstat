@@ -97,6 +97,39 @@ now, on either path.
 `RUSTDIRSTAT_STD_LISTING=1` forces the `read_dir` walk — for a filesystem
 where the listing path misbehaves, and for reproducing the table above.
 
+## 0c. A tree that fills in while the scan runs
+
+A scan publishes each finished top-level child instead of only handing
+over a tree at the end (`scanner::scan_streaming`), and the window
+attaches them as they arrive. A drive that takes a minute to walk shows
+its first folders in the first second.
+
+The rule this had to survive is the one this whole document is about:
+**nothing tree-sized in a draw call**, and nothing tree-sized copied per
+update either. Three things make that hold.
+
+- **The tree grows in place.** Attaching a child pushes one `Node` and
+  folds its totals in — O(1), whatever the tree already holds. There is
+  no rebuild and no clone: a partial tree of nine million nodes copied
+  even once a second would cost more than the scan.
+- **The caches learned a new key.** `RowKey` and `TreemapKey` key off the
+  tree's *address*, which does not change when a child is pushed into it,
+  so both gained a `generation` counter bumped on every mutation. Without
+  it the window would go on drawing the rows it had before the folder
+  arrived — live in memory, static on screen.
+- **Attachment is bounded per frame.** `MAX_CHILDREN_PER_FRAME` caps how
+  many arrive in one pass, because a directory with a thousand top-level
+  entries can publish faster than the window draws.
+
+Two consequences worth knowing. `Arc::get_mut` is what makes in-place
+mutation safe — it succeeds only while the window is the sole owner of
+the tree — so a frame where a background worker still holds a clone
+defers its children to the next one; they queue, they are never dropped.
+And the two whole-tree summaries (the extension rows and the largest
+files) are now accumulated child by child *on the scan thread*, because a
+streaming scan no longer has the tree to walk at the end. Same total
+work, same thread, same arrival with the finished scan.
+
 ## 1. The GUI is immediate mode: every frame rebuilds the window
 
 `gui::ui::draw` runs top to bottom on every frame. There is no retained

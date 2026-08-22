@@ -4000,3 +4000,179 @@ fn a_maintenance_tool_refuses_a_multi_root_scan_with_no_selection() {
         "the refusal should say what to do, got {status:?}"
     );
 }
+
+// ----------------------------------------------------------- live scans
+
+/// A published folder is on screen before the scan finishes.
+///
+/// The point of the whole streaming path: a drive that takes a minute to
+/// walk shows its first folders in the first second, rather than an empty
+/// window and a spinner. Driven through the real message the scan worker
+/// sends, so what is pinned is the window's half of that contract.
+#[test]
+fn a_published_child_appears_before_the_scan_finishes() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (worker, _progress) = app.pretend_scan_is_running();
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Users", 4_096,
+    ))))?;
+    app.poll_background(&ctx);
+
+    assert!(app.live_scan, "the first child starts the live tree");
+    assert_eq!(
+        app.tree.root.children.len(),
+        1,
+        "the published folder should be attached"
+    );
+    assert_eq!(app.tree.root.size, 4_096, "and counted");
+    assert!(
+        app.scan_is_running(),
+        "with the scan still going — that is the whole point"
+    );
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Windows", 8_192,
+    ))))?;
+    app.poll_background(&ctx);
+    assert_eq!(app.tree.root.children.len(), 2);
+    assert_eq!(
+        app.tree.root.size, 12_288,
+        "totals grow with each folder, not only at the end"
+    );
+    Ok(())
+}
+
+/// Attaching a child invalidates the caches that draw it.
+///
+/// A tree that grows in place keeps its address, and both caches key off
+/// that address — so without the generation counter the window would
+/// happily go on drawing the rows it had before the folder arrived, and
+/// the live tree would be live in memory only.
+#[test]
+fn attaching_a_child_rebuilds_the_rows_and_tiles() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (worker, _progress) = app.pretend_scan_is_running();
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Users", 4_096,
+    ))))?;
+    app.poll_background(&ctx);
+    for _ in 0..4 {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+    let rows_before = app.visible_row_count();
+
+    worker.send(crate::gui::app::ScanMessage::Child(Box::new(dir_node(
+        "Windows", 8_192,
+    ))))?;
+    app.poll_background(&ctx);
+    render_window(&ctx, &mut app, window_input(Vec::new()));
+
+    assert!(
+        app.visible_row_count() > rows_before,
+        "the second folder should have reached the row list: {} rows before, {} after",
+        rows_before,
+        app.visible_row_count()
+    );
+    Ok(())
+}
+
+/// What the window ends up with is what a plain scan would have found.
+///
+/// The real risk of assembling a tree from published parts: the live one
+/// and the finished one disagreeing. This runs an actual scan of a real
+/// fixture through the window's own worker and message loop, then
+/// compares the result against `scan_to_completion` over the same
+/// directory.
+#[test]
+fn a_live_scan_ends_up_agreeing_with_a_plain_one() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = crate::util::scratch_dir("gui", "live_scan");
+    for folder in ["one", "two", "three"] {
+        let dir = root.join(folder);
+        std::fs::create_dir_all(&dir)?;
+        for index in 0..8 {
+            std::fs::write(
+                dir.join(format!("f{index}.bin")),
+                vec![b'x'; 64 * (index + 1)],
+            )?;
+        }
+    }
+    std::fs::write(root.join("loose.txt"), vec![b'y'; 500])?;
+
+    let expected = crate::scanner::scan_to_completion(&root)?;
+
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    app.open_folder(&root)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.is_busy() && std::time::Instant::now() < deadline {
+        app.poll_background(&ctx);
+    }
+
+    assert!(!app.live_scan, "the scan finished, so the tree is not live");
+    assert_eq!(app.tree.root_path, expected.root_path);
+    assert_eq!(
+        app.tree.root.children.len(),
+        expected.root.children.len(),
+        "every top-level entry should have been published exactly once"
+    );
+    assert_eq!(app.tree.root.size, expected.root.size, "same bytes");
+    assert_eq!(app.tree.root.file_count, expected.root.file_count);
+    assert_eq!(app.tree.root.dir_count, expected.root.dir_count);
+    assert_eq!(
+        app.tree.root.ext_totals, expected.root.ext_totals,
+        "and the same breakdown by category"
+    );
+    assert!(
+        !app.extensions.is_empty(),
+        "the extension rows are summed on the scan thread and should arrive with it"
+    );
+    assert!(!app.largest_files.is_empty(), "so should the largest files");
+
+    // The largest file's index path must resolve in the assembled tree —
+    // it was numbered by the worker against the order it published in.
+    let Some(largest) = app.largest_files.first() else {
+        anyhow::bail!("the fixture has files, so there is a largest one");
+    };
+    let Some(node) = app.tree.node_for(&largest.index_path) else {
+        anyhow::bail!(
+            "the largest file's path does not resolve: {:?} at {:?}",
+            largest.name,
+            largest.index_path
+        );
+    };
+    assert_eq!(
+        node.name.to_string_lossy(),
+        largest.name,
+        "and it should resolve to the file it names"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// A directory node with a known size, for the message-level tests.
+fn dir_node(name: &str, size: u64) -> Node {
+    Node {
+        name: std::ffi::OsString::from(name),
+        is_dir: true,
+        is_symlink: false,
+        size,
+        physical_size: size,
+        file_count: 1,
+        dir_count: 0,
+        modified: None,
+        children: vec![file(&format!("{name}.bin"), size)],
+        error: false,
+        category: None,
+        ext_totals: vec![(0, 0, 0); Category::COUNT],
+        unreadable_count: 0,
+        file_id: None,
+        other_filesystem: false,
+    }
+}

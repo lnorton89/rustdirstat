@@ -293,6 +293,26 @@ pub(in crate::gui) struct GuiApp {
     pub treemap_tiles: Vec<treemap_layout::Tile>,
     treemap_key: Option<TreemapKey>,
     scan_rx: Option<mpsc::Receiver<ScanMessage>>,
+    /// Whether the tree on screen is one being filled in by a running
+    /// scan rather than a finished one.
+    pub(in crate::gui) live_scan: bool,
+    /// What the live tree will be rooted at, remembered from the moment
+    /// the scan started — the first published child is what swaps the
+    /// previous tree out, and by then the request has to be to hand.
+    pending_root: PathBuf,
+    /// Children published by the scan but not yet attached, because a
+    /// background worker still held a clone of the tree when they
+    /// arrived. Never more than a frame's worth behind.
+    pending_children: Vec<Node>,
+    /// The finished shell, waiting for the same exclusive access.
+    pending_finish: Option<Box<Tree>>,
+    /// Bumped whenever the tree is mutated in place.
+    ///
+    /// The row and tile caches key off the tree's *address*, which does
+    /// not change when a child is pushed into it, so without this they
+    /// would serve rows from before the child arrived and the window
+    /// would not fill in at all.
+    pub(in crate::gui) tree_generation: u64,
     scan_resets_workspace: bool,
     /// The user's zoom/selection/expansion captured as name identities
     /// when a refresh scan started, to be re-derived against the new
@@ -359,6 +379,11 @@ impl GuiApp {
             treemap_tiles: Vec::new(),
             treemap_key: None,
             scan_rx: None,
+            live_scan: false,
+            pending_root: PathBuf::new(),
+            pending_children: Vec::new(),
+            pending_finish: None,
+            tree_generation: 0,
             scan_resets_workspace: false,
             restore: None,
             duplicate_rx: None,
