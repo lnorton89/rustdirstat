@@ -286,12 +286,41 @@ const S_OK: i32 = 0;
 #[cfg(windows)]
 const S_FALSE: i32 = 1;
 
+/// The `C:` a maintenance tool wants, from whatever path the scan holds.
+///
+/// This used to hand back the first component's text, which for the
+/// canonicalized paths the app actually carries is the *prefix* —
+/// `\\?\C:`. `chkdsk \\?\C:` and `vssadmin ... /for=\\?\C:` both refuse
+/// that: the extended-length form is understood by the file APIs and by
+/// nothing else, which is the same reason `util::display_path` exists.
+/// So the drive letter is read off the prefix rather than printed with
+/// it, and the two spellings of a disk prefix — `C:\` and `\\?\C:\` —
+/// answer identically.
+///
+/// A UNC path has no drive letter at all and never will; the fallback
+/// stays `C:` because these tools have to be given something, and the
+/// tool itself is the right place for that argument to be rejected.
 #[cfg(windows)]
 fn volume_root_arg(path: &std::path::Path) -> String {
-    path.components()
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .unwrap_or_else(|| "C:".to_string())
+    use std::path::{Component, Prefix};
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                format!("{}:", char::from(letter).to_ascii_uppercase())
+            }
+            // A share, a device namespace, or a verbatim path that names
+            // no drive. None of these is a volume `chkdsk` or `vssadmin`
+            // can be pointed at, and the fallback is the same as having
+            // no prefix at all.
+            Prefix::Verbatim(_)
+            | Prefix::VerbatimUNC(..)
+            | Prefix::DeviceNS(_)
+            | Prefix::UNC(..) => "C:".to_string(),
+        },
+        // A relative path, or one that begins at the root of the current
+        // drive — neither names a volume either.
+        _ => "C:".to_string(),
+    }
 }
 
 #[cfg(not(windows))]
@@ -315,6 +344,37 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    /// A maintenance tool is given `C:`, whichever spelling the scan
+    /// carries.
+    ///
+    /// The paths this app holds are canonicalized, and on Windows that
+    /// means `\\?\C:\Users\...`. Taking the first component's text
+    /// handed `chkdsk` and `vssadmin` the whole `\\?\C:` prefix, which
+    /// neither accepts — so the two tools that take a volume failed on
+    /// every scan the app has ever produced.
+    #[cfg(windows)]
+    #[test]
+    fn a_volume_argument_is_a_drive_letter_however_the_path_is_spelled() {
+        use std::path::Path;
+        for path in [
+            r"C:\Users\someone\Documents",
+            r"\\?\C:\Users\someone\Documents",
+            r"C:\",
+            r"\\?\C:\",
+        ] {
+            assert_eq!(
+                super::volume_root_arg(Path::new(path)),
+                "C:",
+                "{path} should name the volume as C:"
+            );
+        }
+        assert_eq!(
+            super::volume_root_arg(Path::new(r"\\?\d:\games")),
+            "D:",
+            "a lowercase drive letter is still that drive"
+        );
     }
 
     #[test]

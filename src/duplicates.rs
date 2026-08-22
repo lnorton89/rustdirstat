@@ -104,9 +104,33 @@ pub fn find_duplicates(tree: &Tree, progress: Option<&DupProgress>) -> DupScan {
 /// truncation path without building a tree of 200,000 files.
 fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usize) -> DupScan {
     let mut by_size: HashMap<u64, Vec<SizeCandidate>> = HashMap::new();
-    let mut path = tree.root_path.clone();
-    let mut index_path = Vec::new();
-    collect_by_size(&tree.root, &mut path, &mut index_path, &mut by_size);
+    // Each root walked against its own path, for the same reason the CSV
+    // export does it: a multi-root tree's `root_path` is the label
+    // `Selected locations`, not a place. Walking from it built candidate
+    // paths like `Selected locations\Users\report.docx` — relative,
+    // nonexistent, and opened by name a moment later, so every candidate
+    // came back as a read failure and a multi-root scan reported "no
+    // duplicates, N files could not be read" however many it held.
+    //
+    // The index paths stay whole: they are seeded with the root's own
+    // index, because they are resolved back against the tree (and, from
+    // the duplicates view, against Open and Delete).
+    match tree.roots.as_slice() {
+        [] => collect_by_size(
+            &tree.root,
+            &mut tree.root_path.clone(),
+            &mut Vec::new(),
+            &mut by_size,
+        ),
+        roots => {
+            for (index, root) in roots.iter().enumerate() {
+                let Some(node) = tree.root.children.get(index) else {
+                    continue;
+                };
+                collect_by_size(node, &mut root.path.clone(), &mut vec![index], &mut by_size);
+            }
+        }
+    }
 
     // Bias the candidate cap toward groups with the most same-size files
     // first — those are both the most likely to contain real duplicates
@@ -181,7 +205,14 @@ fn find_duplicates_capped(tree: &Tree, progress: Option<&DupProgress>, cap: usiz
     // solid state wants the parallelism. So the width narrows only when
     // the volume actually reports a seek penalty — an uncertain answer
     // keeps the parallel default.
-    let hashed = if crate::platform::storage_is_rotational(&tree.root_path) == Some(true) {
+    // Asked of a real path: the tree's own is a label when there is more
+    // than one root, and no volume answers to it.
+    let media_path = tree
+        .roots
+        .first()
+        .map(|root| root.path.clone())
+        .unwrap_or_else(|| tree.root_path.clone());
+    let hashed = if crate::platform::storage_is_rotational(&media_path) == Some(true) {
         match rayon::ThreadPoolBuilder::new()
             .num_threads(HDD_HASH_THREADS)
             .build()
@@ -359,6 +390,56 @@ mod tests {
     use super::*;
     use crate::util::scratch_dir;
     use std::fs;
+
+    /// Duplicates are found across several scanned roots.
+    ///
+    /// The candidate walk used to start from `tree.root_path`, which for
+    /// a multi-root tree is the label `Selected locations` rather than a
+    /// place — so every candidate path was relative and nonexistent, the
+    /// hasher failed to open all of them, and the view reported no
+    /// duplicates and a pile of unreadable files however many copies the
+    /// scan actually held.
+    #[test]
+    fn duplicates_are_found_across_several_roots() -> anyhow::Result<()> {
+        let base = scratch_dir("dupes", "multi_root");
+        let _ = fs::remove_dir_all(&base);
+        let left = base.join("left");
+        let right = base.join("right");
+        fs::create_dir_all(&left)?;
+        fs::create_dir_all(&right)?;
+        // One file each, identical, so the only way to pair them is to
+        // read both — and reading needs a path that exists.
+        fs::write(left.join("a.bin"), vec![b'z'; 4096])?;
+        fs::write(right.join("b.bin"), vec![b'z'; 4096])?;
+
+        let tree = crate::scanner::scan_many_to_completion(
+            &[left, right],
+            crate::scanner::ScanOptions::default(),
+        )?;
+        assert!(tree.is_multi_root(), "two roots make a multi-root tree");
+
+        let found = find_duplicates(&tree, None);
+        assert_eq!(
+            found.read_failures, 0,
+            "every candidate should have been openable"
+        );
+        assert_eq!(found.groups.len(), 1, "the two copies are one group");
+        let Some(group) = found.groups.first() else {
+            anyhow::bail!("the group should be there");
+        };
+        assert_eq!(group.files.len(), 2, "both copies belong to it");
+        // And the index paths still address the whole tree, which is what
+        // Open and Delete resolve them against.
+        for file in &group.files {
+            assert!(
+                tree.path_for(&file.index_path).is_some(),
+                "an index path from a duplicate group must resolve: {:?}",
+                file.index_path
+            );
+        }
+        let _ = fs::remove_dir_all(&base);
+        Ok(())
+    }
 
     /// A size-group is taken whole or not at all, and what was left out
     /// is reported.

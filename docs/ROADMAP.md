@@ -30,6 +30,7 @@ they are its deferred list, being worked through.
 | 11 | Localization: catalogue, fallback, language picker, chrome migrated | done |
 | 12 | Signing path written, waiting only on certificates | done |
 | 13 | TUI parity: hard links, a scan that shows its work, cleanups, localization | done |
+| 14 | A bug pass over the code the release did not touch | done |
 | 1 | Leave egui 0.29 behind (0.36) | done |
 | 2 | A scan you can stop (cancellation) | done |
 | 3 | Windows: one handle per directory (allocation size, scan-time file id) | done |
@@ -74,3 +75,8 @@ skipped. Each says which.
   [`0.2.0_REVIEW.md`](0.2.0_REVIEW.md) via [`0.2.1_PLAN.md`](0.2.1_PLAN.md).
 - **Release process: changelog before tag, pinned packaging tools, bound
   SBOM** — 0.2.2, from [`0.2.1-release-review.md`](0.2.1-release-review.md).
+- **Eight defects in code 0.3.0 did not touch**, six of them the same two
+  mistakes repeated — a multi-root label used as a path, and a canonical
+  `\\?\` path shown to something that is not the filesystem —
+  [`0.3.0_BUG_PASS.md`](0.3.0_BUG_PASS.md). That file also records what
+  was read and found sound, and what was not read at all.

@@ -164,7 +164,7 @@ fn run_app<B: TerminalBackend>(
 
         match browse(terminal, &mut app)? {
             BrowseOutcome::Quit => {
-                return Ok(crate::config::save(&app.to_config()).err());
+                return Ok(crate::config::save_merged(app.to_config()).err());
             }
             BrowseOutcome::Refresh => {
                 restore_to = Some(app.current_path());

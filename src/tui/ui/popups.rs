@@ -71,7 +71,7 @@ pub(super) fn draw_properties_popup(f: &mut Frame, app: &mut App) {
             .unwrap_or(if node.is_dir { "-" } else { "Other" });
 
     let mut rows: Vec<(&str, String)> = vec![
-        ("Path", full_path.display().to_string()),
+        ("Path", crate::util::display_path(&full_path)),
         ("Type", kind.to_string()),
         ("Category", category.to_string()),
         ("Size (logical)", human_bytes(node.size)),

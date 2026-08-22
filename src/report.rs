@@ -90,7 +90,11 @@ fn build_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth:
         out,
         "{:>10}  {} ({} files, {} dirs)",
         human_bytes(root.size),
-        root_path.display(),
+        // As a person would write it. The roots are canonicalized, so on
+        // Windows this line otherwise opens with `\\?\C:\...` — the
+        // extended-length form, which is an instruction to the path
+        // parser rather than part of the name.
+        crate::util::display_path(root_path),
         root.file_count,
         root.dir_count
     );

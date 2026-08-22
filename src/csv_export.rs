@@ -141,7 +141,12 @@ fn write_row<W: Write>(out: &mut W, path: &Path, node: &Node) -> std::io::Result
     writeln!(
         out,
         "{},{kind},{},{},{},{},{},{}",
-        csv_field(&path.display().to_string()),
+        // Written the way a person would, not the way the scan holds it:
+        // the roots are canonicalized, so on Windows every row would
+        // otherwise begin `\\?\C:\` — an instruction to the Win32 path
+        // parser that most of what reads a CSV rejects. See
+        // `util::display_path`.
+        csv_field(&crate::util::display_path(path)),
         node.size,
         node.physical_size,
         node.file_count,

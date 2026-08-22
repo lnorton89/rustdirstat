@@ -493,7 +493,7 @@ impl GuiApp {
     }
 
     fn save_preferences(&self) {
-        let result = crate::config::save(&crate::config::Config {
+        let result = crate::config::save_merged(crate::config::Config {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),

@@ -405,14 +405,31 @@ impl App {
         let is_dir = target.is_dir;
         let removed = Removed::deleting(target);
 
-        if pending.permanent {
+        // Reported, never propagated. These three were the only `?` on
+        // a filesystem call in this file, and the error they returned
+        // travelled out through `dispatch` and the event loop and ended
+        // the process — so a delete refused for the ordinary reasons
+        // (no permission, the file open in something else, a read-only
+        // volume) closed the app instead of saying so, on the one
+        // keystroke where the user is most owed an explanation. Every
+        // other operation here already writes to `message`.
+        let outcome = if pending.permanent {
             if is_dir {
-                std::fs::remove_dir_all(&path)?;
+                std::fs::remove_dir_all(&path)
             } else {
-                std::fs::remove_file(&path)?;
+                std::fs::remove_file(&path)
             }
         } else {
-            trash::delete(&path).map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+            trash::delete(&path).map_err(|e| std::io::Error::other(e.to_string()))
+        };
+        if let Err(error) = outcome {
+            // Nothing is subtracted from the tree: it still matches the
+            // disk, because nothing was removed from either.
+            self.message = Some(format!(
+                "Could not delete {}: {error}",
+                crate::util::display_path(&path)
+            ));
+            return Ok(());
         }
 
         let parent = self.subtract_along_current_path(&removed);
@@ -426,7 +443,7 @@ impl App {
         } else {
             "Moved to trash"
         };
-        self.message = Some(format!("{verb}: {}", path.display()));
+        self.message = Some(format!("{verb}: {}", crate::util::display_path(&path)));
         Ok(())
     }
 
@@ -513,7 +530,7 @@ impl App {
         node.children.clear();
 
         self.after_removal();
-        self.message = Some(format!("Emptied: {}", path.display()));
+        self.message = Some(format!("Emptied: {}", crate::util::display_path(&path)));
         Ok(())
     }
 

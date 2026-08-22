@@ -73,6 +73,25 @@ Three of them, in descending order of likelihood.
    program and every argument after substitution, so what is about to
    happen is readable rather than inferred from a template.
 
+## One thing the rules above do not cover
+
+**A bare program name is resolved by the OS, and on Windows that search
+includes the process working directory before `PATH`.** `CreateProcess`
+with no application name searches the directory the process was launched
+from first, so `program = "compact"` runs a `compact.exe` sitting there
+in preference to the one in `System32`. Nothing this app does makes that
+worse — it never changes its working directory, and in particular never
+changes it to anything it scanned — but it is the one way a cleanup's
+*program* (as opposed to its arguments, which rule 2 covers) can end up
+being something other than what was written.
+
+The answer is the same one Windows itself gives: **name the program by
+its full path** in any cleanup that matters. `C:\Windows\System32\compact.exe`
+resolves to exactly one file. This is a recommendation rather than an
+enforced rule because a cleanup naming `git` or `7z` and relying on
+`PATH` is a reasonable thing to want, and refusing it would push people
+back toward a shell.
+
 ## What is deliberately not done
 
 - **No `%s` "selection list" placeholder.** A cleanup runs against one

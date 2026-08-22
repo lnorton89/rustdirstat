@@ -131,6 +131,58 @@ fn parse(text: &str) -> Config {
     }
 }
 
+impl Config {
+    /// `self`'s stated preferences laid over `base`'s.
+    ///
+    /// Every field either front end sets is an `Option`, and a `None`
+    /// means "this front end has no opinion" rather than "clear it" —
+    /// so a `None` keeps whatever `base` held. `cleanups` is the odd one
+    /// out: it is a `Vec` that neither front end ever writes, because it
+    /// only ever comes from the file, so it is always taken from `base`.
+    #[must_use]
+    pub fn merge_over(self, base: Config) -> Config {
+        Config {
+            sort: self.sort.or(base.sort),
+            show_treemap: self.show_treemap.or(base.show_treemap),
+            treemap_split: self.treemap_split.or(base.treemap_split),
+            detailed: self.detailed.or(base.detailed),
+            use_physical: self.use_physical.or(base.use_physical),
+            gui_orientation: self.gui_orientation.or(base.gui_orientation),
+            gui_show_extensions: self.gui_show_extensions.or(base.gui_show_extensions),
+            gui_show_toolbar: self.gui_show_toolbar.or(base.gui_show_toolbar),
+            gui_show_status_bar: self.gui_show_status_bar.or(base.gui_show_status_bar),
+            gui_show_free_space: self.gui_show_free_space.or(base.gui_show_free_space),
+            gui_show_grid: self.gui_show_grid.or(base.gui_show_grid),
+            gui_show_labels: self.gui_show_labels.or(base.gui_show_labels),
+            gui_properties_open: self.gui_properties_open.or(base.gui_properties_open),
+            gui_properties_pos: self.gui_properties_pos.or(base.gui_properties_pos),
+            language: self.language.or(base.language),
+            cleanups: base.cleanups,
+            gui_theme: self.gui_theme.or(base.gui_theme),
+        }
+    }
+}
+
+/// Saves the preferences one front end owns without discarding the rest.
+///
+/// The file is a single struct and [`save`] writes all of it, but neither
+/// front end knows all of it: the terminal has no opinion about the
+/// window's theme, the window has none about the terminal's treemap
+/// split, and *neither* writes `cleanups`, which is hand-authored and
+/// exists nowhere else. Saving a partial config directly is therefore a
+/// deletion — quitting the terminal used to erase the window's theme,
+/// language and layout, and quitting either one erased every cleanup the
+/// user had written.
+///
+/// So what is on disk is re-read at save time and the caller's stated
+/// fields are laid over it. Re-reading rather than keeping the config
+/// loaded at startup is deliberate: the other front end may have been
+/// run and quit in between, and per-field last-writer-wins is the
+/// behaviour someone with both open would expect.
+pub fn save_merged(cfg: Config) -> std::io::Result<()> {
+    save(&cfg.merge_over(load()))
+}
+
 /// Writes `cfg` to the platform config location, atomically.
 ///
 /// Failures are returned rather than swallowed: both front ends save on
@@ -204,6 +256,82 @@ mod tests {
         let config = parse("this is { not toml");
         assert!(config.sort.is_none(), "no sort can come out of garbage");
         assert_eq!(config.gui_theme, None);
+    }
+
+    /// Saving what one front end knows does not delete what it does not.
+    ///
+    /// Both front ends persist a *subset* of this struct and spread
+    /// `Config::default()` over the rest, and [`super::save`] writes the
+    /// whole file — so a partial config written straight out is a
+    /// deletion. Quitting the terminal erased the window's theme,
+    /// language, pane layout and inspector position; quitting either one
+    /// erased every cleanup the user had hand-written into the file,
+    /// which is the only place cleanups exist.
+    #[test]
+    fn saving_one_front_ends_preferences_keeps_the_others() {
+        let on_disk = Config {
+            // The window's, and the user's own text.
+            gui_theme: Some("catppuccin-mocha".to_string()),
+            language: Some("de".to_string()),
+            gui_orientation: Some("vertical".to_string()),
+            cleanups: vec![crate::cleanups::Cleanup {
+                name: "Compress it".to_string(),
+                program: "compact".to_string(),
+                args: vec!["/c".to_string(), "%p".to_string()],
+                confirm: true,
+                capture_output: true,
+            }],
+            ..Config::default()
+        };
+        // What the terminal knows about, and nothing else.
+        let from_the_terminal = Config {
+            sort: Some(crate::model::SortMode::NameAsc),
+            show_treemap: Some(false),
+            detailed: Some(true),
+            ..Config::default()
+        };
+
+        let merged = from_the_terminal.merge_over(on_disk);
+
+        assert_eq!(
+            merged.cleanups.len(),
+            1,
+            "a hand-written cleanup exists nowhere but this file"
+        );
+        assert_eq!(merged.gui_theme.as_deref(), Some("catppuccin-mocha"));
+        assert_eq!(merged.language.as_deref(), Some("de"));
+        assert_eq!(merged.gui_orientation.as_deref(), Some("vertical"));
+        assert!(
+            merged.sort == Some(crate::model::SortMode::NameAsc),
+            "and what the terminal did state still wins"
+        );
+        assert_eq!(merged.show_treemap, Some(false));
+        assert_eq!(merged.detailed, Some(true));
+    }
+
+    /// A stated preference overwrites the saved one, including `false`.
+    ///
+    /// `Option::or` keeps the left when it is `Some`, so `Some(false)`
+    /// has to beat `Some(true)` — a merge written with `unwrap_or` would
+    /// make every toggle one-way.
+    #[test]
+    fn a_stated_preference_wins_even_when_it_is_false() {
+        let on_disk = Config {
+            show_treemap: Some(true),
+            use_physical: Some(true),
+            ..Config::default()
+        };
+        let stated = Config {
+            show_treemap: Some(false),
+            ..Config::default()
+        };
+        let merged = stated.merge_over(on_disk);
+        assert_eq!(merged.show_treemap, Some(false), "false is an opinion");
+        assert_eq!(
+            merged.use_physical,
+            Some(true),
+            "and a field nobody stated keeps what was saved"
+        );
     }
 
     #[test]

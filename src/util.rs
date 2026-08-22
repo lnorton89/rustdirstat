@@ -142,7 +142,17 @@ pub fn open_path(path: &std::path::Path) -> std::io::Result<()> {
 /// [`open_in_file_manager`] and [`open_path`] are two names over one
 /// body rather than two bodies: the platform table is the part that
 /// must not drift, and it now exists once.
+///
+/// The path goes through [`display_path`] first, and that is not a
+/// cosmetic choice: the scan roots are canonicalized, so every path the
+/// app holds on Windows carries the `\\?\` prefix, and the prefix is an
+/// instruction to the Win32 *file* API that the shell does not
+/// understand. `explorer \\?\C:\Users\someone` does not open that
+/// folder. The launcher is the one caller that is neither a filesystem
+/// call nor a label, and it wants the same spelling a person would type.
 fn launch(path: &std::path::Path) -> std::io::Result<()> {
+    let path = display_path(path);
+
     #[cfg(target_os = "windows")]
     let mut command = std::process::Command::new("explorer");
     #[cfg(target_os = "macos")]
@@ -353,11 +363,39 @@ fn recreate_symlink(source: &std::path::Path, dest: &std::path::Path) -> std::io
     }
     #[cfg(windows)]
     {
-        if link_target.is_dir() {
-            std::os::windows::fs::symlink_dir(&link_target, dest)
-        } else {
-            std::os::windows::fs::symlink_file(&link_target, dest)
-        }
+        create_windows_symlink(source, &link_target, dest)
+    }
+}
+
+/// Creates a Windows symlink of the same kind as `source`.
+///
+/// Windows has two symlink calls and picking the wrong one produces a
+/// link that resolves to nothing. Which to use was decided by asking
+/// `link_target.is_dir()` — but a symlink's target is very often
+/// *relative* (`../shared`, `sub/dir`), and a relative path is resolved
+/// against the process working directory, which has nothing to do with
+/// where the link lives. So a relative directory link was recreated as a
+/// file link and arrived broken.
+///
+/// Asking the source link itself instead is both correct and simpler:
+/// `fs::metadata` follows it, resolving the target the way the
+/// filesystem does — relative to the link — and answers what it actually
+/// points at. A link whose target no longer exists cannot be classified
+/// at all, and is recreated as a file link, which is what the old code
+/// did for that case too.
+#[cfg(windows)]
+fn create_windows_symlink(
+    source: &std::path::Path,
+    link_target: &std::path::Path,
+    dest: &std::path::Path,
+) -> std::io::Result<()> {
+    let points_at_dir = std::fs::metadata(source)
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+    if points_at_dir {
+        std::os::windows::fs::symlink_dir(link_target, dest)
+    } else {
+        std::os::windows::fs::symlink_file(link_target, dest)
     }
 }
 
@@ -406,13 +444,7 @@ fn copy_dir_recursive(source: &std::path::Path, dest: &std::path::Path) -> std::
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(&link_target, &dest_path)?;
                 #[cfg(windows)]
-                {
-                    if link_target.is_dir() {
-                        std::os::windows::fs::symlink_dir(&link_target, &dest_path)?;
-                    } else {
-                        std::os::windows::fs::symlink_file(&link_target, &dest_path)?;
-                    }
-                }
+                create_windows_symlink(&entry.path(), &link_target, &dest_path)?;
             } else if ty.is_dir() {
                 pending.push((entry.path(), dest_path));
             } else {
@@ -522,6 +554,50 @@ mod tests {
              symlink at the destination, not copy the bytes it points to"
         );
         assert_eq!(std::fs::read_link(&dest)?, target);
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// A link with a relative target keeps that target, and keeps
+    /// pointing at a directory.
+    ///
+    /// The Windows half of `recreate_symlink` has to choose between
+    /// `symlink_dir` and `symlink_file`, and it used to choose by asking
+    /// `link_target.is_dir()` — of a target like `../shared`, which
+    /// resolves against the *process working directory*, not the link's.
+    /// A relative directory link was therefore recreated as a file link
+    /// and arrived broken. It asks the source link instead, which the
+    /// filesystem resolves correctly.
+    ///
+    /// The choice itself can only be exercised on Windows, where a test
+    /// cannot create a symlink without elevation. What this pins is the
+    /// half both platforms share: the target is written through
+    /// unchanged, so it stays relative and keeps meaning what it meant.
+    #[test]
+    fn a_relative_symlink_keeps_its_relative_target() -> anyhow::Result<()> {
+        let dir = crate::util::scratch_dir("util", "relative_symlink");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("shared"))?;
+        std::fs::create_dir_all(dir.join("here"))?;
+
+        let link = dir.join("here").join("link");
+        std::os::unix::fs::symlink("../shared", &link)?;
+
+        let dest = dir.join("here").join("link_moved");
+        recreate_symlink(&link, &dest)?;
+
+        assert_eq!(
+            std::fs::read_link(&dest)?,
+            std::path::PathBuf::from("../shared"),
+            "a relative target must not be resolved on the way through"
+        );
+        assert!(
+            std::fs::metadata(&dest)
+                .map(|m| m.is_dir())
+                .unwrap_or(false),
+            "and the recreated link should still lead to the directory"
+        );
 
         std::fs::remove_dir_all(&dir)?;
         Ok(())

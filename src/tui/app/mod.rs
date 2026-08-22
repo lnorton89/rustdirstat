@@ -324,6 +324,11 @@ impl App {
     /// filters, search state, highlighted category) — those are session
     /// state, not preferences, and restoring them on an unrelated future
     /// scan would be surprising rather than helpful.
+    ///
+    /// Partial by design, and saved through
+    /// [`crate::config::save_merged`] for that reason: the fields left
+    /// `None` here belong to the window or to the user's own text, and
+    /// writing this out directly would delete them.
     pub(in crate::tui) fn to_config(&self) -> Config {
         Config {
             sort: Some(self.sort),
@@ -482,7 +487,11 @@ impl App {
                 if let Some((_, node)) = self.display_children().get(self.selected) {
                     let mut target = self.current_path();
                     target.push(&node.name);
-                    let text = target.display().to_string();
+                    // As a person would type it: this is going into
+                    // another program's address bar or command line, and
+                    // the canonical `\\?\C:\...` form is refused by most
+                    // of them. See `util::display_path`.
+                    let text = crate::util::display_path(&target);
                     match crate::util::copy_to_clipboard(&text) {
                         Ok(()) => self.message = Some(format!("Copied path: {text}")),
                         Err(e) => self.message = Some(format!("Failed to copy path: {e}")),
@@ -796,6 +805,64 @@ mod tests {
             0,
             "nothing should have been removed from the tree"
         );
+        Ok(())
+    }
+
+    /// A delete the filesystem refuses is reported, not fatal.
+    ///
+    /// The three filesystem calls in `confirm_delete` used to be the
+    /// only `?` on a filesystem operation in the terminal, and the error
+    /// travelled out through `dispatch` and the event loop and ended the
+    /// process. So a delete refused for any of the ordinary reasons —
+    /// no permission, the file open in something else, a read-only
+    /// volume, or simply gone since the scan — closed the app rather
+    /// than saying why, on the one keystroke where an explanation
+    /// matters most.
+    ///
+    /// The race is the easiest of those to stage: the tree still holds
+    /// the entry, the disk no longer does.
+    #[test]
+    fn a_delete_the_filesystem_refuses_is_reported_rather_than_fatal() -> Result<()> {
+        let dir = crate::util::scratch_dir("tui", "refused_delete");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let doomed = dir.join("doomed.txt");
+        std::fs::write(&doomed, b"bytes")?;
+
+        let tree = crate::scanner::scan_to_completion(&dir)?;
+        let mut app = App::new(tree);
+        assert_eq!(
+            app.tree.root.children.len(),
+            1,
+            "the scan should have found the one file"
+        );
+        app.selected = 0;
+        app.pending_delete = Some(PendingDelete {
+            orig_idx: 0,
+            name: std::ffi::OsString::from("doomed.txt"),
+            permanent: true,
+            is_dir: false,
+        });
+
+        // Something else gets there first.
+        std::fs::remove_file(&doomed)?;
+
+        // The whole point: this returns rather than propagating.
+        app.dispatch(Action::ConfirmDelete)?;
+
+        assert!(
+            app.message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("Could not delete")),
+            "the failure should reach the status line, got {:?}",
+            app.message
+        );
+        assert_eq!(
+            app.tree.root.children.len(),
+            1,
+            "and nothing should be subtracted from a tree the disk still agrees with              about this entry never having been removed by us"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

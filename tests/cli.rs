@@ -330,9 +330,9 @@ fn a_multi_root_csv_uses_each_root_path() -> Result<()> {
 /// A path as a string with separators and any verbatim prefix flattened,
 /// so two spellings of one place compare equal.
 ///
-/// Windows canonicalization returns a `\?\C:\...` form; the CSV carries
-/// whatever the scanner was handed. A comparison that kept either would
-/// be testing the spelling rather than the path.
+/// Windows canonicalization returns a `\\?\C:\...` form; the CSV strips
+/// that prefix back off (`util::display_path`). A comparison that kept
+/// either would be testing the spelling rather than the path.
 fn flatten(text: &str) -> String {
     text.replace('\\', "/").replace("//?/", "")
 }

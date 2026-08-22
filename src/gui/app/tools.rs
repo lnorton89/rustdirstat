@@ -296,7 +296,7 @@ impl GuiApp {
             } else {
                 "Moved to Recycle Bin"
             },
-            path.display()
+            crate::util::display_path(&path)
         ));
         self.selected_path = None;
         self.refresh_scan()
@@ -326,7 +326,7 @@ impl GuiApp {
                 self.status = Some(format!(
                     "Nothing was emptied: {unreadable} entr{} could not be read ({})",
                     if unreadable == 1 { "y" } else { "ies" },
-                    path.display()
+                    crate::util::display_path(&path)
                 ));
             }
             crate::util::EmptyOutcome::Partial {
@@ -339,17 +339,17 @@ impl GuiApp {
                     Some(error) => format!(
                         "Emptied {done} of {total} items in {}; {failed} could not be \
                          moved to trash ({error})",
-                        path.display()
+                        crate::util::display_path(&path)
                     ),
                     None => format!(
                         "Emptied {done} of {total} items in {}; {failed} could not be \
                          moved to trash",
-                        path.display()
+                        crate::util::display_path(&path)
                     ),
                 });
             }
             crate::util::EmptyOutcome::Emptied { .. } => {
-                self.status = Some(format!("Emptied: {}", path.display()));
+                self.status = Some(format!("Emptied: {}", crate::util::display_path(&path)));
             }
         }
         self.refresh_scan()

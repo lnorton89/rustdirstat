@@ -135,10 +135,16 @@ pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
 }
 
 pub(super) fn choose_folder(app: &mut GuiApp) {
-    if let Some(path) = rfd::FileDialog::new()
-        .set_directory(&app.tree.root_path)
-        .pick_folder()
-    {
+    // Opened where the scan is, which with several roots is the first of
+    // them: the tree's own `root_path` is the label `Selected locations`
+    // and names no directory for the dialog to start in.
+    let start = app
+        .tree
+        .roots
+        .first()
+        .map(|root| root.path.clone())
+        .unwrap_or_else(|| app.tree.root_path.clone());
+    if let Some(path) = rfd::FileDialog::new().set_directory(&start).pick_folder() {
         if let Err(e) = app.open_folder(&path) {
             app.status = Some(format!("Scan failed: {e}"));
         }
@@ -174,7 +180,11 @@ pub(super) fn reveal_selected(app: &mut GuiApp) {
 
 pub(super) fn copy_path(app: &mut GuiApp) {
     if let Some(path) = app.selected_fs_path() {
-        let text = path.display().to_string();
+        // The spelling a person would type, not the canonical one: what
+        // lands on the clipboard is going into someone else's address
+        // bar or command line, and `\\?\C:\...` is refused by most of
+        // them. See `util::display_path`.
+        let text = crate::util::display_path(&path);
         match crate::util::copy_to_clipboard(&text) {
             Ok(()) => app.status = Some(format!("Copied: {text}")),
             Err(e) => app.status = Some(format!("Copy failed: {e}")),
@@ -188,8 +198,14 @@ pub(super) fn export_csv(app: &mut GuiApp) {
         .set_file_name("rustdirstat.csv")
         .save_file()
     {
-        match crate::csv_export::write_csv_to_file(&app.tree.root_path, &app.tree.root, &path) {
-            Ok(()) => app.status = Some(format!("Exported: {}", path.display())),
+        // `write_tree_csv`, not `write_csv_to_file`: with more than one
+        // root the tree's `root_path` is the label `Selected locations`,
+        // so every row came out as `Selected locations\Users\report.docx`
+        // — a path that exists nowhere, in the file whose only purpose is
+        // to be read by something else. It writes each root against its
+        // own path, and a single-root tree exactly as before.
+        match crate::csv_export::write_tree_csv(&app.tree, &path) {
+            Ok(()) => app.status = Some(format!("Exported: {}", crate::util::display_path(&path))),
             Err(e) => app.status = Some(format!("Export failed: {e}")),
         }
     }
