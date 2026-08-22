@@ -110,6 +110,78 @@ jobs:
       - name: Build
         run: cargo build --release --bins --target ${{ matrix.target }}
 
+      # Code signing, if and only if the certificates exist.
+      #
+      # They cannot live in this repository — Authenticode and Apple
+      # Developer certificates are bought, are tied to an identity, and
+      # are exactly the kind of secret a public repo must not hold — so
+      # these steps read them from repository secrets and *skip silently*
+      # when the secrets are unset. That is the deliberate design: the
+      # release path is complete and inert, so the day a certificate
+      # exists it is a secret away from signed releases rather than a
+      # workflow away.
+      #
+      # Until then, provenance and SBOM attestations are what this project
+      # can offer instead, and they ship on every asset. See
+      # docs/ROADMAP.md.
+      #
+      # Windows: WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD.
+      - name: Sign Windows binaries
+        if: runner.os == 'Windows' && env.CERT != ''
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT))
+          $bin = "target/$env:TARGET/release"
+          # SHA-256, RFC 3161 timestamp: a signature without a timestamp
+          # stops verifying the day the certificate expires, which for a
+          # release archive people download for years is the same as not
+          # signing it.
+          & signtool sign /fd SHA256 /td SHA256 `
+            /tr http://timestamp.digicert.com `
+            /f $pfx /p $env:CERT_PASSWORD `
+            "$bin/rustdirstat.exe" "$bin/rustdirstat-gui.exe"
+          Remove-Item $pfx -Force
+
+      # macOS: MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD,
+      # MACOS_SIGN_IDENTITY, and for notarisation MACOS_NOTARY_KEY_ID,
+      # MACOS_NOTARY_ISSUER_ID, MACOS_NOTARY_KEY_BASE64.
+      - name: Sign macOS binaries
+        if: runner.os == 'macOS' && env.CERT != ''
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 900 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$password" "$keychain" >/dev/null
+          security list-keychain -d user -s "$keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Hardened runtime and a timestamp: notarisation refuses a
+          # binary without either, so signing without them would produce
+          # something that still cannot be distributed.
+          for binary in rustdirstat rustdirstat-gui; do
+            codesign --force --timestamp --options runtime \
+              --sign "$IDENTITY" "target/$TARGET/release/$binary"
+            codesign --verify --strict --verbose=2 "target/$TARGET/release/$binary"
+          done
+
       # Both binaries ship together: the TUI/report tool and the desktop
       # GUI are two front ends over one scanner, and someone who wants one
       # usually wants the other available.
@@ -189,6 +261,33 @@ jobs:
       # and SBOM are uploaded — the staging directory with the raw
       # binaries, README, and LICENSE stays inside the build job where
       # it belongs.
+      # Notarisation, again only when the credentials exist. The archive
+      # is what is submitted, because it is what a user downloads — a
+      # signed binary inside an un-notarised zip is still quarantined by
+      # Gatekeeper.
+      - name: Notarise macOS archive
+        if: runner.os == 'macOS' && env.NOTARY_KEY != ''
+        env:
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/notary.p8"
+          echo "$NOTARY_KEY" | base64 --decode > "$key"
+          archive="dist/rustdirstat-${TAG}-${TARGET}.tar.gz"
+          xcrun notarytool submit "$archive" \
+            --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --wait --timeout 30m
+          rm -f "$key"
+          # No stapling: `stapler` works on app bundles and disk images,
+          # not on a tarball of two command-line binaries. The ticket is
+          # published to Apple's servers by the submission above, which is
+          # what Gatekeeper checks on first launch.
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

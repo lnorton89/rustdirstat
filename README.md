@@ -99,6 +99,23 @@ sudo dpkg -i rustdirstat-v0.3.0-amd64.deb        # Debian, Ubuntu
 sudo rpm -i rustdirstat-v0.3.0-x86_64.rpm        # Fedora, openSUSE, RHEL
 ```
 
+### Signing
+
+Release binaries are **not** code-signed: an Authenticode certificate and
+an Apple Developer membership are bought and tied to an identity, and
+neither can live in a public repository. Windows SmartScreen and macOS
+Gatekeeper will say so.
+
+What is offered instead is provenance: every asset carries a signed
+attestation naming the workflow, the commit and the tag that produced it,
+which `gh attestation verify` checks against GitHub's transparency log —
+a stronger statement about *where the bytes came from* than a code
+signature makes, and a weaker one about *who the publisher is*.
+
+The signing path itself is written and waiting: `release.yml` signs and
+notarises when the certificate secrets are present, and skips when they
+are not. Adding them is all that stands between here and signed releases.
+
 ### Package managers
 
 Each release also ships a `package-manifests.tar.gz` containing a winget
