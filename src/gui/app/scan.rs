@@ -29,6 +29,18 @@ pub(in crate::gui) struct ScanOutcome {
     largest_files: Vec<top_files::TopFile>,
 }
 
+/// What a scan thread sends back.
+///
+/// `Cancelled` is its own arm rather than an `Err`: the user asked for
+/// this, and reporting "Scan failed" because they pressed Cancel is the
+/// kind of wrong that erodes trust in every other message the status bar
+/// prints.
+pub(in crate::gui) enum ScanMessage {
+    Done(Box<ScanOutcome>),
+    Cancelled,
+    Failed(String),
+}
+
 /// Hands a value off to a detached thread to be dropped there.
 ///
 /// Freeing a scanned tree is not cheap: it walks every node and returns
@@ -174,23 +186,47 @@ impl GuiApp {
         let (tx, rx) = mpsc::channel();
         let physical = self.use_physical;
         std::thread::spawn(move || {
-            let result = crate::scanner::scan(&root, Some(worker_progress.as_ref()))
-                .map_err(|error| error.to_string())
-                .map(|tree| {
+            let message = match crate::scanner::scan(&root, Some(worker_progress.as_ref())) {
+                Ok(crate::scanner::Scan::Completed(tree)) => {
+                    let tree = *tree;
                     let extensions = collect_extension_rows(&tree.root, physical);
                     let largest_files = top_files::top_k(&tree.root, 200);
-                    ScanOutcome {
+                    ScanMessage::Done(Box::new(ScanOutcome {
                         tree,
                         extensions,
                         largest_files,
-                    }
-                });
-            let _ = tx.send(result);
+                    }))
+                }
+                Ok(crate::scanner::Scan::Cancelled) => ScanMessage::Cancelled,
+                Err(error) => ScanMessage::Failed(error.to_string()),
+            };
+            let _ = tx.send(message);
         });
         self.scan_progress = Some(progress);
         self.scan_rx = Some(rx);
         self.scan_resets_workspace = reset_workspace;
         self.status = Some(format!("Scanning {display}…"));
+    }
+
+    /// Puts the app in the state it is in while a scan runs, without
+    /// running one.
+    ///
+    /// A real scan of a test fixture finishes in microseconds, so a test
+    /// that starts one and then tries to cancel it is a race it usually
+    /// loses — and a test that only calls `cancel_scan` directly proves
+    /// nothing about the button that is supposed to call it. This hands
+    /// back the worker end of a scan that will never finish, so the
+    /// cancel path can be driven through the real control at leisure.
+    #[cfg(test)]
+    pub(in crate::gui) fn pretend_scan_is_running(
+        &mut self,
+    ) -> (mpsc::Sender<ScanMessage>, Arc<crate::scanner::Progress>) {
+        let progress = Arc::new(crate::scanner::Progress::default());
+        let (tx, rx) = mpsc::channel();
+        self.scan_progress = Some(Arc::clone(&progress));
+        self.scan_rx = Some(rx);
+        self.scan_resets_workspace = false;
+        (tx, progress)
     }
 
     /// The current zoom, selection, and expansion, as name identities.
@@ -210,6 +246,29 @@ impl GuiApp {
             selected,
             expanded,
         })
+    }
+
+    /// Whether a scan is in flight right now.
+    ///
+    /// Narrower than [`Self::is_busy`], which also covers duplicate
+    /// hashing and the Windows maintenance tools: only a scan answers to
+    /// the scan cancel.
+    pub(in crate::gui) fn scan_is_running(&self) -> bool {
+        self.scan_rx.is_some()
+    }
+
+    /// Asks the running scan to stop.
+    ///
+    /// Returns immediately. The worker notices at its next directory
+    /// boundary, sends [`ScanMessage::Cancelled`], and drops its partial
+    /// tree on its own thread — waiting for any of that here would freeze
+    /// the window for exactly as long as the operation being cancelled,
+    /// which is the opposite of the point.
+    pub(in crate::gui) fn cancel_scan(&mut self) {
+        if let Some(progress) = &self.scan_progress {
+            progress.cancel();
+            self.status = Some("Cancelling the scan…".to_string());
+        }
     }
 
     pub(in crate::gui) fn is_busy(&self) -> bool {
@@ -300,21 +359,21 @@ impl GuiApp {
         let scan_result = self.scan_rx.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err("The scan worker stopped unexpectedly".to_string()))
-            }
+            Err(mpsc::TryRecvError::Disconnected) => Some(ScanMessage::Failed(
+                "The scan worker stopped unexpectedly".to_string(),
+            )),
         });
         if let Some(result) = scan_result {
             self.scan_rx = None;
             self.scan_progress = None;
             match result {
-                Ok(outcome) => {
+                ScanMessage::Done(outcome) => {
                     let reset = self.scan_resets_workspace;
                     let ScanOutcome {
                         tree,
                         extensions,
                         largest_files,
-                    } = outcome;
+                    } = *outcome;
                     self.replace_tree(tree);
                     if reset {
                         self.reset_workspace();
@@ -374,7 +433,14 @@ impl GuiApp {
                     self.duplicate_groups.clear();
                     self.status = Some("Scan complete".to_string());
                 }
-                Err(error) => {
+                ScanMessage::Cancelled => {
+                    // Nothing to restore *to*: the tree on screen is the
+                    // one that was already there, untouched, and the
+                    // capture taken when this scan started describes it.
+                    self.restore = None;
+                    self.status = Some("Scan cancelled".to_string());
+                }
+                ScanMessage::Failed(error) => {
                     self.restore = None;
                     self.status = Some(format!("Scan failed: {error}"));
                 }

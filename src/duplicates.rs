@@ -388,7 +388,7 @@ mod tests {
             }
         }
 
-        let tree = crate::scanner::scan(root, None)?;
+        let tree = crate::scanner::scan_to_completion(root)?;
 
         // Room for everything: both groups come back, nothing skipped.
         let all = find_duplicates_capped(&tree, None, 100);
@@ -440,7 +440,7 @@ mod tests {
         fs::write(root.join("a.dat"), b"real duplicate")?;
         fs::write(root.join("b.dat"), b"real duplicate")?;
 
-        let tree = crate::scanner::scan(&root, None)?;
+        let tree = crate::scanner::scan_to_completion(&root)?;
         let scan = find_duplicates(&tree, None);
         assert_eq!(
             scan.groups.len(),
@@ -488,7 +488,7 @@ mod tests {
         fs::write(root.join("locked.bin"), b"same size?")?;
         fs::set_permissions(root.join("locked.bin"), fs::Permissions::from_mode(0o000))?;
 
-        let tree = crate::scanner::scan(&root, None)?;
+        let tree = crate::scanner::scan_to_completion(&root)?;
         let scan = find_duplicates(&tree, None);
         // Root reads straight through file permissions, so the failure
         // this test needs cannot be produced there (some CI containers

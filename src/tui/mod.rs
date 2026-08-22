@@ -196,16 +196,24 @@ fn scan_with_progress<B: TerminalBackend>(
                 let cancel = k.kind == KeyEventKind::Press
                     && (k.code == KeyCode::Char('q') || k.code == KeyCode::Esc || is_ctrl_c(&k));
                 if cancel {
+                    // Tell the walk to stop, then leave without joining:
+                    // the worker finishes the directory it is inside and
+                    // drops its partial tree on its own thread, which is
+                    // where a tree-sized free belongs anyway. Before
+                    // 0.3.0 this returned here too, but nothing told the
+                    // scan — so every core stayed busy walking a tree
+                    // whose answer nobody was waiting for.
+                    progress.cancel();
                     return Ok(None);
                 }
             }
         }
     }
 
-    let tree = handle
+    let scan = handle
         .join()
         .map_err(|_| anyhow::anyhow!("scanner thread panicked"))??;
-    Ok(Some(tree))
+    Ok(scan.completed())
 }
 
 /// Runs the interactive browser until the user quits or requests a rescan.

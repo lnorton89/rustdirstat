@@ -3246,3 +3246,115 @@ fn no_literal_spacing_survives_in_the_gui() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+// ------------------------------------------------------- scan cancelling
+
+/// Renders the file area, which is where the busy banner and its cancel
+/// button live.
+fn render_file_area(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
+    apply_style(ctx, app.palette);
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| super::draw_file_area(app, ui));
+    }));
+}
+
+/// The banner offers a way out of a scan, and the button is wired to it.
+///
+/// Driven through the recorded rect rather than by calling `cancel_scan`,
+/// because the thing worth pinning is that the *control* reaches the
+/// cancel — a scan of a whole volume with no visible way to stop it is
+/// the state this sprint existed to remove.
+#[test]
+fn the_busy_banner_can_stop_a_running_scan() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (_worker, progress) = app.pretend_scan_is_running();
+
+    probe(&TEST_SCAN_CANCEL_RECTS).clear();
+    render_file_area(&ctx, &mut app, raw_input(Vec::new()));
+    let button = probe(&TEST_SCAN_CANCEL_RECTS).last().copied();
+    let Some(button) = button else {
+        anyhow::bail!("a running scan drew no cancel button");
+    };
+
+    assert!(
+        !progress
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "nothing has been clicked yet"
+    );
+    render_file_area(
+        &ctx,
+        &mut app,
+        raw_input(pointer_button(button.center(), true)),
+    );
+    render_file_area(
+        &ctx,
+        &mut app,
+        raw_input(pointer_button(button.center(), false)),
+    );
+
+    assert!(
+        progress
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "clicking Cancel scan did not reach the scan"
+    );
+    Ok(())
+}
+
+/// Esc stops a scan when nothing is open in front of it.
+#[test]
+fn escape_stops_a_running_scan() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let (_worker, progress) = app.pretend_scan_is_running();
+
+    press(&ctx, &mut app, egui::Key::Escape, egui::Modifiers::NONE);
+
+    assert!(
+        progress
+            .cancelled
+            .load(std::sync::atomic::Ordering::Relaxed),
+        "Escape with nothing open should stop the scan"
+    );
+    Ok(())
+}
+
+/// A cancelled scan is not a failed one, and leaves the tree alone.
+///
+/// The status line matters more than it looks: "Scan failed" in answer to
+/// a button labelled Cancel teaches the user to distrust every other
+/// message the status bar prints.
+#[test]
+fn a_cancelled_scan_keeps_the_tree_and_says_so() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let before = app.tree.root_path.clone();
+    let (worker, _progress) = app.pretend_scan_is_running();
+
+    worker.send(crate::gui::app::ScanMessage::Cancelled)?;
+    app.poll_background(&ctx);
+
+    assert_eq!(
+        app.tree.root_path, before,
+        "a cancelled scan must leave the tree that was already on screen"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.contains("cancel") || status.contains("Cancel"),
+        "the status said {status:?} rather than reporting the cancel"
+    );
+    assert!(
+        !status.contains("failed"),
+        "a cancel was reported as a failure: {status:?}"
+    );
+    assert!(
+        !app.scan_is_running(),
+        "the scan should be finished with once its message arrives"
+    );
+    Ok(())
+}

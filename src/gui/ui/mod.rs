@@ -133,6 +133,18 @@ pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
                         RichText::new("You can keep browsing the current scan.")
                             .color(palette().secondary_text),
                     );
+                    // Only a scan can be cancelled, so the button appears
+                    // only for one. Duplicate hashing has its own control
+                    // and the maintenance tools are someone else's
+                    // process, which this app does not get to kill.
+                    if app.scan_is_running() {
+                        let cancel = ui.button("Cancel scan");
+                        #[cfg(test)]
+                        probes::probe(&probes::TEST_SCAN_CANCEL_RECTS).push(cancel.rect);
+                        if cancel.clicked() {
+                            app.cancel_scan();
+                        }
+                    }
                 });
             });
         ui.add_space(SPACE_SM);

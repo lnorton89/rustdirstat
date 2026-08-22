@@ -256,7 +256,7 @@ pub(in crate::gui) struct GuiApp {
     pub shell_icons: super::shell_icons::ShellIcons,
     pub treemap_tiles: Vec<treemap_layout::Tile>,
     treemap_key: Option<TreemapKey>,
-    scan_rx: Option<mpsc::Receiver<Result<ScanOutcome, String>>>,
+    scan_rx: Option<mpsc::Receiver<ScanMessage>>,
     scan_resets_workspace: bool,
     /// The user's zoom/selection/expansion captured as name identities
     /// when a refresh scan started, to be re-derived against the new
@@ -412,6 +412,11 @@ impl eframe::App for GuiApp {
 
     fn on_exit(&mut self) {
         self.save_preferences();
+        // A scan still walking has nowhere to deliver to. Telling it to
+        // stop is not required for the process to exit — nothing joins it
+        // — but a window that has visibly closed should not leave every
+        // core but one busy for another minute.
+        self.cancel_scan();
         // Preferences are the only thing that has to survive the process,
         // and they are on disk by now. Everything else is a cache of the
         // filesystem, so the scanned tree is handed off instead of being
@@ -584,7 +589,7 @@ mod tests {
         std::fs::write(first.join("old.txt"), b"old")?;
         std::fs::write(second.join("new.txt"), b"new")?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&first, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&first)?);
         app.open_folder(&second)?;
         assert!(app.is_busy());
         assert_eq!(app.tree.root_path, first);
@@ -619,7 +624,7 @@ mod tests {
         std::fs::write(dir.join("one.bin"), b"same bytes")?;
         std::fs::write(dir.join("two.bin"), b"same bytes")?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.find_duplicates();
         assert!(app.is_busy());
         wait_for_background(&mut app);
@@ -646,7 +651,7 @@ mod tests {
     #[test]
     fn cached_rows_refresh_whenever_an_input_changes() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
 
         app.refresh_visible_rows();
         let collapsed = app.visible_rows.len();
@@ -685,7 +690,7 @@ mod tests {
     #[test]
     fn cached_rows_are_not_rebuilt_when_nothing_changed() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
 
         app.refresh_visible_rows();
         let first = app.visible_rows.as_ptr();
@@ -706,7 +711,7 @@ mod tests {
     #[test]
     fn cached_treemap_follows_the_panel_rect_and_the_zoom() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
 
         app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert!(!app.treemap_tiles.is_empty());
@@ -750,7 +755,7 @@ mod tests {
     #[test]
     fn releasing_the_tree_drops_everything_derived_from_it() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         app.refresh_treemap(0.0, 0.0, 400.0, 300.0, 16.0, false);
         assert!(!app.visible_rows.is_empty());
@@ -779,7 +784,7 @@ mod tests {
         std::fs::create_dir_all(&second)?;
         std::fs::write(second.join("other.bin"), vec![9_u8; 32])?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&first, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&first)?);
         // Put the workspace into a thoroughly used state.
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
@@ -817,7 +822,7 @@ mod tests {
     #[test]
     fn a_refresh_scan_restores_selection_and_zoom() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
         app.toggle_expanded(&alpha);
@@ -855,7 +860,7 @@ mod tests {
     #[test]
     fn a_selection_whose_file_vanished_is_dropped_not_moved_to_its_parent() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
         app.toggle_expanded(&alpha);
@@ -891,7 +896,7 @@ mod tests {
     #[test]
     fn a_stale_view_is_still_validated_when_no_identity_could_be_captured() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         // Point the view somewhere the current tree cannot resolve, so
         // the capture step has nothing to capture.
@@ -934,7 +939,7 @@ mod tests {
         std::fs::write(dir.join("alpha/one.bin"), vec![1_u8; 8])?;
         std::fs::write(dir.join("beta/two.txt"), vec![2_u8; 8])?;
 
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         let alpha = row_path(&app, "alpha")?;
         app.zoom_path = alpha;
@@ -969,7 +974,7 @@ mod tests {
     #[test]
     fn a_queued_deletion_does_not_survive_a_rescan() -> anyhow::Result<()> {
         let dir = nested_test_tree()?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.refresh_visible_rows();
         app.select_path(row_path(&app, "alpha")?);
         app.request_delete_selected(true);
@@ -1003,7 +1008,7 @@ mod tests {
     fn scan_root_cannot_be_queued_for_deletion() -> anyhow::Result<()> {
         let dir = scratch_dir("gui", "root_delete");
         std::fs::create_dir_all(&dir)?;
-        let mut app = GuiApp::new(crate::scanner::scan(&dir, None)?);
+        let mut app = GuiApp::new(crate::scanner::scan_to_completion(&dir)?);
         app.select_path(Vec::new());
         app.request_delete_selected(false);
         assert!(app.pending_delete.is_none());

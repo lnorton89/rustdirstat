@@ -45,6 +45,13 @@ pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)
 pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Where the "Cancel scan" button landed, so a test can press the real
+/// control rather than calling `cancel_scan` directly and proving
+/// nothing about the button.
+#[cfg(test)]
+pub(super) static TEST_SCAN_CANCEL_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// `(label, x of the first glyph)` for every table column header, of
 /// either kind. Two widgets paint these and they have to agree.
 #[cfg(test)]

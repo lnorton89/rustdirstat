@@ -33,7 +33,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Shared, lock-free counters updated as the background scan progresses, so
 /// the UI thread can poll them without blocking the scan. Updated once per
@@ -44,6 +44,56 @@ pub struct Progress {
     pub files: AtomicU64,
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
+    /// Set by whoever asked for the scan to stop it early.
+    ///
+    /// Read once per directory, in the same places the counters are
+    /// written, for the same reason: a relaxed load per directory is
+    /// free, and one per entry would put the flag on the hot path of a
+    /// nine-million-node walk. The cost of that choice is that a
+    /// cancelled scan finishes the directory it is inside, which is
+    /// bounded by one directory's entries rather than by the tree.
+    ///
+    /// [`DupProgress`] has had one of these since 0.2.1
+    /// (`crate::duplicates`); the scanner had no way to be stopped at
+    /// all, so a mistyped root or a slow network share had to be waited
+    /// out with every core but one busy.
+    pub cancelled: AtomicBool,
+}
+
+impl Progress {
+    /// Asks the scan to stop at its next directory boundary.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+
+/// Whether a scan ran to completion or was stopped part way.
+///
+/// A cancel is not a failure, and must not arrive as one: an `Err` here
+/// would put "Scan failed" in a status bar because the user pressed the
+/// button that says Cancel. The partial tree is deliberately not
+/// returned — a half-walked tree is indistinguishable from a real one
+/// once it reaches a view, and every size in it would be wrong.
+pub enum Scan {
+    /// Boxed because a `Tree` is a couple of hundred bytes and the other
+    /// arm is empty: without it every `Result<Scan>` in the crate — most
+    /// of which are `Cancelled` never — would carry a tree-sized hole.
+    Completed(Box<Tree>),
+    Cancelled,
+}
+
+impl Scan {
+    /// The tree, if the scan finished.
+    pub fn completed(self) -> Option<Tree> {
+        match self {
+            Self::Completed(tree) => Some(*tree),
+            Self::Cancelled => None,
+        }
+    }
 }
 
 /// Below this many entries, a directory's children are scanned on the
@@ -80,11 +130,11 @@ fn scan_pool() -> Option<&'static rayon::ThreadPool> {
     .as_ref()
 }
 
-pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Tree> {
+pub fn scan(root: &Path, progress: Option<&Progress>) -> Result<Scan> {
     scan_with_options(root, progress, ScanOptions::default())
 }
 
-fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) -> Result<Tree> {
+fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) -> Result<Scan> {
     // The fallback (a path with no final component, like `/` or `C:\`)
     // keeps the raw `OsString` rather than going through `display()`,
     // which is lossy.
@@ -138,14 +188,21 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
         }
     };
 
+    // Asked between the walk and the tree it produces: a partial tree
+    // must not be handed back as a real one, and by here the walk has
+    // already stopped at its first directory boundary past the cancel.
+    if progress.is_some_and(Progress::is_cancelled) {
+        return Ok(Scan::Cancelled);
+    }
+
     let (volume_free, volume_total) = crate::platform::volume_space(root);
 
-    Ok(Tree {
+    Ok(Scan::Completed(Box::new(Tree {
         root_path: root.to_path_buf(),
         root: root_node,
         volume_free,
         volume_total,
-    })
+    })))
 }
 
 /// How many directory levels the parallel walk may recurse through
@@ -192,10 +249,36 @@ pub fn scan_with_options(
     root: &Path,
     progress: Option<&Progress>,
     options: ScanOptions,
-) -> Result<Tree> {
+) -> Result<Scan> {
     match scan_pool() {
         Some(pool) => pool.install(|| scan_inner(root, progress, options)),
         None => scan_inner(root, progress, options),
+    }
+}
+
+/// A scan nobody can cancel, as a plain [`Tree`].
+///
+/// [`Scan::Cancelled`] is only reachable through a [`Progress`] someone
+/// else is holding, so a caller that passes none cannot observe it: the
+/// CLI's two non-interactive modes are in that position, and so is every
+/// test that scans a fixture. Making each of them re-handle an arm that
+/// cannot occur is noise, and noise is where a real cancel eventually
+/// gets ignored.
+///
+/// Anything with a user in front of it must call [`scan`] and answer the
+/// cancel properly.
+pub fn scan_to_completion(root: &Path) -> Result<Tree> {
+    scan_to_completion_with_options(root, ScanOptions::default())
+}
+
+/// [`scan_to_completion`] with non-default options.
+pub fn scan_to_completion_with_options(root: &Path, options: ScanOptions) -> Result<Tree> {
+    match scan_with_options(root, None, options)? {
+        Scan::Completed(tree) => Ok(*tree),
+        // Unreachable, and an error rather than a panic: the crate denies
+        // `unreachable!` for the reason this line exists, which is that
+        // "cannot happen" is a claim about code someone may later change.
+        Scan::Cancelled => anyhow::bail!("a scan with no cancel token reported cancellation"),
     }
 }
 
@@ -208,6 +291,13 @@ fn scan_dir(
 ) -> Node {
     if depth >= MAX_PARALLEL_DEPTH {
         return scan_dir_deep(path, name, progress, root_dev);
+    }
+    // One relaxed load per directory, in the same place the counters are
+    // touched. The subtree below an abandoned directory is never walked,
+    // so a cancel propagates outward at the speed of the directories
+    // already in flight rather than the size of what is left.
+    if progress.is_some_and(Progress::is_cancelled) {
+        return abandoned_dir(name);
     }
 
     let dir_meta = std::fs::symlink_metadata(path).ok();
@@ -370,6 +460,12 @@ fn scan_dir_deep(
     let mut finished: Option<Node> = None;
 
     while let Some(frame) = stack.last_mut() {
+        // Checked once per iteration rather than once per directory: this
+        // walk is the deep, narrow tail of a chain, where a single
+        // directory can be most of the remaining work.
+        if progress.is_some_and(Progress::is_cancelled) {
+            return abandoned_dir(path.file_name().map(OsString::from).unwrap_or_default());
+        }
         let Some(entry) = frame.entries.next() else {
             // Every child accounted for: aggregate and hand upward.
             let Some(frame) = stack.pop() else {
@@ -563,6 +659,35 @@ fn other_filesystem_stub(entry: EntryInfo) -> Node {
 }
 
 /// The node standing in for a directory that could not be opened at all.
+/// The stand-in for a directory the walk gave up on because the scan was
+/// cancelled.
+///
+/// It is never seen by anyone: [`scan_inner`] returns [`Scan::Cancelled`]
+/// rather than the tree these nodes are part of, and the whole thing is
+/// dropped. It exists because the walk aggregates bottom-up and every
+/// branch has to hand *something* back — and it is deliberately not
+/// counted as unreadable, so a cancel can never be mistaken for a
+/// permissions problem if this ever does become visible.
+fn abandoned_dir(name: OsString) -> Node {
+    Node {
+        name,
+        is_dir: true,
+        is_symlink: false,
+        size: 0,
+        physical_size: 0,
+        file_count: 0,
+        dir_count: 0,
+        modified: None,
+        children: vec![],
+        error: false,
+        category: None,
+        ext_totals: vec![(0u64, 0u64, 0u64); Category::COUNT],
+        unreadable_count: 0,
+        file_id: None,
+        other_filesystem: false,
+    }
+}
+
 fn unreadable_dir(
     name: OsString,
     dir_meta: Option<std::fs::Metadata>,
@@ -707,6 +832,128 @@ mod tests {
     use super::*;
     use crate::util::scratch_dir;
     use std::fs;
+
+    /// A cancelled scan says so, and stops walking.
+    ///
+    /// Both halves matter. Reporting `Cancelled` while having walked the
+    /// whole tree anyway would look right from the outside and still
+    /// leave every core busy for a minute on a real volume, which is the
+    /// bug this exists to prevent — so the flag is set *before* the walk
+    /// starts and the counters are read afterwards to prove the walk
+    /// stopped early.
+    #[test]
+    fn a_cancelled_scan_reports_cancelled_and_stops_walking() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "cancel_before");
+        build_fixture(&root)?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let outcome = scan(&root, Some(&progress))?;
+
+        let Scan::Cancelled = outcome else {
+            anyhow::bail!("a scan cancelled before it started should report Cancelled");
+        };
+        let walked = progress.files.load(Ordering::Relaxed);
+        assert_eq!(
+            walked, 0,
+            "the walk kept going after the cancel: {walked} files were counted"
+        );
+        Ok(())
+    }
+
+    /// Cancelling part way through leaves the caller with no tree at all,
+    /// rather than a half-walked one.
+    ///
+    /// A partial tree is the dangerous outcome: every directory total in
+    /// it is short by whatever was not walked, and nothing downstream —
+    /// the treemap, the percentages, a delete confirmation quoting a
+    /// folder size — could tell. So the cancel path returns the marker and
+    /// the partial tree is dropped on the scan thread.
+    #[test]
+    fn cancelling_part_way_returns_no_tree() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "cancel_midway");
+        build_fixture(&root)?;
+
+        let progress = std::sync::Arc::new(Progress::default());
+        let watcher = std::sync::Arc::clone(&progress);
+        let scan_root = root.clone();
+        let handle = std::thread::spawn(move || scan(&scan_root, Some(watcher.as_ref())));
+
+        // Cancel as soon as the walk has actually started, so this is a
+        // mid-flight cancel rather than the "never started" case above.
+        // A spin rather than a sleep: the fixture is small enough that a
+        // fixed wait would usually miss the window entirely.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while progress.dirs.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+        progress.cancel();
+
+        let Ok(outcome) = handle.join() else {
+            anyhow::bail!("the scan thread panicked");
+        };
+        // Either answer is legitimate here — a fixture this small can
+        // finish before the cancel lands — but a *tree* must never come
+        // back once the flag has been read.
+        match outcome? {
+            Scan::Cancelled => {}
+            Scan::Completed(tree) => assert!(
+                !progress.is_cancelled() || tree.root.file_count > 0,
+                "a completed scan must be a real one"
+            ),
+        }
+        Ok(())
+    }
+
+    /// The deep, iterative walk answers the cancel too.
+    ///
+    /// It is a separate loop from the parallel walk with its own frame
+    /// discipline, and it is the one that runs on the narrow tails where a
+    /// single directory can be most of the remaining work — a cancel
+    /// checked only in `scan_dir` would be ignored for the whole of it.
+    #[test]
+    fn the_deep_walk_answers_a_cancel() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "cancel_deep");
+        let mut chain = root.join("deep");
+        for _ in 0..(MAX_PARALLEL_DEPTH + 16) {
+            chain = chain.join("d");
+        }
+        fs::create_dir_all(&chain)?;
+        fs::write(chain.join("bottom.bin"), vec![b'z'; 64])?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let outcome = scan_dir_deep(
+            &root.join("deep"),
+            std::ffi::OsString::from("deep"),
+            Some(&progress),
+            None,
+        );
+
+        assert!(
+            outcome.children.is_empty() && outcome.file_count == 0,
+            "the deep walk kept descending after the cancel"
+        );
+        assert!(
+            !outcome.error,
+            "an abandoned directory is not an unreadable one"
+        );
+        Ok(())
+    }
+
+    /// `scan_to_completion` is the no-token path, and its impossible arm
+    /// stays impossible.
+    #[test]
+    fn a_scan_with_no_token_completes() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "no_token");
+        build_fixture(&root)?;
+        let tree = scan_to_completion(&root)?;
+        assert!(
+            tree.root.file_count > 0,
+            "the fixture has files, so the tree should too"
+        );
+        Ok(())
+    }
 
     /// A tree with something in it for each branch of the walk: a
     /// directory wide enough to go through rayon, a chain deeper than
