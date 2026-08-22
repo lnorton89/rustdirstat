@@ -1,14 +1,20 @@
 # Roadmap and deferred work
 
-Two lists. The first is what a release is currently aiming at; the second
-is everything that has been *deliberately* left out, with the reason and
-the earliest release it could sensibly land in.
+Three lists: what a release is aiming at, what is still open on the
+release currently in flight, and everything that has been *deliberately*
+left out — each with its reason and the earliest release it could
+sensibly land in.
 
-The second list is the point of this file. A sprint plan's non-goals
+The last two are the point of this file. A sprint plan's non-goals
 disappear when the release ships, and the same idea then gets re-proposed
-from scratch six months later with none of the reasoning attached. These
-are decisions, not omissions — so they live somewhere that outlives the
-plan that made them.
+from scratch six months later with none of the reasoning attached; work
+that is merely *unfinished* disappears faster still, because it only ever
+existed in whichever conversation stopped short of it. These are
+decisions and open threads, not omissions — so they live somewhere that
+outlives the plan, and the session, that made them.
+
+**Anything deferred, cut, or left unverified goes in this file before the
+conversation that decided it ends.**
 
 ## In flight
 
@@ -25,7 +31,24 @@ plan that made them.
 | 6 | 120 FPS held during a scan, with tests that check it | done |
 | 7 | Properties as a modeless, movable window | done |
 
+## Open on 0.3.0
+
+Everything in the sprint table above is implemented and reviewed; these
+are what stand between that and a shipped release.
+
+| Item | State | Notes |
+|---|---|---|
+| Merge [PR #7](https://github.com/lnorton89/rustdirstat/pull/7) | waiting | Required checks were green on the branch before and after the review-fix commit. |
+| Cut `v0.3.0` | not started | Per [`CONTRIBUTING.md`](../CONTRIBUTING.md), in order: version bump commit, `cargo run --example changelog -- --release v0.3.0` committed *before* any tag, PR with checks green, merge commit (never a squash), annotated tag on the merge commit, push. |
+| Watch the window on macOS and Linux | **not done** | The egui 0.36 migration's own "done when" asked for a person watching the app on all three platforms. It was run, screenshotted and driven on Windows only; the other two have passing tests and a compiling build, which is not the same claim. |
+| First real run of the new packaging | pending | The `.rpm` was built for real in WSL and CI now builds both Linux packages on every PR, but the winget/Homebrew/AUR manifest rendering has only ever run as workflow text. The `v0.3.0` release is its first execution — check the `package-manifests.tar.gz` asset before announcing it anywhere. |
+| Decide whether the Windows listing keeps its cost | open | The directory-listing walk buys cluster-accurate sizes and scan-time identity for about 13 µs per directory ([`PERFORMANCE.md`](PERFORMANCE.md) §0b). That is a real regression on a shallow tree of tiny directories, taken deliberately. `RUSTDIRSTAT_STD_LISTING=1` is the way back, and whether that escape hatch stays past 0.3.0 is undecided. |
+
 ## Deferred, with reasons
+
+None of these were attempted in 0.3.0, and none of them were meant to be:
+they were the plan's explicit non-goals, and this is where they carry on
+existing now that the plan is finished with.
 
 | Item | Why not now | Earliest |
 |---|---|---|
