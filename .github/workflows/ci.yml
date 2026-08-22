@@ -119,3 +119,19 @@ jobs:
       # with LTO and optimizations on.
       - name: Build release binaries
         run: cargo build --release --bins
+
+      # Packaging is the part of a release that nothing else exercises,
+      # and a broken packaging step is only discovered while cutting the
+      # release it breaks. Both packages are built here from the release
+      # binaries above — the same versions the release workflow pins —
+      # and thrown away; nothing is uploaded. Linux only, because that is
+      # where both formats are built for real.
+      - name: Package (dry run)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cargo install cargo-deb --version 3.7.0 --locked
+          cargo install cargo-generate-rpm --version 0.16.1 --locked
+          cargo deb --no-build --no-strip --output /tmp/ci-check.deb
+          cargo generate-rpm --output /tmp/ci-check.rpm
+          ls -l /tmp/ci-check.deb /tmp/ci-check.rpm

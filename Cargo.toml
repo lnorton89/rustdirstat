@@ -98,6 +98,20 @@ assets = [
     ["LICENSE", "usr/share/doc/rustdirstat/LICENSE", "644"],
 ]
 
+# `cargo generate-rpm` (the release workflow's second Linux packaging
+# step) reads this. It builds from the same `target/release` binaries
+# `cargo deb` packages, so the two are the same bytes in two wrappers.
+# `assets` lists both front ends for the reason the archives carry both:
+# they are two faces of one scanner and someone who wants one usually
+# wants the other to hand.
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/rustdirstat", dest = "/usr/bin/rustdirstat", mode = "755" },
+    { source = "target/release/rustdirstat-gui", dest = "/usr/bin/rustdirstat-gui", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/rustdirstat/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/doc/rustdirstat/LICENSE", mode = "644", doc = true },
+]
+
 # Only the brand-asset generator needs these: `cargo run --example
 # brand_assets` re-renders the PNGs in `assets/brand/` from `src/brand.rs`.
 # Both are already in the tree as eframe dependencies, so this pulls

@@ -76,7 +76,31 @@ The terminal UI, the same three coupled views over the same scanning core:
 Prebuilt archives for Linux, macOS (Intel and Apple Silicon), and Windows
 are attached to each [release](https://github.com/lnorton89/rustdirstat/releases).
 Each contains both binaries and a `.sha256` companion file to verify the
-download against.
+download against, and every asset carries a signed build provenance
+attestation:
+
+```sh
+gh attestation verify rustdirstat-v0.3.0-x86_64-unknown-linux-gnu.tar.gz -R lnorton89/rustdirstat
+```
+
+### Linux packages
+
+A `.deb` and an `.rpm` are attached to each release, both holding the two
+binaries and built from the same bytes as the archive:
+
+```sh
+sudo dpkg -i rustdirstat-v0.3.0-amd64.deb        # Debian, Ubuntu
+sudo rpm -i rustdirstat-v0.3.0-x86_64.rpm        # Fedora, openSUSE, RHEL
+```
+
+### Package managers
+
+Each release also ships a `package-manifests.tar.gz` containing a winget
+manifest, a Homebrew formula, and an AUR `PKGBUILD`, generated from the
+digests of the assets that were actually built. They are published as
+assets rather than checked in because a manifest carrying the previous
+release's SHA-256 is worse than no manifest — it installs the wrong bytes
+without complaining.
 
 ### Nix
 

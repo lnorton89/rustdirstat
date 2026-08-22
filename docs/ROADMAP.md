@@ -21,7 +21,7 @@ plan that made them.
 | 2 | A scan you can stop (cancellation) | done |
 | 3 | Windows: one handle per directory (allocation size, scan-time file id) | done |
 | 4 | More than one scan root | done |
-| 5 | Distribution breadth (rpm, AppImage, winget, Homebrew, AUR) | not started |
+| 5 | Distribution breadth (rpm, winget, Homebrew, AUR) | done |
 | 6 | 120 FPS held during a scan, with tests that check it | done |
 | 7 | Properties as a modeless, movable window | done |
 
@@ -34,7 +34,8 @@ plan that made them.
 | **User-defined cleanup commands** (WinDirStat's "Cleanups") | A shell-execution surface in an app whose other buttons delete files. Wants a written threat model — argument quoting, what a `%p` expansion may contain, whether a command may run on a multi-selection — before any code. | unscheduled |
 | **Localization** | Both front ends are English-only and nothing is wired for translation; the TUI additionally assumes width-1 glyphs in places `unicode-width` does not cover. | unscheduled |
 | **Signed installers** (Authenticode, macOS notarization) | Needs paid certificates that cannot live in the repository. Provenance and SBOM attestations are the substitute a certificate-less project can offer, and they ship today. | blocked, not deferred |
-| **Publishing to crates.io** | Undecided rather than rejected: `cargo install rustdirstat` would work, but a GUI binary crate on crates.io implies a support surface. Revisit alongside the 0.3.0 packaging sprint. | 0.3.0, if decided |
+| **AppImage** | The one packaging format in the 0.3.0 plan that did not land. Building one is easy; *verifying* one is not — it bundles a GUI's runtime and only a real desktop can say whether the bundle works, which is exactly the check nothing in this project can run. The `.deb`, the `.rpm` and the Nix flake already cover the distributions an AppImage would target. | when someone can test one |
+| **Publishing to crates.io** | Decided against for 0.3.0: `cargo install rustdirstat` would work, but it would build the GUI from source on every machine that ran it — pulling the whole egui/wgpu stack and the Linux windowing headers — to produce what the release archives already ship prebuilt. The package-manager manifests are the better answer to the same want. | unscheduled |
 
 ## Done, and where the reasoning lives
 
