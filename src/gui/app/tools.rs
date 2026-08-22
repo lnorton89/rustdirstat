@@ -49,6 +49,11 @@ pub(in crate::gui) struct ToolsState {
     /// spinner instead of the page closing out from under it.
     pub running: Option<usize>,
     pub log: Vec<ToolOutcome>,
+    /// What the Locations page has ticked, which is not what is being
+    /// scanned until the button is pressed. Kept on the app rather than
+    /// in the page because the page is redrawn from scratch every frame
+    /// and has nowhere of its own to remember a selection.
+    pub selected_locations: Vec<std::path::PathBuf>,
 }
 
 impl GuiApp {

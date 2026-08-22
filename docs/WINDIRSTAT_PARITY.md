@@ -37,6 +37,26 @@ view's contract, not an optional convenience.
 - Tree rows expose the main cleanup/navigation commands through a context menu
   and support Up/Down/Left/Right/Enter keyboard navigation.
 
+## Choosing what to scan
+
+WinDirStat 1.1.2 opens on a selection dialog offering a folder, one
+drive, several drives, or all local drives. rustdirstat matches that
+since 0.3.0:
+
+- The **Locations** page of the settings card lists the fixed and
+  removable drives with how much of each is used, ticks any number of
+  them, and scans them into one tree; the folder picker is beside it for
+  anywhere the list does not know about.
+- Both binaries take several paths on the command line
+  (`rustdirstat C:\ D:\`), which is the same choice without the window.
+- Several roots hang off a synthetic top-level node, and every path
+  resolves against the root it belongs to rather than through that node.
+- Free space is reported **per root** and never summed: it is a property
+  of a volume, so two roots on one volume share one figure and two on
+  different volumes have two that cannot be added. The free-space tile
+  therefore appears when the view is a whole volume — the tree itself for
+  a single-drive scan, or one root once zoomed into it.
+
 ## Additional rustdirstat views
 
 These are additive and do not replace the installed-version core:

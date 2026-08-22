@@ -150,23 +150,58 @@ fn resolve_identity_exact(tree: &Tree, identity: &[std::ffi::OsString]) -> Optio
 }
 
 impl GuiApp {
-    pub(in crate::gui) fn loading(root: PathBuf) -> Self {
-        let mut app = Self::new(Tree::placeholder(root.clone()));
-        app.start_scan(root, true);
+    pub(in crate::gui) fn loading(roots: Vec<PathBuf>) -> Self {
+        // The placeholder tree is what the window draws until the first
+        // scan lands, so it is labelled with whichever root the title bar
+        // would name — the single one, or the multi-root label.
+        let label = match roots.as_slice() {
+            [single] => single.clone(),
+            _ => PathBuf::from(crate::scanner::MULTI_ROOT_LABEL),
+        };
+        let mut app = Self::new(Tree::placeholder(label));
+        app.start_scan(roots, true);
         app
     }
 
     pub(in crate::gui) fn refresh_scan(&mut self) -> anyhow::Result<()> {
-        self.start_scan(self.tree.root_path.clone(), false);
+        // A rescan repeats *what was scanned*, which for a multi-root
+        // tree is the list of roots rather than the label standing in for
+        // them. `root_path` is not a path at all in that case.
+        self.start_scan(self.scanned_roots(), false);
         Ok(())
+    }
+
+    /// The paths the current tree was built from.
+    pub(in crate::gui) fn scanned_roots(&self) -> Vec<PathBuf> {
+        if self.tree.roots.is_empty() {
+            return vec![self.tree.root_path.clone()];
+        }
+        self.tree
+            .roots
+            .iter()
+            .map(|root| root.path.clone())
+            .collect()
     }
 
     pub(in crate::gui) fn open_folder(&mut self, root: &Path) -> anyhow::Result<()> {
-        self.start_scan(root.to_path_buf(), true);
+        self.start_scan(vec![root.to_path_buf()], true);
         Ok(())
     }
 
-    fn start_scan(&mut self, root: PathBuf, reset_workspace: bool) {
+    /// Scans several places at once, as one tree.
+    ///
+    /// An empty list is a no-op with a status line rather than an error:
+    /// it means the picker was confirmed with nothing ticked, which is a
+    /// slip, not a failure.
+    pub(in crate::gui) fn open_locations(&mut self, roots: Vec<PathBuf>) {
+        if roots.is_empty() {
+            self.status = Some("Pick at least one location to scan".to_string());
+            return;
+        }
+        self.start_scan(roots, true);
+    }
+
+    fn start_scan(&mut self, roots: Vec<PathBuf>, reset_workspace: bool) {
         if self.is_busy() {
             self.status = Some("Another background operation is already running".to_string());
             return;
@@ -182,11 +217,18 @@ impl GuiApp {
         };
         let progress = Arc::new(crate::scanner::Progress::default());
         let worker_progress = Arc::clone(&progress);
-        let display = crate::util::display_path(&root);
+        let display = match roots.as_slice() {
+            [single] => crate::util::display_path(single),
+            many => format!("{} locations", many.len()),
+        };
         let (tx, rx) = mpsc::channel();
         let physical = self.use_physical;
         std::thread::spawn(move || {
-            let message = match crate::scanner::scan(&root, Some(worker_progress.as_ref())) {
+            let message = match crate::scanner::scan_many(
+                &roots,
+                Some(worker_progress.as_ref()),
+                crate::scanner::ScanOptions::default(),
+            ) {
                 Ok(crate::scanner::Scan::Completed(tree)) => {
                     let tree = *tree;
                     let extensions = collect_extension_rows(&tree.root, physical);
@@ -600,6 +642,7 @@ mod tests {
                     dir("Documents", vec![file("b.bin", 2)]),
                 ],
             ),
+            roots: Vec::new(),
         };
         // The user was looking at Downloads, which this scan happened to
         // enumerate first.
@@ -620,6 +663,7 @@ mod tests {
                     dir("Downloads", vec![file("a.bin", 1)]),
                 ],
             ),
+            roots: Vec::new(),
         };
         let restored = resolve_identity(&reordered, &captured);
         assert_eq!(
@@ -654,6 +698,7 @@ mod tests {
                     dir("beta", vec![file("y.bin", 2)]),
                 ],
             ),
+            roots: Vec::new(),
         };
         let captured = capture_identity(&before, &[0, 0])
             .ok_or_else(|| anyhow::anyhow!("the path should exist"))?;
@@ -672,6 +717,7 @@ mod tests {
                     dir("beta", vec![file("y.bin", 2)]),
                 ],
             ),
+            roots: Vec::new(),
         };
         // Zoom/expansion placement resolves to the nearest surviving
         // ancestor.

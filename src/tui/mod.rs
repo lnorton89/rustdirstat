@@ -45,7 +45,7 @@ use ratatui::backend::CrosstermBackend;
 
 use ratatui::Terminal;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -106,7 +106,7 @@ fn restore_terminal() {
     let _ = stdout.flush();
 }
 
-pub fn run(root: PathBuf, options: crate::scanner::ScanOptions) -> Result<()> {
+pub fn run(roots: Vec<PathBuf>, options: crate::scanner::ScanOptions) -> Result<()> {
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal();
@@ -121,7 +121,7 @@ pub fn run(root: PathBuf, options: crate::scanner::ScanOptions) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, root, options);
+    let result = run_app(&mut terminal, roots, options);
 
     restore_terminal();
 
@@ -144,14 +144,14 @@ enum BrowseOutcome {
 /// alternate screen.
 fn run_app<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
-    root: PathBuf,
+    roots: Vec<PathBuf>,
     options: crate::scanner::ScanOptions,
 ) -> Result<Option<std::io::Error>> {
     let mut restore_to: Option<PathBuf> = None;
     let config = crate::config::load();
 
     loop {
-        let tree = match scan_with_progress(terminal, &root, options)? {
+        let tree = match scan_with_progress(terminal, &roots, options)? {
             Some(t) => t,
             None => return Ok(None), // cancelled during scan
         };
@@ -175,14 +175,14 @@ fn run_app<B: TerminalBackend>(
 
 fn scan_with_progress<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
-    root: &Path,
+    roots: &[PathBuf],
     options: crate::scanner::ScanOptions,
 ) -> Result<Option<crate::model::Tree>> {
     let progress = Arc::new(Progress::default());
     let progress_clone = progress.clone();
-    let root_clone = root.to_path_buf();
+    let roots_clone = roots.to_vec();
     let handle = std::thread::spawn(move || {
-        scanner::scan_with_options(&root_clone, Some(&progress_clone), options)
+        scanner::scan_many(&roots_clone, Some(&progress_clone), options)
     });
 
     let started = Instant::now();

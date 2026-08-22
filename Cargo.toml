@@ -73,6 +73,9 @@ windows-sys = { version = "0.61", features = [
     # takes a SECURITY_ATTRIBUTES pointer, and windows-sys hides the
     # function unless the parameter's feature is on.
     "Win32_System_Ioctl",
+    # `GetDriveTypeW`'s answers (DRIVE_FIXED and friends), for the
+    # volume picker.
+    "Win32_System_WindowsProgramming",
     "Win32_System_IO",
     "Win32_Security",
 ] }

@@ -45,6 +45,12 @@ pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)
 pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Where the Locations page's scan button landed, so a test can press
+/// the real control rather than calling the method behind it.
+#[cfg(test)]
+pub(super) static TEST_LOCATION_SCAN_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// Where the Properties inspector landed, so a test can check it is on
 /// screen, that it moved when dragged, and that it went away when closed.
 #[cfg(test)]

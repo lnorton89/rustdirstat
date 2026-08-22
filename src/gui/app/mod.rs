@@ -383,6 +383,11 @@ impl GuiApp {
         self.modal = Some(page);
     }
 
+    /// Closes the modal card, whatever page it was showing.
+    pub(in crate::gui) fn close_modal(&mut self) {
+        self.modal = None;
+    }
+
     /// Shows or hides the Properties inspector.
     ///
     /// A toggle rather than an open, because the control that reaches it
@@ -534,6 +539,7 @@ mod tests {
                 file_id: None,
                 other_filesystem: false,
             },
+            roots: Vec::new(),
         })
     }
 
@@ -656,7 +662,7 @@ mod tests {
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("payload.dat"), vec![7_u8; 4096])?;
 
-        let mut app = GuiApp::loading(dir.clone());
+        let mut app = GuiApp::loading(vec![dir.clone()]);
         assert!(app.is_busy());
         assert_eq!(app.tree.root.size, 0);
         wait_for_background(&mut app);

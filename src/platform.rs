@@ -180,6 +180,31 @@ pub fn physical_size(meta: &std::fs::Metadata, _path: &std::path::Path) -> u64 {
 }
 
 /// Free and total bytes on the volume containing `path`, if determinable.
+/// A place a scan can be pointed at, as offered by the picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Volume {
+    /// What to scan: the volume's root path.
+    pub path: std::path::PathBuf,
+    /// What to call it. The drive letter on Windows, the mount point
+    /// elsewhere — deliberately not a friendly name fetched from the
+    /// filesystem, which costs a syscall per volume for a string the
+    /// path already carries.
+    pub label: String,
+    pub free: Option<u64>,
+    pub total: Option<u64>,
+}
+
+/// The volumes worth offering to scan.
+///
+/// Deliberately conservative on every platform: a picker that lists
+/// pseudo-filesystems is worse than one that misses an exotic mount,
+/// because the user can always pick a folder by hand, whereas a list
+/// full of `/proc`, `/sys` and snap loopbacks makes the real entries
+/// hard to find.
+pub fn volumes() -> Vec<Volume> {
+    imp::volumes()
+}
+
 /// One directory entry, as the filesystem itself describes it.
 ///
 /// This is what a Windows directory listing hands over in the same
@@ -675,6 +700,89 @@ mod imp {
     use std::mem::MaybeUninit;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
+    use std::path::PathBuf;
+
+    /// The volumes a picker should offer.
+    ///
+    /// The root always, plus whatever is mounted somewhere a person
+    /// would recognise. Linux is read from `/proc/mounts` and filtered to
+    /// mounts backed by a real device — without that filter the list is
+    /// mostly `proc`, `sysfs`, `cgroup` and a snap loopback per installed
+    /// application. macOS has no `/proc/mounts`, and everything a user
+    /// mounts appears under `/Volumes`, so that directory *is* the list.
+    pub(super) fn volumes() -> Vec<super::Volume> {
+        let mut out = vec![describe(PathBuf::from("/"), "/".to_string())];
+
+        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
+            for line in mounts.lines() {
+                let mut fields = line.split_whitespace();
+                let (Some(source), Some(target)) = (fields.next(), fields.next()) else {
+                    continue;
+                };
+                // A real block device, mounted somewhere that is not the
+                // root we already have.
+                if !source.starts_with("/dev/") || target == "/" {
+                    continue;
+                }
+                let target = unescape_mount(target);
+                let path = PathBuf::from(&target);
+                if out.iter().any(|volume| volume.path == path) {
+                    continue;
+                }
+                out.push(describe(path, target));
+            }
+        }
+
+        for parent in ["/Volumes", "/media", "/run/media"] {
+            let Ok(listing) = std::fs::read_dir(parent) else {
+                continue;
+            };
+            for entry in listing.flatten() {
+                let path = entry.path();
+                if !path.is_dir() || out.iter().any(|volume| volume.path == path) {
+                    continue;
+                }
+                let label = path.to_string_lossy().to_string();
+                out.push(describe(path, label));
+            }
+        }
+        out
+    }
+
+    /// `/proc/mounts` escapes spaces and a few other characters as octal.
+    /// A mount point called "My Disk" arrives as `My\040Disk`, and a
+    /// picker offering that as a path would fail to scan it.
+    fn unescape_mount(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            let digits: String = chars.clone().take(3).collect();
+            match u8::from_str_radix(&digits, 8) {
+                Ok(byte) if digits.len() == 3 => {
+                    out.push(byte as char);
+                    for _ in 0..3 {
+                        chars.next();
+                    }
+                }
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    fn describe(path: PathBuf, label: String) -> super::Volume {
+        let (free, total) = volume_space(&path);
+        super::Volume {
+            path,
+            label,
+            free,
+            total,
+        }
+    }
 
     /// Safe leaf wrapper over `statvfs(2)`, and the only `unsafe` in this
     /// module. Everything a caller needs to reason about is here: it takes
@@ -729,7 +837,59 @@ mod imp {
 mod imp {
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
+    use std::path::PathBuf;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
+
+    /// The drives a picker should offer.
+    ///
+    /// Fixed and removable only. A network drive can be scanned by
+    /// typing its path, but offering one here invites a scan across a
+    /// link whose latency is measured in milliseconds per directory, and
+    /// a CD-ROM or an empty card reader is a row that answers nothing.
+    pub(super) fn volumes() -> Vec<super::Volume> {
+        let mask = logical_drives();
+        (0..26u32)
+            .filter(|letter| mask & (1 << letter) != 0)
+            .filter_map(|letter| {
+                let letter = char::from_u32(u32::from(b'A') + letter)?;
+                let label = format!("{letter}:");
+                let path = PathBuf::from(format!("{label}\\"));
+                let kind = drive_type(&path);
+                if kind != DRIVE_FIXED && kind != DRIVE_REMOVABLE {
+                    return None;
+                }
+                let (free, total) = volume_space(&path);
+                // A removable drive with no media reports nothing; it is
+                // a slot rather than a volume, so it is not offered.
+                total?;
+                Some(super::Volume {
+                    path,
+                    label,
+                    free,
+                    total,
+                })
+            })
+            .collect()
+    }
+
+    /// Safe leaf wrapper over `GetLogicalDrives`: a bitmask of drive
+    /// letters, bit 0 being `A:`.
+    fn logical_drives() -> u32 {
+        // SAFETY: the call takes no arguments and only reads process
+        // state.
+        unsafe { GetLogicalDrives() }
+    }
+
+    /// Safe leaf wrapper over `GetDriveTypeW`.
+    fn drive_type(path: &Path) -> u32 {
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        // SAFETY: `wide` is a NUL-terminated wide string that outlives
+        // the call, which reads it and nothing else.
+        unsafe { GetDriveTypeW(wide.as_ptr()) }
+    }
 
     /// Safe leaf wrapper over `GetDiskFreeSpaceExW`, and the only `unsafe`
     /// in this module. Returns `(free, total)` or nothing.
@@ -766,6 +926,12 @@ mod imp {
 mod imp {
     pub(super) fn volume_space(_path: &std::path::Path) -> (Option<u64>, Option<u64>) {
         (None, None)
+    }
+
+    /// No volume model to enumerate, so the picker offers the folder
+    /// button and nothing else.
+    pub(super) fn volumes() -> Vec<super::Volume> {
+        Vec::new()
     }
 }
 

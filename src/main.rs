@@ -25,9 +25,11 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "rustdirstat", version, about)]
 struct Cli {
-    /// Directory (or file) to scan
+    /// Directories (or files) to scan. Several are scanned into one
+    /// tree, with each one as a top-level entry — the terminal
+    /// equivalent of WinDirStat opening on several drives at once.
     #[arg(default_value = ".")]
-    path: PathBuf,
+    paths: Vec<PathBuf>,
 
     /// Print a plain-text report instead of launching the interactive TUI.
     /// Mutually exclusive with `--csv` — the two non-interactive modes
@@ -61,22 +63,28 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if !cli.path.exists() {
-        bail!("path does not exist: {}", cli.path.display());
+    // Every path is checked before any of them is scanned: finding out
+    // that the third argument was a typo after two drives have been
+    // walked is a poor trade for one `exists` call each.
+    let mut roots = Vec::with_capacity(cli.paths.len());
+    for path in &cli.paths {
+        if !path.exists() {
+            bail!("path does not exist: {}", path.display());
+        }
+        roots.push(path.canonicalize().unwrap_or_else(|_| path.clone()));
     }
-    let root = cli.path.canonicalize().unwrap_or(cli.path.clone());
     let options = scanner::ScanOptions {
         same_filesystem_only: !cli.cross_filesystems,
     };
 
     if let Some(csv_path) = &cli.csv {
-        let tree = scanner::scan_to_completion_with_options(&root, options)?;
+        let tree = scanner::scan_many_to_completion(&roots, options)?;
         csv_export::write_csv_to_file(&tree.root_path, &tree.root, csv_path)?;
     } else if cli.no_tui {
-        let tree = scanner::scan_to_completion_with_options(&root, options)?;
+        let tree = scanner::scan_many_to_completion(&roots, options)?;
         report::print_report(&tree.root_path, &tree.root, cli.top, cli.depth);
     } else {
-        tui::run(root, options)?;
+        tui::run(roots, options)?;
     }
     Ok(())
 }

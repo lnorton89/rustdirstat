@@ -95,6 +95,7 @@ fn app_with_one_file() -> GuiApp {
         },
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
     })
 }
 
@@ -145,6 +146,7 @@ fn app_with_a_folder_beside_a_file() -> GuiApp {
         },
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
     })
 }
 
@@ -227,6 +229,7 @@ fn app_with_sortable_files() -> GuiApp {
         },
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
     })
 }
 
@@ -2884,6 +2887,7 @@ fn app_with_many_extensions() -> GuiApp {
             file_id: None,
             other_filesystem: false,
         },
+        roots: Vec::new(),
     })
 }
 
@@ -3412,6 +3416,7 @@ fn app_with_big_tree() -> GuiApp {
         root,
         volume_free: None,
         volume_total: None,
+        roots: Vec::new(),
     });
     app.expanded.insert(Vec::new());
     app
@@ -3825,4 +3830,84 @@ fn the_inspector_position_survives_a_config_round_trip() {
         None,
         "a malformed position must fall back to the default placement"
     );
+}
+
+// ------------------------------------------------------- the locations page
+
+/// The Locations page starts a scan of everything ticked.
+///
+/// Driven through the recorded button rect, and through the page's own
+/// selection state, so what is pinned is the wiring a user actually
+/// touches: tick, press, and the app is scanning several roots as one
+/// tree.
+#[test]
+fn the_locations_page_scans_what_is_ticked() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let first = crate::util::scratch_dir("gui", "locations_first");
+    let second = crate::util::scratch_dir("gui", "locations_second");
+    std::fs::create_dir_all(&first)?;
+    std::fs::create_dir_all(&second)?;
+    std::fs::write(first.join("a.bin"), *b"a")?;
+    std::fs::write(second.join("b.bin"), *b"b")?;
+
+    app.open_modal(super::modal::ModalPage::Locations);
+    app.tools.selected_locations = vec![first.clone(), second.clone()];
+    // The card waits on a screenshot that never arrives without a
+    // renderer, so it paints nothing for the first few frames; see
+    // `SETTLE_FRAMES`.
+    for _ in 0..SETTLE_FRAMES {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+    probe(&TEST_LOCATION_SCAN_RECTS).clear();
+    render_window(&ctx, &mut app, window_input(Vec::new()));
+    let button = probe(&TEST_LOCATION_SCAN_RECTS).last().copied();
+    let Some(button) = button else {
+        anyhow::bail!("the Locations page drew no scan button");
+    };
+
+    render_window(
+        &ctx,
+        &mut app,
+        window_input(pointer_button(button.center(), true)),
+    );
+    render_window(
+        &ctx,
+        &mut app,
+        window_input(pointer_button(button.center(), false)),
+    );
+
+    assert!(
+        app.scan_is_running(),
+        "pressing Scan should have started one"
+    );
+    assert!(
+        !modal_is_open(&app),
+        "and closed the page it was pressed on"
+    );
+    wait_for_background(&mut app, &ctx);
+
+    assert!(
+        app.tree.is_multi_root(),
+        "two ticked locations should scan into one multi-root tree"
+    );
+    assert_eq!(app.scanned_roots().len(), 2);
+    assert_eq!(
+        app.tree.root.file_count,
+        2,
+        "one file from each location: {:?}",
+        app.scanned_roots()
+    );
+    let _ = std::fs::remove_dir_all(&first);
+    let _ = std::fs::remove_dir_all(&second);
+    Ok(())
+}
+
+/// Waits for the scan worker, polling the way the window does.
+fn wait_for_background(app: &mut GuiApp, ctx: &egui::Context) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.is_busy() && std::time::Instant::now() < deadline {
+        app.poll_background(ctx);
+    }
 }

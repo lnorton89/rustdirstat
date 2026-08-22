@@ -22,11 +22,11 @@ mod ui;
 use anyhow::Result;
 use std::path::PathBuf;
 
-pub fn run(root: PathBuf) -> Result<()> {
+pub fn run(roots: Vec<PathBuf>) -> Result<()> {
     // Open the native shell immediately; the initial scan runs on the same
     // background path as later rescans so a large drive never looks like a
     // failed launch while the process is busy walking the filesystem.
-    let gui_app = app::GuiApp::loading(root);
+    let gui_app = app::GuiApp::loading(roots);
 
     let options = native_options();
 

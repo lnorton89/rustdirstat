@@ -22,7 +22,7 @@
 
 use crate::gui::app::{GuiApp, PaneOrientation};
 use crate::gui::icons::Icon;
-use crate::util::thousands;
+use crate::util::{human_bytes, thousands};
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, Vec2};
 
 use super::modal::{
@@ -36,6 +36,7 @@ use super::widgets::*;
 
 pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
     match page {
+        ModalPage::Locations => draw_locations(app, ui),
         ModalPage::Appearance => draw_appearance(app, ui),
         ModalPage::Layout => draw_layout(app, ui),
         ModalPage::Views => draw_views(app, ui),
@@ -266,6 +267,104 @@ fn draw_views(app: &mut GuiApp, ui: &mut egui::Ui) {
         ModalPage::Layout,
     );
     see_also(ui, app, "For what each pane does, see", ModalPage::Guide);
+}
+
+// ------------------------------------------------------------- Locations
+
+/// Pick what to scan: any number of drives, or a folder.
+///
+/// WinDirStat opens on this choice — one folder, one drive, several
+/// drives, or all of them — and it was the last thing here that only
+/// accepted one answer. The volumes come from `platform::volumes`, which
+/// offers fixed and removable drives only; anything else is reachable
+/// through the folder button, which is the honest place for "somewhere
+/// this list does not know about".
+fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
+    let palette = palette();
+    let scanned = app.scanned_roots();
+    group(ui, Icon::Folder, "Currently scanned", |ui| {
+        for root in &scanned {
+            ui.label(crate::util::display_path(root));
+        }
+    });
+    ui.add_space(SPACE_MD);
+
+    let volumes = crate::platform::volumes();
+    group(ui, Icon::Tree, "Drives", |ui| {
+        if volumes.is_empty() {
+            ui.label(
+                RichText::new("No local drives were found to offer.").color(palette.secondary_text),
+            );
+            return;
+        }
+        for volume in &volumes {
+            let mut ticked = app.tools.selected_locations.contains(&volume.path);
+            let used = match (volume.total, volume.free) {
+                (Some(total), Some(free)) => format!(
+                    "{} of {} used",
+                    human_bytes(total.saturating_sub(free)),
+                    human_bytes(total)
+                ),
+                _ => String::new(),
+            };
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut ticked, &volume.label).changed() {
+                    if ticked {
+                        app.tools.selected_locations.push(volume.path.clone());
+                    } else {
+                        app.tools
+                            .selected_locations
+                            .retain(|path| path != &volume.path);
+                    }
+                }
+                ui.label(RichText::new(used).color(palette.secondary_text));
+            });
+        }
+        ui.add_space(SPACE_SM);
+        ui.horizontal(|ui| {
+            if ui.button("Select all").clicked() {
+                app.tools.selected_locations = volumes.iter().map(|v| v.path.clone()).collect();
+            }
+            if ui.button("Clear").clicked() {
+                app.tools.selected_locations.clear();
+            }
+        });
+    });
+    ui.add_space(SPACE_MD);
+
+    group(ui, Icon::FolderOpen, "Scan", |ui| {
+        let count = app.tools.selected_locations.len();
+        let label = match count {
+            0 => "Scan selected drives".to_string(),
+            1 => "Scan 1 drive".to_string(),
+            n => format!("Scan {n} drives together"),
+        };
+        ui.horizontal(|ui| {
+            let scan = ui.add_enabled(count > 0 && !app.is_busy(), egui::Button::new(label));
+            #[cfg(test)]
+            probe(&TEST_LOCATION_SCAN_RECTS).push(scan.rect);
+            if scan.clicked() {
+                let picked = app.tools.selected_locations.clone();
+                app.open_locations(picked);
+                app.close_modal();
+            }
+            if ui
+                .add_enabled(!app.is_busy(), egui::Button::new("Choose folder…"))
+                .clicked()
+            {
+                super::actions::choose_folder(app);
+                app.close_modal();
+            }
+        });
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(
+                "Several drives scan into one tree, each as a top-level entry. \
+                 Free space is reported per drive, never added together.",
+            )
+            .color(palette.secondary_text),
+        );
+    });
 }
 
 // ----------------------------------------------------------- Maintenance

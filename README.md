@@ -107,12 +107,18 @@ none of them.
 ## Usage
 
 ```sh
-rustdirstat [PATH]                # launch the interactive TUI (defaults to '.')
-rustdirstat --no-tui [PATH]       # print a plain-text report instead
+rustdirstat [PATH...]             # launch the interactive TUI (defaults to '.')
+rustdirstat --no-tui [PATH...]    # print a plain-text report instead
 rustdirstat --no-tui -t 30 -d 3   # report: top 30 entries per dir, 3 levels deep
 rustdirstat --csv out.csv [PATH]  # scan and write a full CSV export instead
-rustdirstat-gui [PATH]            # launch the native WinDirStat-style GUI
+rustdirstat-gui [PATH...]         # launch the native WinDirStat-style GUI
+rustdirstat-gui C:\ D:\           # or several places at once, as one tree
 ```
+
+Several paths scan into one tree, each as a top-level entry — the same
+choice WinDirStat's opening dialog offers, and the same one the GUI's
+**Locations** page offers with the drives listed and their used space
+shown. Free space is reported per drive and never added together.
 
 The GUI implements the three coupled views from the installed WinDirStat
 1.1.2 reference: an expandable directory tree, exact-extension list, and

@@ -202,7 +202,119 @@ fn scan_inner(root: &Path, progress: Option<&Progress>, options: ScanOptions) ->
         root: root_node,
         volume_free,
         volume_total,
+        roots: Vec::new(),
     })))
+}
+
+/// Scans several roots into one tree.
+///
+/// The roots hang off a synthetic node whose name is a label rather than
+/// a path component — nothing resolves a path *through* it, because
+/// [`Tree::path_for`] treats the first index as a choice of root and
+/// starts from that root's own path. A single root does not go through
+/// here at all: it produces exactly the tree it always did, because
+/// putting a synthetic level above the common case would change every
+/// index path, every view, and every stored selection to serve the rare
+/// one.
+///
+/// Free space is deliberately *not* summed. It is a property of a
+/// volume, so two roots on one volume share one figure and two roots on
+/// different volumes have two that cannot be added; the tree carries
+/// them per root ([`crate::model::Root`]) and the views ask about the
+/// root they are looking at.
+pub fn scan_many(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+) -> Result<Scan> {
+    let [single] = roots else {
+        return scan_many_inner(roots, progress, options);
+    };
+    scan_with_options(single, progress, options)
+}
+
+fn scan_many_inner(
+    roots: &[PathBuf],
+    progress: Option<&Progress>,
+    options: ScanOptions,
+) -> Result<Scan> {
+    if roots.is_empty() {
+        anyhow::bail!("a scan needs at least one root");
+    }
+    let mut children = Vec::with_capacity(roots.len());
+    let mut described = Vec::with_capacity(roots.len());
+    for root in roots {
+        match scan_with_options(root, progress, options)? {
+            Scan::Cancelled => return Ok(Scan::Cancelled),
+            Scan::Completed(tree) => {
+                let tree = *tree;
+                described.push(crate::model::Root {
+                    path: tree.root_path,
+                    volume_free: tree.volume_free,
+                    volume_total: tree.volume_total,
+                });
+                children.push(tree.root);
+            }
+        }
+    }
+    let root = combine(children);
+    Ok(Scan::Completed(Box::new(Tree {
+        // Not a path: a multi-root tree has no single place it came
+        // from, and `path_for` never reads this. It is what the window
+        // title and the root row show.
+        root_path: PathBuf::from(MULTI_ROOT_LABEL),
+        root,
+        volume_free: None,
+        volume_total: None,
+        roots: described,
+    })))
+}
+
+/// What a multi-root scan calls itself.
+pub const MULTI_ROOT_LABEL: &str = "Selected locations";
+
+/// Rolls finished root trees up into the synthetic node above them.
+///
+/// The same aggregation [`finish_dir`] performs, minus the progress
+/// counting — these directories have already been counted by their own
+/// scans, and counting them again would show a total higher than the
+/// scan found.
+fn combine(children: Vec<Node>) -> Node {
+    let mut size = 0u64;
+    let mut physical_size = 0u64;
+    let mut file_count = 0u64;
+    let mut dir_count = 0u64;
+    let mut unreadable_count = 0u64;
+    let mut ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
+    for child in &children {
+        size = size.saturating_add(child.size);
+        physical_size = physical_size.saturating_add(child.physical_size);
+        file_count = file_count.saturating_add(child.file_count);
+        dir_count = dir_count.saturating_add(child.dir_count);
+        unreadable_count = unreadable_count.saturating_add(child.unreadable_count);
+        for (slot, add) in ext_totals.iter_mut().zip(child.ext_totals.iter()) {
+            slot.0 = slot.0.saturating_add(add.0);
+            slot.1 = slot.1.saturating_add(add.1);
+            slot.2 = slot.2.saturating_add(add.2);
+        }
+    }
+    Node {
+        name: OsString::from(MULTI_ROOT_LABEL),
+        is_dir: true,
+        is_symlink: false,
+        size,
+        physical_size,
+        file_count,
+        dir_count: dir_count.saturating_add(children.len() as u64),
+        modified: None,
+        children,
+        error: false,
+        category: None,
+        ext_totals,
+        unreadable_count,
+        file_id: None,
+        other_filesystem: false,
+    }
 }
 
 /// How many directory levels the parallel walk may recurse through
@@ -253,6 +365,14 @@ pub fn scan_with_options(
     match scan_pool() {
         Some(pool) => pool.install(|| scan_inner(root, progress, options)),
         None => scan_inner(root, progress, options),
+    }
+}
+
+/// [`scan_to_completion`] over several roots.
+pub fn scan_many_to_completion(roots: &[PathBuf], options: ScanOptions) -> Result<Tree> {
+    match scan_many(roots, None, options)? {
+        Scan::Completed(tree) => Ok(*tree),
+        Scan::Cancelled => anyhow::bail!("a scan with no cancel token reported cancellation"),
     }
 }
 
@@ -952,6 +1072,118 @@ mod tests {
     use crate::util::scratch_dir;
     use std::fs;
 
+    /// Two roots come back as one tree, and every path in it resolves
+    /// against the root it belongs to.
+    ///
+    /// This is the whole risk of a multi-root tree: the synthetic node on
+    /// top is not a directory, so a `path_for` that appended its way
+    /// through it would build `C:\D:\Users` — a path that exists
+    /// nowhere, handed to code that deletes things.
+    #[test]
+    fn two_roots_scan_into_one_tree_with_real_paths() -> anyhow::Result<()> {
+        let first = scratch_dir("scanner", "multi_first");
+        let second = scratch_dir("scanner", "multi_second");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+        fs::write(first.join("a.bin"), vec![b'a'; 100])?;
+        fs::write(second.join("b.bin"), vec![b'b'; 250])?;
+
+        let tree =
+            scan_many_to_completion(&[first.clone(), second.clone()], ScanOptions::default())?;
+
+        assert!(tree.is_multi_root(), "two roots make a multi-root tree");
+        assert_eq!(tree.roots.len(), 2);
+        assert_eq!(tree.root.children.len(), 2, "one child per root");
+        assert_eq!(
+            tree.root.file_count, 2,
+            "the synthetic root totals both scans"
+        );
+        assert_eq!(tree.root.size, 350, "and their bytes");
+
+        // The file under the *second* root resolves to the second root's
+        // own path, not to the first one's and not through the label.
+        let path = tree
+            .path_for(&[1, 0])
+            .ok_or_else(|| anyhow::anyhow!("the second root's file should resolve"))?;
+        assert_eq!(path, second.join("b.bin"), "resolved to {path:?}");
+        let first_path = tree
+            .path_for(&[0, 0])
+            .ok_or_else(|| anyhow::anyhow!("the first root's file should resolve"))?;
+        assert_eq!(first_path, first.join("a.bin"));
+        Ok(())
+    }
+
+    /// One root is not a multi-root tree.
+    ///
+    /// The single-root shape is the common case and stays exactly as it
+    /// was — a synthetic level above it would change every index path,
+    /// every saved selection, and every view, to serve the rare case.
+    #[test]
+    fn one_root_scans_the_way_it_always_did() -> anyhow::Result<()> {
+        let root = scratch_dir("scanner", "multi_single");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("only.bin"), vec![b'x'; 10])?;
+
+        let tree = scan_many_to_completion(std::slice::from_ref(&root), ScanOptions::default())?;
+
+        assert!(!tree.is_multi_root(), "one root is just a tree");
+        assert!(tree.roots.is_empty());
+        assert_eq!(tree.root_path, root);
+        assert_eq!(tree.path_for(&[0]), Some(root.join("only.bin")));
+        Ok(())
+    }
+
+    /// Free space is never added across roots.
+    ///
+    /// Two roots on one volume share one figure and two roots on
+    /// different volumes have two that mean different things; summing
+    /// them would produce a number that is true of no volume at all.
+    #[test]
+    fn free_space_is_per_root_not_summed() -> anyhow::Result<()> {
+        let first = scratch_dir("scanner", "multi_free_a");
+        let second = scratch_dir("scanner", "multi_free_b");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+
+        let tree = scan_many_to_completion(&[first, second], ScanOptions::default())?;
+
+        assert_eq!(
+            tree.volume_free, None,
+            "a multi-root tree has no single free-space figure"
+        );
+        assert_eq!(tree.volume_total, None);
+        assert!(
+            !tree.is_volume_root(),
+            "and it is not a volume, so no free-space tile is offered above the roots"
+        );
+        for (index, root) in tree.roots.iter().enumerate() {
+            assert_eq!(
+                tree.root_for(&[index]).map(|r| r.path),
+                Some(root.path.clone()),
+                "each index path knows which root it belongs to"
+            );
+        }
+        Ok(())
+    }
+
+    /// A cancel during the second root abandons the whole tree.
+    #[test]
+    fn cancelling_a_multi_root_scan_returns_no_tree() -> anyhow::Result<()> {
+        let first = scratch_dir("scanner", "multi_cancel_a");
+        let second = scratch_dir("scanner", "multi_cancel_b");
+        fs::create_dir_all(&first)?;
+        fs::create_dir_all(&second)?;
+
+        let progress = Progress::default();
+        progress.cancel();
+        let outcome = scan_many(&[first, second], Some(&progress), ScanOptions::default())?;
+
+        let Scan::Cancelled = outcome else {
+            anyhow::bail!("a cancelled multi-root scan must not produce a tree");
+        };
+        Ok(())
+    }
+
     /// On Windows a scan now reports what a file actually occupies.
     ///
     /// Before 0.3.0 "physical size" there meant compression- and
@@ -1394,6 +1626,7 @@ mod tests {
             root: node,
             volume_free: None,
             volume_total: None,
+            roots: Vec::new(),
         };
         assert_eq!(
             tree.path_for(&[0]),
@@ -1452,6 +1685,7 @@ mod tests {
             root: node,
             volume_free: None,
             volume_total: None,
+            roots: Vec::new(),
         };
         let first = tree
             .path_for(&[0])
@@ -1487,7 +1721,14 @@ mod tests {
         fs::write(root.join("local.txt"), b"stay")?;
 
         let real_dev = std::fs::symlink_metadata(&root)?.dev();
-        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev + 1));
+        let node = scan_dir(
+            &root,
+            OsString::from("root"),
+            None,
+            0,
+            Some(real_dev + 1),
+            None,
+        );
         assert_eq!(
             node.children.len(),
             2,
@@ -1505,7 +1746,7 @@ mod tests {
         assert_eq!(node.file_count, 0);
 
         // With the true device the same scan keeps everything.
-        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev));
+        let node = scan_dir(&root, OsString::from("root"), None, 0, Some(real_dev), None);
         assert!(
             node.children.iter().all(|c| !c.other_filesystem),
             "nothing on the root's own device is marked"

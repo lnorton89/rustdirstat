@@ -51,6 +51,7 @@ use super::widgets::*;
 /// Which page of the modal is showing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModalPage {
+    Locations,
     Appearance,
     Layout,
     Views,
@@ -60,7 +61,8 @@ pub(crate) enum ModalPage {
 }
 
 impl ModalPage {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Locations,
         Self::Appearance,
         Self::Layout,
         Self::Views,
@@ -71,6 +73,7 @@ impl ModalPage {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::Locations => "Locations",
             Self::Appearance => "Appearance",
             Self::Layout => "Layout",
             Self::Views => "Views",
@@ -82,6 +85,7 @@ impl ModalPage {
 
     pub(crate) fn icon(self) -> Icon {
         match self {
+            Self::Locations => Icon::Folder,
             Self::Appearance => Icon::Settings,
             Self::Layout => Icon::LayoutHorizontal,
             Self::Views => Icon::Tree,
@@ -96,6 +100,7 @@ impl ModalPage {
     /// as unfinished.
     pub(crate) fn blurb(self) -> &'static str {
         match self {
+            Self::Locations => "Which drives and folders this scan covers.",
             Self::Appearance => "Theme, and how the treemap is drawn.",
             Self::Layout => "Where the treemap and the lists sit relative to each other.",
             Self::Views => "Which parts of the window are shown.",

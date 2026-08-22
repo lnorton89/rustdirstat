@@ -207,3 +207,65 @@ fn the_report_and_csv_modes_conflict() -> Result<()> {
     fs::remove_dir_all(&root)?;
     Ok(())
 }
+
+/// Two paths on the command line scan into one tree.
+///
+/// The terminal equivalent of WinDirStat opening on several drives: each
+/// root becomes a top-level entry under a label, and the totals are the
+/// sum of the roots rather than of either one.
+#[test]
+fn several_paths_scan_into_one_report() -> Result<()> {
+    let first = scratch("multi_first");
+    let second = scratch("multi_second");
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    fs::create_dir_all(&first)?;
+    fs::create_dir_all(&second)?;
+    fs::write(first.join("one.bin"), vec![b'a'; 1000])?;
+    fs::write(second.join("two.bin"), vec![b'b'; 2000])?;
+
+    let first_arg = first
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let second_arg = second
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let (ok, text) = run(&["--no-tui", "-d", "2", first_arg, second_arg])?;
+
+    assert!(ok, "the report should succeed: {text}");
+    assert!(
+        text.contains("one.bin") && text.contains("two.bin"),
+        "both roots should appear in one report: {text}"
+    );
+
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    Ok(())
+}
+
+/// A typo in the second path fails before anything is scanned.
+#[test]
+fn a_missing_second_path_is_an_error() -> Result<()> {
+    let real = scratch("multi_real");
+    let _ = fs::remove_dir_all(&real);
+    fs::create_dir_all(&real)?;
+    let missing = scratch("multi_missing");
+    let _ = fs::remove_dir_all(&missing);
+
+    let real_arg = real
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let missing_arg = missing
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let (ok, text) = run(&["--no-tui", real_arg, missing_arg])?;
+
+    assert!(!ok, "a missing path should fail the run: {text}");
+    assert!(
+        text.contains("path does not exist"),
+        "and say which: {text}"
+    );
+
+    let _ = fs::remove_dir_all(&real);
+    Ok(())
+}
