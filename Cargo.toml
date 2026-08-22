@@ -22,9 +22,9 @@ path = "src/bin/gui.rs"
 # Keep both native renderers available, but run the app through wgpu. The
 # default glow/glutin path rejects some valid Linux EGL/GLX setups (notably
 # on NixOS) when they do not advertise its exact RGBA8 config template.
-eframe = { version = "0.29", features = ["wgpu"] }
-egui = "0.29"
-egui_extras = "0.29"
+eframe = { version = "0.36", features = ["wgpu"] }
+egui = "0.36"
+egui_extras = "0.36"
 rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"

@@ -26,31 +26,12 @@ updates:
         applies-to: version-updates
         update-types:
           - patch
-    ignore:
-      # The egui stack is held at 0.29 deliberately: moving it is a project
-      # with its own branch and a person watching the window, not a
-      # dependency bump. CLAUDE.md records what that migration actually
-      # costs — three subsystems redesigned rather than renamed, the menu
-      # API gone, and several pinned tests to re-derive. An egui 0.30+ PR
-      # would only ever be closed unread, so it is not opened. Patch
-      # releases still come through.
-      #
-      # The four ignored advisories in deny.toml are the standing reminder
-      # that this is a debt with a due date, not an oversight; revisit
-      # these three entries and those four at the same time.
-      - dependency-name: eframe
-        update-types:
-          - version-update:semver-minor
-          - version-update:semver-major
-      - dependency-name: egui
-        update-types:
-          - version-update:semver-minor
-          - version-update:semver-major
-      - dependency-name: egui_extras
-        update-types:
-          - version-update:semver-minor
-          - version-update:semver-major
-
+    # The egui stack used to be ignored above patch here, because moving
+    # it was a project rather than a bump. That project is done — 0.36
+    # landed in 0.3.0 — so minor PRs are opened again. Reinstating the
+    # ignore is a decision to accumulate the same debt a second time:
+    # take it deliberately, and say so here and in deny.toml, or take the
+    # upgrade PR one release at a time while it is still small.
   # Actions are pinned to full commit SHAs (see .github/workflows), so a
   # Dependabot PR is the deliberate, diff-visible way a pin moves — it
   # rewrites the SHA and the trailing version comment together.

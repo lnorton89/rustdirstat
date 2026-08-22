@@ -257,6 +257,17 @@ fn app_with_sortable_extensions() -> GuiApp {
     app
 }
 
+/// Throws away a finished frame.
+///
+/// epaint 0.36 panics when a [`egui::FullOutput`] is dropped with texture
+/// deltas still attached: a real renderer uploads them, and silently
+/// discarding one is how a font atlas goes missing. These tests have no
+/// renderer, so they say so explicitly rather than leaking the panic out
+/// of whichever test happened to allocate a glyph first.
+fn discard(mut output: egui::FullOutput) {
+    output.textures_delta.clear();
+}
+
 fn raw_input_at_width(events: Vec<egui::Event>, width: f32) -> egui::RawInput {
     static FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -277,44 +288,44 @@ fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
 
 fn render_directory(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_directory_tree(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_directory_tree(app, ui));
+    }));
 }
 
 fn render_extensions(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_extension_list(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_extension_list(app, ui));
+    }));
 }
 
 fn render_largest(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_largest_files(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_largest_files(app, ui));
+    }));
 }
 
 fn render_search(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_search(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_search(app, ui));
+    }));
 }
 
 fn render_duplicates(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| draw_duplicates(app, ui));
-    });
+    discard(ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| draw_duplicates(app, ui));
+    }));
 }
 
 fn render_toolbar(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
-        draw_toolbar(app, ctx);
-    });
+    discard(ctx.run_ui(input, |ui| {
+        draw_toolbar(app, ui);
+    }));
 }
 
 /// Draws the treemap into a panel framed exactly as the real one is, so
@@ -322,11 +333,11 @@ fn render_toolbar(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) 
 /// coordinates a bare `CentralPanel` happens to hand out.
 fn render_treemap(ctx: &egui::Context, app: &mut GuiApp, input: egui::RawInput) {
     apply_style(ctx, app.palette);
-    let _ = ctx.run(input, |ctx| {
+    discard(ctx.run_ui(input, |ui| {
         egui::CentralPanel::default()
             .frame(super::theme::panel_frame())
-            .show(ctx, |ui| draw_treemap(app, ui));
-    });
+            .show(ui, |ui| draw_treemap(app, ui));
+    }));
 }
 
 fn pointer_button(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
@@ -376,7 +387,7 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
         let ctx = egui::Context::default();
         let app = app_with_one_file();
         apply_style(&ctx, app.palette);
-        let interaction = ctx.style().interaction.clone();
+        let interaction = ctx.global_style().interaction.clone();
         assert_eq!(
             interaction.tooltip_delay, 0.0,
             "a tooltip delay needs a frame to elapse on, and an input-driven repaint \
@@ -394,10 +405,10 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
 
     // Settle the layout so the buttons are where they will finally be.
     for _ in 0..3 {
-        let _ = ctx.run(raw_input_at_width(Vec::new(), 1400.0), |ctx| {
-            apply_style(ctx, app.palette);
-            draw_toolbar(&mut app, ctx);
-        });
+        discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1400.0), |ui| {
+            apply_style(ui.ctx(), app.palette);
+            draw_toolbar(&mut app, ui);
+        }));
     }
     assert!(
         !tooltip_is_showing(&ctx),
@@ -406,19 +417,19 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
 
     // The first toolbar button sits just right of the app mark.
     let over_button = egui::pos2(150.0, 40.0);
-    let _ = ctx.run(
+    discard(ctx.run_ui(
         raw_input_at_width(pointer_move(over_button), 1400.0),
-        |ctx| {
-            apply_style(ctx, app.palette);
-            draw_toolbar(&mut app, ctx);
+        |ui| {
+            apply_style(ui.ctx(), app.palette);
+            draw_toolbar(&mut app, ui);
         },
-    );
+    ));
     // One further frame with no events at all: the pointer is now still,
     // which is precisely the state the old defaults never got a frame in.
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1400.0), |ctx| {
-        apply_style(ctx, app.palette);
-        draw_toolbar(&mut app, ctx);
-    });
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1400.0), |ui| {
+        apply_style(ui.ctx(), app.palette);
+        draw_toolbar(&mut app, ui);
+    }));
 
     assert!(
         tooltip_is_showing(&ctx),
@@ -895,8 +906,8 @@ fn application_labels_do_not_capture_text_selection() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     apply_style(&ctx, themes::Palette::default());
-    assert!(!ctx.style().interaction.selectable_labels);
-    assert!(!ctx.style().interaction.multi_widget_text_select);
+    assert!(!ctx.global_style().interaction.selectable_labels);
+    assert!(!ctx.global_style().interaction.multi_widget_text_select);
 }
 
 #[test]
@@ -1085,13 +1096,13 @@ fn menu_icons_never_overlap_their_labels() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     probe(&TEST_ICON_MENU_LAYOUTS).clear();
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             icon_selectable_label(ui, true, Icon::Tree, "All files");
             icon_button(ui, true, Icon::Settings, "     Settings…");
             icon_button(ui, false, Icon::Duplicate, "     Duplicate Files");
         });
-    });
+    }));
 
     let layouts = probe(&TEST_ICON_MENU_LAYOUTS);
     assert_eq!(layouts.len(), 3);
@@ -1120,10 +1131,10 @@ fn menu_bar_names_are_clearly_separated() {
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
     probe(&TEST_MENU_BAR_RECTS).clear();
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1280.0), |ctx| {
-        apply_style(ctx, app.palette);
-        draw_menu_bar(&mut app, ctx);
-    });
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1280.0), |ui| {
+        apply_style(ui.ctx(), app.palette);
+        draw_menu_bar(&mut app, ui);
+    }));
 
     let names = probe(&TEST_MENU_BAR_RECTS);
     assert_eq!(
@@ -1140,7 +1151,7 @@ fn menu_bar_names_are_clearly_separated() {
     // with, so ask the context.
     let font = egui::FontId::new(14.0, egui::FontFamily::Proportional);
     let text_width = |label: &str| {
-        ctx.fonts(|fonts| {
+        ctx.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(label.to_owned(), font.clone(), Color32::WHITE)
                 .size()
@@ -1189,8 +1200,8 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     probe(&TEST_MENU_ITEM_LAYOUTS).clear();
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             menu_action(ui, true, Icon::FolderOpen, "Select folder…", "Ctrl+O");
             menu_action(ui, true, Icon::Refresh, "Rescan", "F5");
             menu_action(ui, true, Icon::Trash, "Delete to Recycle Bin", "Del");
@@ -1198,7 +1209,7 @@ fn menu_rows_align_and_keep_shortcuts_off_their_labels() {
             menu_toggle(ui, &mut true, "Grid lines");
             menu_choice(ui, true, "Logical size");
         });
-    });
+    }));
 
     let layouts = probe(&TEST_MENU_ITEM_LAYOUTS);
     assert_eq!(layouts.len(), 6);
@@ -1342,15 +1353,15 @@ fn extension_panel_width(
     events: Vec<egui::Event>,
 ) -> (f32, f32) {
     let mut rect = egui::Rect::ZERO;
-    let _ = ctx.run(raw_input_at_width(events, screen), |ctx| {
-        let response = egui::SidePanel::right("test_extension_panel")
+    discard(ctx.run_ui(raw_input_at_width(events, screen), |ui| {
+        let response = egui::Panel::right("test_extension_panel")
             .resizable(true)
-            .min_width(0.0)
-            .default_width(1200.0)
+            .min_size(0.0)
+            .default_size(1200.0)
             .frame(panel_frame())
-            .show(ctx, |ui| draw_extension_list(app, ui));
+            .show(ui, |ui| draw_extension_list(app, ui));
         rect = response.response.rect;
-    });
+    }));
     (rect.width(), rect.left())
 }
 
@@ -1407,9 +1418,19 @@ fn the_extensions_pane_takes_the_width_it_is_given() {
     );
 }
 
-/// Horizontal gap between columns, which is where the resize handle
-/// lives. Matches `apply_style`'s `item_spacing.x`.
-const COLUMN_GAP: f32 = 8.0;
+/// How far left of the next column's leading edge to grab.
+///
+/// `egui_extras` puts a column's resize line at the *next* column's left
+/// edge and gives it `interaction.resize_grab_radius_side` of slack. One
+/// pixel inside that is a reliable hit, and — unlike aiming at the line
+/// itself — it cannot land on the next header, whose own click sense
+/// covers its whole cell and would swallow the press.
+///
+/// Until egui 0.36 the handle sat one `item_spacing.x` right of the
+/// *previous* cell instead, which is what this constant used to encode;
+/// the gap between two cells is now two spacings wide, so the midpoint is
+/// no longer the boundary.
+const COLUMN_GRAB_INSET: f32 = 1.0;
 
 /// Width of a named header on the most recent frame.
 /// The width a header was last rendered at.
@@ -1452,21 +1473,36 @@ fn drag_column_border(
     for _ in 0..4 {
         render(ctx, app, raw_input_at_width(Vec::new(), 1400.0));
     }
-    let edge = probe(headers)
+    // The grab strip is on the *next* column's leading edge, so the
+    // target is derived from the pair of cells rather than from a
+    // spacing constant: the probe records every header in draw order, so
+    // the entry after the last copy of `label` is the column to its
+    // right.
+    let rendered: Vec<(&'static str, egui::Rect)> = probe(headers).iter().copied().collect();
+    let this = rendered
         .iter()
-        .rev()
-        .find(|(seen, _)| *seen == label)
-        // The grab strip is in the gap *between* columns, one full
-        // `item_spacing.x` right of the cell's own edge — not on the
-        // visible boundary, which is where an earlier version of this
-        // test aimed and consequently reported resizing as broken when
-        // it was working.
-        .map(|(_, rect)| egui::pos2(rect.right() + COLUMN_GAP, rect.center().y));
+        .rposition(|(seen, _)| *seen == label)
+        .map(|index| (index, rendered[index].1));
     assert!(
-        edge.is_some(),
+        this.is_some(),
         "{label} did not render, so it has no border"
     );
-    let edge = edge.unwrap_or_default();
+    let Some((index, cell)) = this else {
+        return;
+    };
+    let next = rendered
+        .iter()
+        .skip(index + 1)
+        .map(|(_, rect)| *rect)
+        .find(|rect| rect.left() > cell.right());
+    assert!(
+        next.is_some(),
+        "{label} is the last column rendered, so nothing borders it on the right"
+    );
+    let Some(next) = next else {
+        return;
+    };
+    let edge = egui::pos2(next.left() - COLUMN_GRAB_INSET, cell.center().y);
 
     render(
         ctx,
@@ -1535,7 +1571,7 @@ fn the_directory_table_fills_resizes_and_scrolls() {
         // The table reserves a gutter for its own vertical scrollbar, so
         // the columns legitimately stop short of the viewport by that
         // much. That strip is a scrollbar, not dead space.
-        let gutter = ctx.style().spacing.scroll.allocated_width();
+        let gutter = ctx.global_style().spacing.scroll.allocated_width();
         assert!(
             row + gutter + 1.0 >= viewport,
             "in a {width:.0}px pane the table is {row:.0}px wide inside a {viewport:.0}px \
@@ -1679,7 +1715,7 @@ fn directory_table_expands_to_fill_a_wider_pane() -> anyhow::Result<()> {
     assert!(
         wide_width > narrow_width,
         "table should absorb pane growth: narrow={narrow_width}, wide={wide_width}, screen={}",
-        ctx.screen_rect().width()
+        ctx.viewport_rect().width()
     );
     Ok(())
 }
@@ -1814,7 +1850,7 @@ fn render_modal_at(
         events,
         ..raw_input(Vec::new())
     };
-    let _ = ctx.run(input, |ctx| super::modal::draw_modal(app, ctx));
+    discard(ctx.run_ui(input, |ui| super::modal::draw_modal(app, ui.ctx())));
 }
 
 /// Frames to run before the modal has painted anything.
@@ -1944,7 +1980,7 @@ fn the_delete_key_cannot_queue_a_second_delete_while_one_is_being_confirmed() {
     // Shift+Del while the confirmation is up used to reach the shortcut
     // handler and replace the queued delete with a *permanent* one,
     // underneath a card still showing the recycle-bin wording.
-    let _ = ctx.run(
+    discard(ctx.run_ui(
         raw_input(vec![egui::Event::Key {
             key: egui::Key::Delete,
             physical_key: None,
@@ -1953,7 +1989,7 @@ fn the_delete_key_cannot_queue_a_second_delete_while_one_is_being_confirmed() {
             modifiers: egui::Modifiers::SHIFT,
         }]),
         |ctx| super::handle_shortcuts(&mut app, ctx),
-    );
+    ));
 
     assert_eq!(
         app.pending_delete.as_ref().map(|pending| pending.permanent),
@@ -2192,21 +2228,21 @@ fn a_hover_highlight_ramps_rather_than_switching() {
     // returns whatever it was asked for — that is what keeps a control
     // that appears already-selected from sliding into place — so a ramp
     // has to start from a state egui has actually seen.
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        let _ = hover_t(ctx, id, false);
-    });
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        let _ = hover_t(ui.ctx(), id, false);
+    }));
 
     let mut rising = Vec::new();
     for _ in 0..14 {
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            rising.push(hover_t(ctx, id, true))
-        });
+        discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+            rising.push(hover_t(ui.ctx(), id, true))
+        }));
     }
     let mut falling = Vec::new();
     for _ in 0..14 {
-        let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-            falling.push(hover_t(ctx, id, false))
-        });
+        discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+            falling.push(hover_t(ui.ctx(), id, false))
+        }));
     }
 
     assert!(
@@ -2358,20 +2394,20 @@ fn menu_bar_highlights_are_square_and_fill_the_bar() {
     probe(&TEST_MENU_BAR_ROUNDING).clear();
     let bar_top = std::cell::Cell::new(0.0_f32);
     let bar_bottom = std::cell::Cell::new(0.0_f32);
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1280.0), |ctx| {
-        apply_style(ctx, app.palette);
-        bar_top.set(ctx.screen_rect().top());
-        draw_menu_bar(&mut app, ctx);
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1280.0), |ui| {
+        apply_style(ui.ctx(), app.palette);
+        bar_top.set(ui.ctx().viewport_rect().top());
+        draw_menu_bar(&mut app, ui);
         // Whatever the menu bar panel did not claim starts here, so this
         // is the bar's own bottom edge.
-        bar_bottom.set(ctx.available_rect().top());
-    });
+        bar_bottom.set(ui.available_rect_before_wrap().top());
+    }));
 
     let roundings = probe(&TEST_MENU_BAR_ROUNDING);
     assert_eq!(roundings.len(), 7, "expected one reading per menu");
     for (label, rounding) in roundings.iter() {
         assert_eq!(
-            *rounding, 0.0,
+            *rounding, 0,
             "the {label} menu would paint a {rounding}px rounded hover background"
         );
     }
@@ -2402,15 +2438,15 @@ fn both_kinds_of_table_header_start_their_text_in_the_same_place() -> anyhow::Re
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     probe(&TEST_TABLE_HEADER_TEXT).clear();
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        apply_style(ctx, themes::Palette::default());
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        apply_style(ui.ctx(), themes::Palette::default());
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.vertical(|ui| {
                 sortable_header(ui, "Size", None, true);
                 table_header_label(ui, "Size");
             });
         });
-    });
+    }));
 
     let insets = probe(&TEST_TABLE_HEADER_TEXT);
     assert_eq!(
@@ -2478,15 +2514,15 @@ fn every_pane_rules_off_its_heading_at_the_same_inset() -> anyhow::Result<()> {
     let mut app = app_with_one_file();
     probe(&TEST_SECTION_RULE_RECTS).clear();
     apply_style(&ctx, app.palette);
-    let _ = ctx.run(raw_input_at_width(Vec::new(), 1000.0), |ctx| {
-        egui::TopBottomPanel::bottom("treemap_pane")
-            .default_height(240.0)
+    discard(ctx.run_ui(raw_input_at_width(Vec::new(), 1000.0), |ui| {
+        egui::Panel::bottom("treemap_pane")
+            .default_size(240.0)
             .frame(super::theme::panel_frame())
-            .show(ctx, |ui| draw_treemap(&mut app, ui));
+            .show(ui, |ui| draw_treemap(&mut app, ui));
         egui::CentralPanel::default()
             .frame(super::theme::panel_frame())
-            .show(ctx, |ui| draw_extension_list(&mut app, ui));
-    });
+            .show(ui, |ui| draw_extension_list(&mut app, ui));
+    }));
 
     let rules = probe(&TEST_SECTION_RULE_RECTS);
     assert_eq!(rules.len(), 2, "both panes should rule off their heading");
@@ -2580,7 +2616,7 @@ fn the_style_points_scrollbars_at_the_control_color_not_a_surface() {
         let palette = themes::Palette::from_spec(spec);
         let ctx = egui::Context::default();
         apply_style(&ctx, palette);
-        let visuals = ctx.style().visuals.clone();
+        let visuals = ctx.global_style().visuals.clone();
         let name = &spec.name;
 
         assert_eq!(
@@ -2614,7 +2650,7 @@ fn every_scroll_area_shares_one_style_and_takes_its_own_space() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     apply_style(&ctx, themes::Palette::default());
-    let scroll = ctx.style().spacing.scroll;
+    let scroll = ctx.global_style().spacing.scroll;
     let expected = scroll_style();
 
     // Solid, not floating. A floating bar is invisible until the pointer
@@ -2638,7 +2674,7 @@ fn every_scroll_area_shares_one_style_and_takes_its_own_space() {
     // The style is the only place any of the five scroll areas is
     // configured, so switching theme must not disturb it.
     apply_style(&ctx, themes::palette_for("light-modern"));
-    let after = ctx.style().spacing.scroll;
+    let after = ctx.global_style().spacing.scroll;
     assert_eq!(after.bar_width, expected.bar_width);
     assert_eq!(after.floating, expected.floating);
     assert_eq!(after.handle_min_length, expected.handle_min_length);
@@ -2671,7 +2707,7 @@ fn the_modal_reserves_room_for_its_scrollbar() -> anyhow::Result<()> {
 
 fn apply_style_and_bar_width(ctx: &egui::Context, palette: themes::Palette) -> f32 {
     apply_style(ctx, palette);
-    ctx.style().spacing.scroll.allocated_width()
+    ctx.global_style().spacing.scroll.allocated_width()
 }
 
 /// Truncation fits the width it is given, and keeps as much as fits.
@@ -2687,8 +2723,8 @@ fn a_truncated_label_fits_its_width_and_keeps_everything_that_does() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let ctx = egui::Context::default();
     apply_style(&ctx, themes::Palette::default());
-    let _ = ctx.run(raw_input(Vec::new()), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    discard(ctx.run_ui(raw_input(Vec::new()), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let painter = ui.painter().clone();
             let font = egui::TextStyle::Small.resolve(ui.style());
             let width_of = |text: &str| {
@@ -2742,7 +2778,7 @@ fn a_truncated_label_fits_its_width_and_keeps_everything_that_does() {
                 }
             }
         });
-    });
+    }));
 }
 
 /// A pane that was once wider does not keep a scrollbar it no longer
@@ -2907,7 +2943,7 @@ fn press(ctx: &egui::Context, app: &mut GuiApp, key: egui::Key, modifiers: egui:
         repeat: false,
         modifiers,
     });
-    let _ = ctx.run(input, |ctx| handle_shortcuts(app, ctx));
+    discard(ctx.run_ui(input, |ui| handle_shortcuts(app, ui.ctx())));
 }
 
 /// A modal is modal for the keyboard too.

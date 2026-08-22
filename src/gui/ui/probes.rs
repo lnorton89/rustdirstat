@@ -42,7 +42,7 @@ pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)
 /// menu bar has to override it — a rounded pill under a menu name reads
 /// as a floating button rather than as part of the bar.
 #[cfg(test)]
-pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, f32)>> =
+pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// `(label, x of the first glyph)` for every table column header, of

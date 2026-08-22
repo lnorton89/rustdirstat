@@ -395,12 +395,22 @@ impl GuiApp {
 pub(in crate::gui) const NO_EXTENSION_LABEL: &str = "[no extension]";
 
 impl eframe::App for GuiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    /// Everything that is not drawing.
+    ///
+    /// eframe 0.34 split the old `update` in two: `logic` runs once
+    /// before each `ui`, and additionally while the window is hidden and
+    /// something has asked for a repaint. Polling the background workers
+    /// belongs on that side of the line — a finished scan has to be
+    /// collected whether or not anyone is looking at the window.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_background(ctx);
-        super::ui::draw(self, ctx);
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        super::ui::draw(self, ui);
+    }
+
+    fn on_exit(&mut self) {
         self.save_preferences();
         // Preferences are the only thing that has to survive the process,
         // and they are on disk by now. Everything else is a cache of the

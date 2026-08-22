@@ -19,7 +19,7 @@ use eframe::egui::{self};
 use super::modal::{dismiss_top, modal_is_open};
 
 pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
-    let editing_text = ctx.wants_keyboard_input();
+    let editing_text = ctx.egui_wants_keyboard_input();
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && modal_is_open(app) {
         dismiss_top(app);
         return;

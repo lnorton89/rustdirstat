@@ -54,81 +54,76 @@ use self::modal::*;
 use self::theme::*;
 use self::treemap::*;
 
-pub(super) fn draw(app: &mut GuiApp, ctx: &egui::Context) {
-    apply_style(ctx, app.palette);
-    draw_menu_bar(app, ctx);
+pub(super) fn draw(app: &mut GuiApp, ui: &mut egui::Ui) {
+    apply_style(ui.ctx(), app.palette);
+    draw_menu_bar(app, ui);
     if app.view.toolbar {
-        draw_toolbar(app, ctx);
+        draw_toolbar(app, ui);
     }
     if app.view.status_bar {
-        draw_status_bar(app, ctx);
+        draw_status_bar(app, ui);
     }
-    draw_workspace(app, ctx);
-    draw_modal(app, ctx);
-    handle_shortcuts(app, ctx);
+    draw_workspace(app, ui);
+    draw_modal(app, ui.ctx());
+    handle_shortcuts(app, ui.ctx());
 }
 
-pub(super) fn draw_workspace(app: &mut GuiApp, ctx: &egui::Context) {
+pub(super) fn draw_workspace(app: &mut GuiApp, ui: &mut egui::Ui) {
     match (app.view.treemap, app.view.orientation) {
         (true, PaneOrientation::Horizontal) => {
-            egui::TopBottomPanel::bottom("treemap_horizontal")
+            egui::Panel::bottom("treemap_horizontal")
                 .resizable(true)
-                .default_height(280.0)
-                .min_height(0.0)
+                .default_size(280.0)
+                .min_size(0.0)
                 .frame(panel_frame())
-                .show(ctx, |ui| draw_treemap(app, ui));
-            draw_upper_workspace(app, ctx, true);
+                .show(ui, |ui| draw_treemap(app, ui));
+            draw_upper_workspace(app, ui, true);
         }
         (true, PaneOrientation::Vertical) => {
-            egui::SidePanel::right("treemap_vertical")
+            let half = ui.available_rect_before_wrap().width() * 0.48;
+            egui::Panel::right("treemap_vertical")
                 .resizable(true)
-                .default_width(ctx.available_rect().width() * 0.48)
-                .min_width(0.0)
+                .default_size(half)
+                .min_size(0.0)
                 .frame(panel_frame())
-                .show(ctx, |ui| draw_treemap(app, ui));
-            draw_upper_workspace(app, ctx, false);
+                .show(ui, |ui| draw_treemap(app, ui));
+            draw_upper_workspace(app, ui, false);
         }
-        (false, _) => draw_upper_workspace(
-            app,
-            ctx,
-            app.view.orientation == PaneOrientation::Horizontal,
-        ),
+        (false, _) => {
+            draw_upper_workspace(app, ui, app.view.orientation == PaneOrientation::Horizontal)
+        }
     }
 }
 
-pub(super) fn draw_upper_workspace(
-    app: &mut GuiApp,
-    ctx: &egui::Context,
-    extension_on_right: bool,
-) {
+pub(super) fn draw_upper_workspace(app: &mut GuiApp, ui: &mut egui::Ui, extension_on_right: bool) {
     if app.view.extension_pane {
         if extension_on_right {
-            egui::SidePanel::right("extension_right")
+            egui::Panel::right("extension_right")
                 .resizable(true)
-                .default_width(430.0)
-                .min_width(0.0)
+                .default_size(430.0)
+                .min_size(0.0)
                 .frame(panel_frame())
-                .show(ctx, |ui| draw_extension_list(app, ui));
+                .show(ui, |ui| draw_extension_list(app, ui));
         } else {
-            egui::TopBottomPanel::bottom("extension_bottom")
+            egui::Panel::bottom("extension_bottom")
                 .resizable(true)
-                .default_height(220.0)
-                .min_height(0.0)
+                .default_size(220.0)
+                .min_size(0.0)
                 .frame(panel_frame())
-                .show(ctx, |ui| draw_extension_list(app, ui));
+                .show(ui, |ui| draw_extension_list(app, ui));
         }
     }
     egui::CentralPanel::default()
         .frame(panel_frame())
-        .show(ctx, |ui| draw_file_area(app, ui));
+        .show(ui, |ui| draw_file_area(app, ui));
 }
 
 pub(super) fn draw_file_area(app: &mut GuiApp, ui: &mut egui::Ui) {
     if let Some(message) = app.busy_text() {
-        Frame::none()
+        Frame::NONE
             .fill(palette().accent_muted)
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(Margin::symmetric(PAD, SPACE_SM))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(Margin::symmetric(px(PAD), px(SPACE_SM)))
             .stroke(Stroke::new(1.0_f32, palette().accent))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

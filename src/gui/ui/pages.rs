@@ -49,10 +49,10 @@ pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
 /// A titled block of related controls.
 fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     let palette = palette();
-    Frame::none()
+    Frame::NONE
         .fill(palette.raised)
-        .rounding(egui::Rounding::same(9.0))
-        .inner_margin(Margin::same(SPACE_MD))
+        .corner_radius(egui::CornerRadius::same(9))
+        .inner_margin(Margin::same(px(SPACE_MD)))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -161,8 +161,13 @@ fn theme_row(ui: &mut egui::Ui, selected: bool, spec: &themes::ThemeSpec) -> egu
         } else {
             hover_fill(ui, &response, Color32::TRANSPARENT, palette.hover)
         };
-        ui.painter()
-            .rect(rect, egui::Rounding::same(7.0), fill, Stroke::NONE);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(7),
+            fill,
+            Stroke::NONE,
+            egui::StrokeKind::Middle,
+        );
         // The swatch shows the theme's own panel, accent, and two text
         // weights, painted in that theme rather than the active one —
         // which is the whole point of showing a swatch at all.
@@ -172,9 +177,10 @@ fn theme_row(ui: &mut egui::Ui, selected: bool, spec: &themes::ThemeSpec) -> egu
         );
         ui.painter().rect(
             swatch,
-            egui::Rounding::same(4.0),
+            egui::CornerRadius::same(4),
             preview.panel,
             Stroke::new(1.0_f32, preview.border),
+            egui::StrokeKind::Middle,
         );
         for (index, color) in [preview.accent, preview.primary_text, preview.secondary_text]
             .into_iter()
@@ -399,10 +405,10 @@ fn tool_row(
     let palette = palette();
     let running = app.tools.running == Some(index);
     let mut clicked = false;
-    let frame = Frame::none()
+    let frame = Frame::NONE
         .fill(palette.raised)
-        .rounding(egui::Rounding::same(9.0))
-        .inner_margin(Margin::symmetric(SPACE_MD, SPACE_MD))
+        .corner_radius(egui::CornerRadius::same(9))
+        .inner_margin(Margin::symmetric(px(SPACE_MD), px(SPACE_MD)))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -473,11 +479,11 @@ fn tool_row(
         edge.max.x = row.min.x + SEVERITY_BAR;
         ui.painter().rect_filled(
             edge,
-            egui::Rounding {
-                nw: 8.0,
-                sw: 8.0,
-                ne: 0.0,
-                se: 0.0,
+            egui::CornerRadius {
+                nw: 8,
+                sw: 8,
+                ne: 0,
+                se: 0,
             },
             palette.danger,
         );
@@ -490,10 +496,10 @@ fn tool_row(
 
 /// A small pill carrying one fact about a row.
 fn chip(ui: &mut egui::Ui, tone: Color32, text: &str) {
-    Frame::none()
+    Frame::NONE
         .fill(blend(palette().raised, tone, 0.18))
-        .rounding(egui::Rounding::same(5.0))
-        .inner_margin(Margin::symmetric(SPACE_SM, SPACE_XS))
+        .corner_radius(egui::CornerRadius::same(5))
+        .inner_margin(Margin::symmetric(px(SPACE_SM), px(SPACE_XS)))
         .show(ui, |ui| {
             ui.label(RichText::new(text).small().color(tone));
         });
@@ -506,10 +512,10 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
     } else {
         palette.success
     };
-    Frame::none()
+    Frame::NONE
         .fill(palette.raised)
-        .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::same(SPACE_MD))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(Margin::same(px(SPACE_MD)))
         .stroke(Stroke::new(1.0_f32, palette.border))
         .show(ui, |ui| {
             fill_width(ui);
@@ -531,10 +537,10 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
                 ui.add_space(SPACE_SM);
                 // Monospace, because a DISM report is a table and a
                 // proportional font turns it back into prose.
-                Frame::none()
+                Frame::NONE
                     .fill(palette.app)
-                    .rounding(egui::Rounding::same(6.0))
-                    .inner_margin(Margin::same(SPACE_SM))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(Margin::same(px(SPACE_SM)))
                     .show(ui, |ui| {
                         fill_width(ui);
                         ui.label(RichText::new(&entry.detail).monospace().small());

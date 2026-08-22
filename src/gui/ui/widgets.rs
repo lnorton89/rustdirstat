@@ -105,7 +105,7 @@ pub(super) fn row_hover_edge(painter: &egui::Painter, response: &egui::Response,
     let inset = (1.0 - t) * edge.height() * 0.5;
     painter.rect_filled(
         edge.shrink2(Vec2::new(0.0, inset)),
-        egui::Rounding::same(1.5),
+        egui::CornerRadius::same(2),
         palette().accent.gamma_multiply(t),
     );
 }
@@ -143,8 +143,13 @@ pub(super) fn view_tab(ui: &mut egui::Ui, selected: bool, view: FileView) -> egu
         } else {
             Stroke::NONE
         };
-        ui.painter()
-            .rect(rect, egui::Rounding::same(6.0), fill, stroke);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(6),
+            fill,
+            stroke,
+            egui::StrokeKind::Middle,
+        );
         let color = if selected {
             palette().on_accent
         } else {
@@ -237,7 +242,7 @@ pub(super) fn expand_toggle(ui: &mut egui::Ui, id: egui::Id, expanded: bool) -> 
     if hot.a() > 0 {
         ui.painter().rect_filled(
             egui::Rect::from_center_size(center, Vec2::splat(EXPAND_TOGGLE_WIDTH)),
-            egui::Rounding::same(5.0),
+            egui::CornerRadius::same(5),
             hot,
         );
     }
@@ -433,12 +438,13 @@ pub(super) fn menu_item(
             if t > 0.0 {
                 ui.painter().rect(
                     rect.expand(visuals.expansion),
-                    visuals.rounding,
+                    visuals.corner_radius,
                     visuals.weak_bg_fill.gamma_multiply(t),
                     Stroke::new(
                         visuals.bg_stroke.width,
                         visuals.bg_stroke.color.gamma_multiply(t),
                     ),
+                    egui::StrokeKind::Middle,
                 );
             }
             let color = if enabled {
@@ -591,7 +597,7 @@ pub(super) fn sortable_header(
             hover_fill(ui, &response, palette().raised, palette().hover)
         };
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(4.0), fill);
+            .rect_filled(rect, egui::CornerRadius::same(4), fill);
         let text_pos = egui::pos2(
             rect.left() + HEADER_TEXT_INSET,
             rect.center().y - galley.size().y * 0.5,
@@ -643,7 +649,7 @@ pub(super) fn table_header_label(ui: &mut egui::Ui, label: &str) {
     let (rect, _) = ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter()
-            .rect_filled(rect, egui::Rounding::same(4.0), palette().raised);
+            .rect_filled(rect, egui::CornerRadius::same(4), palette().raised);
         ui.painter().galley(
             egui::pos2(
                 rect.left() + HEADER_TEXT_INSET,
@@ -720,6 +726,7 @@ pub(super) fn truncate_for_width(
     // A galley already knows where each character sits: `Row::glyphs` is
     // one entry per `char`, positioned from the galley's own origin. So
     // the cut point is a scan over that, not a search over re-layouts.
+    let font_for_check = font.clone();
     let ellipsis_width = painter
         .layout_no_wrap(ELLIPSIS.to_string(), font, Color32::WHITE)
         .rect
@@ -742,7 +749,41 @@ pub(super) fn truncate_for_width(
         return String::new();
     }
     kept.push(ELLIPSIS);
+
+    // The scan above adds up advance widths; a laid-out string is not
+    // always exactly that sum. Shaping can kern the last kept character
+    // against the ellipsis, and the galley's rect carries the final
+    // glyph's side bearing — egui 0.36 lays "a-rather-l…" out 0.8px wider
+    // than its own advances predict, which is enough to fail the promise
+    // this function exists to keep.
+    //
+    // So the scan is the estimate and this is the check: lay the result
+    // out once, and give back characters until it really fits. It
+    // normally costs one layout and no iterations at all, and it is only
+    // reached for labels that are being truncated anyway.
+    while measured_width(&kept, &font_for_check, painter) > max_w {
+        let Some(cut) = kept
+            .char_indices()
+            .rev()
+            .find(|(_, c)| *c != ELLIPSIS)
+            .map(|(index, _)| index)
+        else {
+            return String::new();
+        };
+        kept.remove(cut);
+        if kept.chars().all(|c| c == ELLIPSIS) {
+            return String::new();
+        }
+    }
     kept
+}
+
+/// Width of one laid-out line, for [`truncate_for_width`]'s final check.
+fn measured_width(text: &str, font: &egui::FontId, painter: &egui::Painter) -> f32 {
+    painter
+        .layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE)
+        .rect
+        .width()
 }
 
 /// The character [`truncate_for_width`] cuts with.
