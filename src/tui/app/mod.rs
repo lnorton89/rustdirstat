@@ -64,6 +64,10 @@ pub(in crate::tui) enum Action {
     StartMove,
     ToggleProperties,
     ToggleWinTools,
+    ToggleCleanups,
+    SelectCleanup(usize),
+    ConfirmCleanup,
+    CancelCleanup,
     SelectWinTool(usize),
     ConfirmWinTool,
     CancelWinTool,
@@ -136,6 +140,32 @@ pub(in crate::tui) struct WinToolsState {
     /// Set while a destructive tool waits on a yes/no confirmation,
     /// before `wintools::run` is actually called.
     pub pending: Option<usize>,
+}
+
+/// The user's own commands, and the one waiting on a confirmation.
+///
+/// Mirrors [`WinToolsState`] deliberately: the two are the same shape of
+/// thing — a list you open, pick from, and are asked about — and the
+/// terminal has one way of doing that.
+#[derive(Default)]
+pub(in crate::tui) struct CleanupState {
+    pub visible: bool,
+    pub selected: usize,
+    /// What the config held when the popup was opened.
+    pub list: Vec<crate::cleanups::Cleanup>,
+    /// The *resolved* command awaiting a yes/no, not the index of the
+    /// cleanup that produced it. What the prompt shows has to be what
+    /// will run: a template plus a selection is not something a person
+    /// can check, and the selection could move between question and
+    /// answer. See `docs/CLEANUPS_THREAT_MODEL.md`.
+    pub pending: Option<PendingCleanup>,
+}
+
+/// A resolved cleanup waiting on its yes/no.
+pub(in crate::tui) struct PendingCleanup {
+    pub name: String,
+    pub command: crate::cleanups::Command,
+    pub capture_output: bool,
 }
 
 /// The recursive name search: the query being typed, and the results.
@@ -221,6 +251,7 @@ pub(in crate::tui) struct App {
     pub move_to: MoveState,
     pub show_properties: bool,
     pub wintools: WinToolsState,
+    pub cleanups: CleanupState,
 }
 
 const TREEMAP_SPLIT_MIN: u16 = 20;
@@ -261,6 +292,7 @@ impl App {
             move_to: MoveState::default(),
             show_properties: false,
             wintools: WinToolsState::default(),
+            cleanups: CleanupState::default(),
         };
         app.refresh_ext_stats();
         app
@@ -338,6 +370,10 @@ impl App {
                 | Action::StartMove
                 | Action::ToggleProperties
                 | Action::ToggleWinTools
+                | Action::ToggleCleanups
+                | Action::SelectCleanup(_)
+                | Action::ConfirmCleanup
+                | Action::CancelCleanup
                 | Action::SelectWinTool(_)
                 | Action::ConfirmWinTool
                 | Action::CancelWinTool
@@ -468,6 +504,20 @@ impl App {
                 self.wintools.visible = !self.wintools.visible;
                 self.wintools.selected = 0;
             }
+            Action::ToggleCleanups => {
+                // Re-read on open, the way the window does: cleanups live
+                // in a text file that may have changed while the app was
+                // running, and reading it per frame would be file I/O on
+                // a draw path.
+                if !self.cleanups.visible {
+                    self.cleanups.list = crate::config::load().cleanups;
+                }
+                self.cleanups.visible = !self.cleanups.visible;
+                self.cleanups.selected = 0;
+            }
+            Action::SelectCleanup(idx) => self.request_cleanup(idx),
+            Action::ConfirmCleanup => self.confirm_cleanup(),
+            Action::CancelCleanup => self.cleanups.pending = None,
             Action::SelectWinTool(idx) => {
                 if let Some(tool) = crate::wintools::TOOLS.get(idx) {
                     if tool.destructive {

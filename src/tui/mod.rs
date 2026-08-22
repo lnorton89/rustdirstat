@@ -173,6 +173,13 @@ fn run_app<B: TerminalBackend>(
     }
 }
 
+/// How many finished folders the scanning splash lists.
+///
+/// Enough to be useful on a drive whose top level holds thirty entries,
+/// short enough to leave the counters and the cancel hint on screen in a
+/// small terminal.
+const SPLASH_ENTRIES: usize = 8;
+
 fn scan_with_progress<B: TerminalBackend>(
     terminal: &mut Terminal<B>,
     roots: &[PathBuf],
@@ -181,13 +188,33 @@ fn scan_with_progress<B: TerminalBackend>(
     let progress = Arc::new(Progress::default());
     let progress_clone = progress.clone();
     let roots_clone = roots.to_vec();
+    // Finished top-level folders, as the scan publishes them. The splash
+    // shows the biggest so far, which is the terminal's version of the
+    // window filling in: it cannot browse a tree that is still being
+    // built, but it can stop being a spinner.
+    //
+    // Only the name and size cross the channel, not the node: the tree is
+    // the scan's to assemble, and a TUI that held children of its own
+    // would be a second assembler to keep in step with it.
+    let (found_tx, found_rx) = std::sync::mpsc::channel::<(String, u64)>();
     let handle = std::thread::spawn(move || {
-        scanner::scan_many(&roots_clone, Some(&progress_clone), options)
+        let publish = |node: crate::model::Node| {
+            let _ = found_tx.send((node.name.to_string_lossy().to_string(), node.size));
+        };
+        scanner::scan_many_streaming(&roots_clone, Some(&progress_clone), options, &publish)
     });
 
     let started = Instant::now();
+    let mut found: Vec<(String, u64)> = Vec::new();
     loop {
-        terminal.draw(|f| ui::draw_scanning(f, &progress, started))?;
+        // Whatever arrived since the last frame, kept biggest-first and
+        // bounded: the splash has a screen, not a scrollback.
+        while let Ok(entry) = found_rx.try_recv() {
+            found.push(entry);
+        }
+        found.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+        found.truncate(SPLASH_ENTRIES);
+        terminal.draw(|f| ui::draw_scanning(f, &progress, started, &found))?;
         if handle.is_finished() {
             break;
         }

@@ -18,31 +18,65 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
 
     let mut filter_suffix = if app.filter_mode {
-        format!("   search: {}▌", app.filter)
+        format!(
+            "   {}▌",
+            tr_with("tui.header.search", &[("query", &app.filter)])
+        )
     } else if !app.filter.is_empty() {
-        format!("   filtered: \"{}\"", app.filter)
+        format!(
+            "   {}",
+            tr_with("tui.header.filtered", &[("query", &app.filter)])
+        )
     } else {
         String::new()
     };
-    let size_note = if app.use_physical { " (physical)" } else { "" };
+    // The size and its "(physical)" note are one message rather than a
+    // string with a suffix bolted on: a language that puts the
+    // qualifier first has no way to express that as a suffix.
+    let size = human_bytes(node.effective_size(app.use_physical));
+    let size = if app.use_physical {
+        tr_with("tui.header.physical", &[("size", &size)])
+    } else {
+        size
+    };
     let stats_core = format!(
-        "   ·   {}{}, {} files{}",
-        human_bytes(node.effective_size(app.use_physical)),
-        size_note,
-        thousands(node.file_count),
-        if node.error { "   <access denied>" } else { "" },
+        "   ·   {}{}",
+        tr_with(
+            "tui.header.stats",
+            &[("size", &size), ("files", &thousands(node.file_count))]
+        ),
+        if node.error {
+            format!("   {}", tr("tui.header.access_denied"))
+        } else {
+            String::new()
+        },
     );
     let mut free_space_extra = if app.path_indices.is_empty() && app.tree.is_volume_root() {
         match (app.tree.volume_free, app.tree.volume_total) {
             (Some(free), Some(total)) => format!(
-                "   ·   {} free of {} on this volume",
-                human_bytes(free),
-                human_bytes(total)
+                "   ·   {}",
+                tr_with(
+                    "tui.header.free_space",
+                    &[("free", &human_bytes(free)), ("total", &human_bytes(total)),]
+                )
             ),
             _ => String::new(),
         }
     } else {
         String::new()
+    };
+    // How much of the size beside it is the same bytes under two names.
+    // Only at the top, where the figure describes the whole scan, and
+    // only when there is something to say: a permanent "0 B shared" on a
+    // volume without hard links is noise. See `scanner::HardLinks`.
+    let hard_link_extra = match app.tree.hard_link_bytes.filter(|bytes| *bytes > 0) {
+        Some(shared) if app.path_indices.is_empty() => {
+            format!(
+                "   ·   {}",
+                tr_with("tui.header.hard_links", &[("size", &human_bytes(shared))])
+            )
+        }
+        _ => String::new(),
     };
     // Some entries in this subtree couldn't be read (permission edge case,
     // a race with something deleting them mid-scan) and were left out of
@@ -50,7 +84,13 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     // surfaced here so "40 KB" and "40 KB, but some of it we couldn't
     // see" don't look identical.
     let warning_extra = if node.unreadable_count > 0 {
-        format!("  ⚠ {} unreadable ", thousands(node.unreadable_count))
+        format!(
+            "  ⚠ {} ",
+            tr_with(
+                "tui.header.unreadable",
+                &[("count", &thousands(node.unreadable_count))]
+            )
+        )
     } else {
         String::new()
     };
@@ -80,16 +120,24 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     // whatever the user typed into the filter/search box, which can
     // legitimately contain wide (e.g. CJK) characters that render as 2
     // columns each.
-    let fixed_len = |free: &str, filt: &str| {
-        1 + stats_core.width() + filt.width() + free.width() + warning_extra.width()
+    let mut hard_link_extra = hard_link_extra;
+    let fixed_len = |free: &str, filt: &str, links: &str| {
+        1 + stats_core.width() + filt.width() + free.width() + links.width() + warning_extra.width()
     };
-    if fixed_len(&free_space_extra, &filter_suffix) > inner.width as usize {
+    // Dropped in order of least essential first, before the path is ever
+    // allowed to starve: the hard-link note (a footnote about the size
+    // beside it), then free space, then the filter suffix. The warning is
+    // never dropped.
+    if fixed_len(&free_space_extra, &filter_suffix, &hard_link_extra) > inner.width as usize {
+        hard_link_extra.clear();
+    }
+    if fixed_len(&free_space_extra, &filter_suffix, &hard_link_extra) > inner.width as usize {
         free_space_extra.clear();
     }
-    if fixed_len(&free_space_extra, &filter_suffix) > inner.width as usize {
+    if fixed_len(&free_space_extra, &filter_suffix, &hard_link_extra) > inner.width as usize {
         filter_suffix.clear();
     }
-    let reserved = fixed_len(&free_space_extra, &filter_suffix);
+    let reserved = fixed_len(&free_space_extra, &filter_suffix, &hard_link_extra);
     let available_for_path = (inner.width as usize).saturating_sub(reserved);
     let full_path = app.current_path().display().to_string();
     let path_display = truncate_middle(&full_path, available_for_path);
@@ -99,6 +147,9 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
         format!(" {path_display}{stats_core}{filter_suffix}"),
         bar,
     )];
+    if !hard_link_extra.is_empty() {
+        spans.push(Span::styled(hard_link_extra, bar.fg(theme::MUTED)));
+    }
     if !free_space_extra.is_empty() {
         spans.push(Span::styled(free_space_extra, bar));
     }
@@ -215,7 +266,7 @@ pub(super) fn draw_ext_stats(f: &mut Frame, app: &mut App, area: Rect) {
     // above — clicking still highlights the right tiles, but the swatch
     // color here is this button's own accent, not a literal preview of
     // what you'll see highlighted.
-    let title = " File categories — click to highlight ";
+    let title = format!(" {} ", tr("tui.categories.title"));
     let p = Paragraph::new(lines).block(panel_block(Line::from(title), false));
     f.render_widget(p, area);
 }
@@ -236,21 +287,29 @@ pub(super) fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     // delete) stays a keyboard shortcut discoverable via "? help" — a
     // dozen buttons crammed into one row was the single busiest part of
     // the whole interface.
+    // The key names stay literal — those are the keys — and only what
+    // each one does is translated. Widths below are measured in terminal
+    // *columns* rather than characters, because a translation may hold
+    // wide (CJK) glyphs, and a click zone sized in characters would then
+    // sit half a button to the left of the button it belongs to.
+    let open_label = format!(" Enter  {} ", tr("tui.footer.open"));
+    let up_label = format!(" Backspace  {} ", tr("tui.footer.up"));
+    let delete_label = format!(" d  {} ", tr("tui.footer.delete"));
     let full_buttons: [(&str, Action); 3] = [
-        (" Enter  Open ", Action::OpenSelected),
-        (" Backspace  Up ", Action::Back),
-        (" d  Delete ", Action::RequestDelete),
+        (&open_label, Action::OpenSelected),
+        (&up_label, Action::Back),
+        (&delete_label, Action::RequestDelete),
     ];
     let compact_buttons: [(&str, Action); 2] = [
-        (" Enter  Open ", Action::OpenSelected),
-        (" d  Delete ", Action::RequestDelete),
+        (&open_label, Action::OpenSelected),
+        (&delete_label, Action::RequestDelete),
     ];
-    let quit_label = " q  Quit ";
-    let help_label = "  ?  more shortcuts ";
-    let fixed_tail_width = quit_label.chars().count() as u16 + help_label.chars().count() as u16;
+    let quit_label = format!(" q  {} ", tr("tui.footer.quit"));
+    let help_label = format!("  ?  {} ", tr("tui.footer.help"));
+    let fixed_tail_width = quit_label.width() as u16 + help_label.width() as u16;
     let full_width: u16 = full_buttons
         .iter()
-        .map(|(l, _)| l.chars().count() as u16 + 2)
+        .map(|(l, _)| l.width() as u16 + 2)
         .sum::<u16>()
         + fixed_tail_width;
     // On a narrow terminal, "Backspace  Up" is the button to drop first
@@ -271,8 +330,8 @@ pub(super) fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(base, area);
 
     for (label, action) in buttons.iter() {
-        let w = label.chars().count() as u16;
-        spans.push(Span::styled(*label, theme::button()));
+        let w = label.width() as u16;
+        spans.push(Span::styled((*label).to_string(), theme::button()));
         spans.push(Span::raw("  "));
         app.click_zones.push(ClickZone {
             x,
@@ -283,7 +342,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
         });
         x += w + 2;
     }
-    let quit_label = " q  Quit ";
+    let quit_width = quit_label.width() as u16;
     spans.push(Span::styled(
         quit_label,
         Style::default().bg(theme::DANGER_BG).fg(theme::DANGER),
@@ -291,16 +350,16 @@ pub(super) fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     app.click_zones.push(ClickZone {
         x,
         y: area.y,
-        w: quit_label.chars().count() as u16,
+        w: quit_width,
         h: 1,
         action: Action::Quit,
     });
-    let help_label = "  ?  more shortcuts ";
+    let help_width = help_label.width() as u16;
     spans.push(Span::styled(help_label, theme::button()));
     app.click_zones.push(ClickZone {
-        x: x + quit_label.chars().count() as u16,
+        x: x + quit_width,
         y: area.y,
-        w: help_label.chars().count() as u16,
+        w: help_width,
         h: 1,
         action: Action::ToggleHelp,
     });

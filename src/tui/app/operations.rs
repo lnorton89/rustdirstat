@@ -230,6 +230,77 @@ impl App {
         }
     }
 
+    /// Resolves a cleanup against the highlighted entry and either asks
+    /// or runs it.
+    ///
+    /// The path resolves *exactly* — `path_for`, never the forgiving
+    /// lookup — for the same reason the delete path does: a stale
+    /// position must refuse rather than act on the nearest surviving
+    /// ancestor, and this one runs a program the app knows nothing about.
+    pub(in crate::tui) fn request_cleanup(&mut self, idx: usize) {
+        let Some(cleanup) = self.cleanups.list.get(idx).cloned() else {
+            return;
+        };
+        // The highlighted entry, resolved the way every other operation
+        // here resolves one: the current directory's index path plus the
+        // child's own index, looked up exactly.
+        let Some(orig_idx) = self
+            .display_children()
+            .get(self.selected)
+            .map(|(idx, _)| *idx)
+        else {
+            self.message = Some(crate::cleanups::CleanupError::NoTarget.to_string());
+            return;
+        };
+        let mut full_index_path = self.path_indices.clone();
+        full_index_path.push(orig_idx);
+        let Some(target) = self.tree.path_for(&full_index_path) else {
+            self.message = Some(crate::cleanups::CleanupError::NoTarget.to_string());
+            return;
+        };
+        let command = match crate::cleanups::resolve(&cleanup, &target) {
+            Ok(command) => command,
+            Err(error) => {
+                self.message = Some(format!("{}: {error}", cleanup.name));
+                return;
+            }
+        };
+        let pending = crate::tui::app::PendingCleanup {
+            name: cleanup.name.clone(),
+            command,
+            capture_output: cleanup.capture_output,
+        };
+        if cleanup.confirm {
+            self.cleanups.pending = Some(pending);
+        } else {
+            self.start_cleanup(pending);
+        }
+    }
+
+    pub(in crate::tui) fn confirm_cleanup(&mut self) {
+        if let Some(pending) = self.cleanups.pending.take() {
+            self.start_cleanup(pending);
+        }
+    }
+
+    /// Runs a resolved cleanup, and reports what happened.
+    ///
+    /// Synchronous, like the Windows tools beside it: the terminal has
+    /// one status line and no way to show a spinner beside a list it is
+    /// not drawing, so a command that takes a while holds the frame —
+    /// which is at least honest about what is happening.
+    fn start_cleanup(&mut self, pending: crate::tui::app::PendingCleanup) {
+        self.cleanups.visible = false;
+        match crate::cleanups::run(&pending.command, pending.capture_output) {
+            Ok(output) if output.detail.is_empty() => self.message = Some(output.summary),
+            Ok(output) => {
+                let detail = output.detail.replace(char::is_whitespace, " ");
+                self.message = Some(format!("{}: {}", output.summary, detail.trim()));
+            }
+            Err(error) => self.message = Some(format!("{}: {error}", pending.name)),
+        }
+    }
+
     pub(in crate::tui) fn run_wintool(&mut self, idx: usize) {
         let Some(tool) = crate::wintools::TOOLS.get(idx) else {
             return;

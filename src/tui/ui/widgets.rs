@@ -229,7 +229,23 @@ pub(super) fn text_prompt(f: &mut Frame, title: String, value: &str, hint: &str)
 /// headline; everything else, down to the cancel hint, was written out
 /// twice.
 pub(super) fn progress_splash(f: &mut Frame, headline: String, status: String) {
-    let text = vec![
+    progress_splash_with(f, headline, status, &[]);
+}
+
+/// The splash, plus whatever the scan has finished so far.
+///
+/// The terminal's answer to the window filling in as it scans. A TUI
+/// cannot let you browse a tree that is still being built — the whole
+/// screen is the splash until the scan returns — but it can stop being a
+/// spinner: the folders below are real, finished results, biggest first,
+/// and on a large volume the interesting ones appear within seconds.
+pub(super) fn progress_splash_with(
+    f: &mut Frame,
+    headline: String,
+    status: String,
+    found: &[(String, u64)],
+) {
+    let mut text = vec![
         Line::from(Span::styled(
             "rustdirstat",
             Style::default()
@@ -239,12 +255,21 @@ pub(super) fn progress_splash(f: &mut Frame, headline: String, status: String) {
         Line::from(""),
         Line::from(headline),
         Line::from(status),
-        Line::from(""),
-        Line::from(Span::styled(
-            "(press q to cancel)",
-            Style::default().fg(theme::MUTED),
-        )),
     ];
+    if !found.is_empty() {
+        text.push(Line::from(""));
+        for (name, size) in found {
+            text.push(Line::from(Span::styled(
+                format!("{:>10}   {name}", crate::util::human_bytes(*size)),
+                Style::default().fg(theme::MUTED),
+            )));
+        }
+    }
+    text.push(Line::from(""));
+    text.push(Line::from(Span::styled(
+        "(press q to cancel)",
+        Style::default().fg(theme::MUTED),
+    )));
     let p = Paragraph::new(text)
         .block(panel_block(Line::from(" rustdirstat "), true))
         .alignment(ratatui::layout::Alignment::Center);

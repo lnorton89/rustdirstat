@@ -210,15 +210,23 @@ impl SortMode {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            SortMode::SizeDesc => "size desc",
-            SortMode::SizeAsc => "size asc",
-            SortMode::NameAsc => "name asc",
-            SortMode::NameDesc => "name desc",
-            SortMode::ModifiedDesc => "newest first",
-            SortMode::ModifiedAsc => "oldest first",
-        }
+    /// What the terminal's file pane calls this order, in the active
+    /// language.
+    ///
+    /// Resolved here, with the keys written out as literals, rather than
+    /// returning a key for the caller to look up:
+    /// `every_key_the_code_uses_is_in_the_catalogue` scans the source for
+    /// `tr("…")`, so a key that travels through a return value is a key
+    /// nothing checks exists.
+    pub fn label(self) -> String {
+        crate::i18n::tr(match self {
+            SortMode::SizeDesc => "tui.sort.size_desc",
+            SortMode::SizeAsc => "tui.sort.size_asc",
+            SortMode::NameAsc => "tui.sort.name_asc",
+            SortMode::NameDesc => "tui.sort.name_desc",
+            SortMode::ModifiedDesc => "tui.sort.newest",
+            SortMode::ModifiedAsc => "tui.sort.oldest",
+        })
     }
 }
 
