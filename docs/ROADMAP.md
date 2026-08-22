@@ -52,9 +52,13 @@ are what stand between that and a shipped release.
 
 ## Deferred, with reasons
 
-None of these were attempted in 0.3.0, and none of them were meant to be:
-they were the plan's explicit non-goals, and this is where they carry on
-existing now that the plan is finished with.
+What is left, after a pass through this list. Four of the five non-goals
+the 0.3.0 plan named have since been built — the live tree, hard-link
+measurement, user-defined cleanups, and localization — and what remains
+below is either genuinely blocked (a certificate nobody here can buy, a
+desktop nobody here can test on), an incremental follow-through with the
+mechanism already shipped, or a decision taken rather than a task
+skipped. Each says which.
 
 | Item | Why not now | Earliest |
 |---|---|---|
