@@ -45,6 +45,25 @@ pub(super) static TEST_MENU_BAR_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)
 pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Where the Properties inspector landed, so a test can check it is on
+/// screen, that it moved when dragged, and that it went away when closed.
+#[cfg(test)]
+pub(super) static TEST_PROPERTIES_RECTS: std::sync::Mutex<Vec<egui::Rect>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// How many times the row list and the treemap layout have been rebuilt.
+///
+/// Both are the tree-sized work a frame must not repeat: the caches on
+/// `GuiApp` exist so a still window does none of it, and a cache that
+/// silently misses every frame looks identical from the outside while
+/// costing the whole frame budget. These make the miss observable.
+#[cfg(test)]
+pub(in crate::gui) static TEST_ROW_REBUILDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub(in crate::gui) static TEST_TREEMAP_REBUILDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Where the "Cancel scan" button landed, so a test can press the real
 /// control rather than calling `cancel_scan` directly and proving
 /// nothing about the button.

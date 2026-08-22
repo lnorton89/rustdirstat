@@ -181,6 +181,15 @@ items, including library code that merely happens to be test-gated.
 The result should be that no caller of one of these needs `unsafe`
 itself, and no test body contains any.
 
+**The window is built to hold 120 FPS — an 8.33 ms frame — *while a scan
+is running*.** That is the number the rest of these rules serve, and it is
+`theme::FRAME_BUDGET` rather than folklore: five checks in
+`gui/ui/tests.rs` measure against it (a still window rebuilding nothing, a
+frame over a quarter-million nodes drawing only what fits, the median
+frame idle and under a live scan, and a busy app asking for the *next*
+frame rather than one on a 33 ms timer). `docs/PERFORMANCE.md` §0 says
+what each one actually guarantees.
+
 **Never recompute something tree-sized inside a draw call.** The GUI is
 immediate mode: `gui::ui::draw` runs in full every frame. A scan of a
 whole drive is ~9M nodes, so anything O(tree) in a draw path freezes the
@@ -315,13 +324,26 @@ its call site. Bars are solid rather than floating on purpose: a floating
 bar is invisible until the pointer is already on it, so a table with
 columns past its edge looks like it has simply lost them.
 
-**There is one modal, not several.** `app.modal: Option<ModalPage>`
-selects a page of a single card (`src/gui/ui/modal.rs`, contents in
-`pages.rs`); confirmations layer above it off `pending_delete` /
-`pending_windows_tool`. Do not add an `egui::Window` — that is what the
-six unaligned, unscrollable, non-modal dialogs this replaced all were.
-`handle_shortcuts` returns early while a modal is open, so a new
-shortcut is automatically blocked during a confirmation.
+**There is one modal, and one window that is deliberately not modal.**
+`app.modal: Option<ModalPage>` selects a page of a single card
+(`src/gui/ui/modal.rs`, contents in `pages.rs`); confirmations layer above
+it off `pending_delete` / `pending_windows_tool`. `handle_shortcuts`
+returns early while a modal is open, so a new shortcut is automatically
+blocked during a confirmation.
+
+The exception is **Properties** (`src/gui/ui/properties.rs`), which is an
+`egui::Window` on purpose: it describes the current selection, and the
+way people use it is to leave it open while clicking through the tree,
+which a modal forbids. It lives in `app.properties`, separate from
+`app.modal`, so `modal_is_open` stays false and every shortcut keeps
+working while it is up — `shortcuts_still_work_while_the_inspector_is_open`
+and `the_properties_window_leaves_the_app_usable` pin both halves.
+
+That is the whole list. Anything else that wants to be a window is what
+the six unaligned, unscrollable dialogs the modal replaced all were, and
+the answer is a modal page. The bar for a second exception is that the
+surface describes something the user is still in the middle of changing —
+Properties is the only one here that does.
 
 **A right-to-left region inside a top-aligned horizontal claims the
 parent's whole remaining height.** In a scroll area that is the rest of

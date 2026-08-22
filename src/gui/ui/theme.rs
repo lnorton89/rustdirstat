@@ -64,6 +64,34 @@ pub(super) const fn px(space: f32) -> i8 {
 /// the toolbar, the status bar, and every pane's heading form one column.
 pub(super) const PAD: f32 = SPACE_MD;
 
+/// The frame the window is built to hit, and the time it has to do it in.
+///
+/// 120 FPS, so 8.33 ms of wall clock from the start of one frame to the
+/// start of the next -- and the target is that it holds *while a scan of a
+/// whole volume is running*, not only on an idle window. That is the
+/// number every other performance rule in this codebase is in service of:
+/// the row and tile caches keyed off observed state, the level-order tile
+/// budget, `drop_in_background`, and the scan pool deliberately leaving a
+/// core free all exist so a frame can be built inside it.
+///
+/// Stated here rather than left implied because a budget nothing names is
+/// a budget nothing checks. `gui::ui::tests` measures against it; see
+/// `docs/PERFORMANCE.md` for what each check actually guarantees and why
+/// a debug build is allowed a multiple of it.
+#[cfg(test)]
+pub(super) const FRAME_BUDGET: std::time::Duration = std::time::Duration::from_micros(8_333);
+
+/// What a debug build is allowed instead.
+///
+/// The binary this target describes is the release one; an unoptimized
+/// build of the same code is roughly an order of magnitude slower, and
+/// tests run in it. Asserting 8.33 ms there would fail honest code, and
+/// asserting nothing would let a real regression through -- so the debug
+/// budget is the release budget times this, and a regression that
+/// overshoots by more than a factor still shows up.
+#[cfg(test)]
+pub(super) const DEBUG_FRAME_BUDGET_FACTOR: u32 = 12;
+
 /// How long a hover highlight takes to reach full strength.
 ///
 /// Deliberately short. A highlight that lags behind the pointer reads as

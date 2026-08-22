@@ -53,7 +53,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
 
 use super::treemap_layout;
 use super::ui::{ModalPage, Palette};
@@ -202,6 +201,42 @@ impl ViewOptions {
     }
 }
 
+/// The Properties inspector: whether it is showing, and where it was
+/// left.
+///
+/// Separate from `modal` on purpose. Properties is the one surface here
+/// that describes something the user is still changing, so it is
+/// modeless — see `gui::ui::properties`. Keeping its state apart is what
+/// stops "is a modal open" from accidentally becoming true while an
+/// inspector sits harmlessly in the corner, which would block every
+/// keyboard shortcut in the app.
+#[derive(Default)]
+pub(in crate::gui) struct PropertiesWindow {
+    pub open: bool,
+    /// Top-left corner, remembered across runs. `None` means "wherever
+    /// the default puts it".
+    pub pos: Option<[f32; 2]>,
+}
+
+impl PropertiesWindow {
+    /// Reads the inspector back out of a saved config.
+    ///
+    /// A saved position is taken only as a whole pair: half of one places
+    /// a window somewhere nobody put it, so anything that is not exactly
+    /// two numbers falls back to the default position rather than being
+    /// patched up.
+    pub(in crate::gui) fn from_config(config: &crate::config::Config) -> Self {
+        let pos = match config.gui_properties_pos.as_deref() {
+            Some([x, y]) => Some([*x, *y]),
+            _ => None,
+        };
+        Self {
+            open: config.gui_properties_open.unwrap_or(false),
+            pos,
+        }
+    }
+}
+
 /// The search box and its last results.
 #[derive(Default)]
 pub(in crate::gui) struct SearchState {
@@ -229,6 +264,7 @@ pub(in crate::gui) struct GuiApp {
     /// flags used to live here; they could all be true at once, and two
     /// of them opened the same window.
     pub modal: Option<ModalPage>,
+    pub properties: PropertiesWindow,
     pub backdrop: Backdrop,
     pub theme_id: String,
     /// Resolved from `theme_id`. Cached rather than looked up per frame
@@ -307,6 +343,7 @@ impl GuiApp {
             pending_delete: None,
             status: None,
             modal: None,
+            properties: PropertiesWindow::from_config(&config),
             backdrop: Backdrop::Idle,
             theme_id: theme_id.clone(),
             palette: super::ui::palette_for(&theme_id),
@@ -346,6 +383,16 @@ impl GuiApp {
         self.modal = Some(page);
     }
 
+    /// Shows or hides the Properties inspector.
+    ///
+    /// A toggle rather than an open, because the control that reaches it
+    /// is a menu row and a toolbar button that stay available while the
+    /// window is up — "Properties" clicked twice should put the window
+    /// away, not re-open the one already there.
+    pub(in crate::gui) fn toggle_properties(&mut self) {
+        self.properties.open = !self.properties.open;
+    }
+
     /// Picks up the reply to the screenshot the modal asked for.
     ///
     /// Read from the raw event list rather than from a helper because
@@ -379,6 +426,8 @@ impl GuiApp {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),
+            gui_properties_open: Some(self.properties.open),
+            gui_properties_pos: self.properties.pos.map(|pos| vec![pos[0], pos[1]]),
             ..self.view.to_config()
         });
         // This runs from `on_exit` — the window is already going away,

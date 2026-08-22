@@ -37,7 +37,8 @@ mod lists;
 mod modal;
 mod pages;
 #[cfg(test)]
-mod probes;
+pub(in crate::gui) mod probes;
+mod properties;
 #[cfg(test)]
 mod tests;
 mod theme;
@@ -64,6 +65,9 @@ pub(super) fn draw(app: &mut GuiApp, ui: &mut egui::Ui) {
         draw_status_bar(app, ui);
     }
     draw_workspace(app, ui);
+    // The inspector is drawn before the modal so a modal opened on top
+    // of it covers it, which is what a scrim is for.
+    properties::draw_properties_window(app, ui.ctx());
     draw_modal(app, ui.ctx());
     handle_shortcuts(app, ui.ctx());
 }

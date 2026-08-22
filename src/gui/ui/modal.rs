@@ -54,18 +54,16 @@ pub(crate) enum ModalPage {
     Appearance,
     Layout,
     Views,
-    Properties,
     Maintenance,
     Guide,
     About,
 }
 
 impl ModalPage {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Appearance,
         Self::Layout,
         Self::Views,
-        Self::Properties,
         Self::Maintenance,
         Self::Guide,
         Self::About,
@@ -76,7 +74,6 @@ impl ModalPage {
             Self::Appearance => "Appearance",
             Self::Layout => "Layout",
             Self::Views => "Views",
-            Self::Properties => "Properties",
             Self::Maintenance => "Maintenance",
             Self::Guide => "View guide",
             Self::About => "About",
@@ -88,7 +85,6 @@ impl ModalPage {
             Self::Appearance => Icon::Settings,
             Self::Layout => Icon::LayoutHorizontal,
             Self::Views => Icon::Tree,
-            Self::Properties => Icon::Info,
             Self::Maintenance => Icon::Tools,
             Self::Guide => Icon::Help,
             Self::About => Icon::App,
@@ -103,7 +99,6 @@ impl ModalPage {
             Self::Appearance => "Theme, and how the treemap is drawn.",
             Self::Layout => "Where the treemap and the lists sit relative to each other.",
             Self::Views => "Which parts of the window are shown.",
-            Self::Properties => "Details of the item selected in the tree.",
             Self::Maintenance => "Built-in Windows tools for the volume holding this scan.",
             Self::Guide => "What each of the coupled views does.",
             Self::About => "RustDirStat, and where its behaviour comes from.",

@@ -22,7 +22,7 @@
 
 use crate::gui::app::{GuiApp, PaneOrientation};
 use crate::gui::icons::Icon;
-use crate::util::{format_modified, human_bytes, thousands};
+use crate::util::thousands;
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, Vec2};
 
 use super::modal::{
@@ -39,7 +39,6 @@ pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
         ModalPage::Appearance => draw_appearance(app, ui),
         ModalPage::Layout => draw_layout(app, ui),
         ModalPage::Views => draw_views(app, ui),
-        ModalPage::Properties => draw_properties(app, ui),
         ModalPage::Maintenance => draw_maintenance(app, ui),
         ModalPage::Guide => draw_guide(ui),
         ModalPage::About => draw_about(app, ui),
@@ -267,56 +266,6 @@ fn draw_views(app: &mut GuiApp, ui: &mut egui::Ui) {
         ModalPage::Layout,
     );
     see_also(ui, app, "For what each pane does, see", ModalPage::Guide);
-}
-
-// ------------------------------------------------------------ Properties
-
-fn draw_properties(app: &mut GuiApp, ui: &mut egui::Ui) {
-    let Some((node, path)) = app.selected_node().zip(app.selected_fs_path()) else {
-        empty_state(
-            ui,
-            Icon::Info,
-            "Nothing selected",
-            "Pick an item in the file list or the treemap, and its details appear here.",
-        );
-        return;
-    };
-    let (name, is_dir) = (node.name.to_string_lossy().to_string(), node.is_dir);
-    let rows = [
-        ("Name", name),
-        ("Path", crate::util::display_path(&path)),
-        ("Type", if is_dir { "Folder" } else { "File" }.to_string()),
-        ("Logical size", human_bytes(node.size)),
-        ("Physical size", human_bytes(node.physical_size)),
-        ("Files", thousands(node.file_count)),
-        ("Subdirectories", thousands(node.dir_count)),
-        ("Last change", format_modified(node.modified)),
-        ("Unreadable items", thousands(node.unreadable_count)),
-    ];
-    group(ui, Icon::Info, "Item details", |ui| {
-        egui::Grid::new("properties_grid")
-            .num_columns(2)
-            .spacing(Vec2::new(18.0, 9.0))
-            .show(ui, |ui| {
-                for (label, value) in rows {
-                    ui.label(RichText::new(label).color(palette().secondary_text));
-                    ui.label(value);
-                    ui.end_row();
-                }
-            });
-    });
-}
-
-fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, body: &str) {
-    let palette = palette();
-    ui.add_space(SPACE_LG);
-    ui.vertical_centered(|ui| {
-        paint_inline_icon(ui, icon, 38.0, palette.secondary_text);
-        ui.add_space(SPACE_MD);
-        ui.label(RichText::new(title).strong());
-        ui.add_space(SPACE_XS);
-        ui.label(RichText::new(body).color(palette.secondary_text));
-    });
 }
 
 // ----------------------------------------------------------- Maintenance

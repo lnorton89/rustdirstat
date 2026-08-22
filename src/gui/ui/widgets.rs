@@ -110,6 +110,23 @@ pub(super) fn row_hover_edge(painter: &egui::Painter, response: &egui::Response,
     );
 }
 
+/// The "there is nothing here yet" state, centred with its own icon.
+///
+/// Shared rather than written twice: the Properties inspector and the
+/// modal pages both need it, and two hand-laid versions drift — the
+/// second one always ends up a different distance from its heading.
+pub(super) fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, body: &str) {
+    let palette = palette();
+    ui.add_space(SPACE_LG);
+    ui.vertical_centered(|ui| {
+        paint_inline_icon(ui, icon, 38.0, palette.secondary_text);
+        ui.add_space(SPACE_MD);
+        ui.label(RichText::new(title).strong());
+        ui.add_space(SPACE_XS);
+        ui.label(RichText::new(body).color(palette.secondary_text));
+    });
+}
+
 pub(super) fn view_icon(view: FileView) -> Icon {
     match view {
         FileView::AllFiles => Icon::Tree,

@@ -264,6 +264,9 @@ impl GuiApp {
             return;
         }
 
+        #[cfg(test)]
+        crate::gui::ui::probes::TEST_ROW_REBUILDS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.visible_rows = self.build_visible_rows();
         self.visible_rows_key = Some(key);
     }

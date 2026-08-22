@@ -560,12 +560,15 @@ impl GuiApp {
         }
 
         if self.is_busy() {
-            // ~30fps while work is in flight. At the previous 80ms the
-            // window only redrew twelve times a second, so anything the
-            // user did during a scan — dragging a splitter, moving the
-            // window — moved in visible steps even when the machine had
-            // capacity to spare.
-            ctx.request_repaint_after(Duration::from_millis(33));
+            // Every frame the display will take, not a timer. The app
+            // targets 120 FPS *during* a scan (`theme::FRAME_BUDGET`),
+            // and a repaint request on a 33 ms timer caps it at 30 no
+            // matter how much headroom the machine has — the counters in
+            // the banner tick in visible steps and a splitter drag moves
+            // in stages. eframe paces the actual presentation against
+            // vsync, so asking for the next frame immediately means "as
+            // fast as this display runs", not a spin.
+            ctx.request_repaint();
         }
     }
 }

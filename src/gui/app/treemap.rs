@@ -116,6 +116,9 @@ impl GuiApp {
             return;
         }
 
+        #[cfg(test)]
+        crate::gui::ui::probes::TEST_TREEMAP_REBUILDS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut tiles = treemap_layout::build(
             self.zoom_node(),
             &treemap_layout::LayoutRequest {

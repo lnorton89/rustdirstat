@@ -480,7 +480,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
             RowAction::Reveal => reveal_selected(app),
             RowAction::CopyPath => copy_path(app),
             RowAction::Zoom => app.zoom_in(),
-            RowAction::Properties => app.open_modal(super::modal::ModalPage::Properties),
+            RowAction::Properties => app.toggle_properties(),
             RowAction::Delete => app.request_delete_selected(false),
         }
     }

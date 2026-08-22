@@ -12,6 +12,47 @@ read first. For the module map, see
 [`ARCHITECTURE.md`](ARCHITECTURE.md); the [README](../README.md) has the
 user-facing overview.
 
+## 0. The target: 120 FPS, including while a scan runs
+
+Everything in this document is in service of one number. The window is
+built to hold **120 frames per second — an 8.33 ms budget per frame —
+with a scan of a whole volume in flight**, not merely to stay responsive.
+It is stated as `theme::FRAME_BUDGET` rather than left implied, because a
+budget nothing names is a budget nothing checks.
+
+Four things deliver it, and each has a check that fails the build:
+
+| What it guarantees | Check |
+|---|---|
+| A still window does no tree-sized work at all — both caches hit | `a_still_window_rebuilds_neither_rows_nor_tiles` |
+| A frame costs what the window shows, not what the scan found | `a_frame_over_a_huge_tree_draws_only_what_fits` |
+| The median frame over a quarter-million-node tree fits the budget | `a_frame_over_a_huge_tree_fits_the_budget` |
+| ...and still fits with a real scan running underneath it | `frames_stay_inside_the_budget_while_a_scan_runs` |
+| A busy app asks for the *next* frame rather than one on a timer | `a_busy_app_asks_for_the_next_frame_immediately` |
+
+Three things about those checks are deliberate:
+
+- **Median, not mean or max.** One scheduler preemption on a shared CI
+  runner must not fail a build, and a real regression moves the middle of
+  the distribution rather than one sample.
+- **A debug build gets a documented multiple** of the budget
+  (`DEBUG_FRAME_BUDGET_FACTOR`), because tests run unoptimized and the
+  target describes the release binary. A regression that overshoots by
+  more than that factor still fails.
+- **The under-load check loops a real scan** rather than scanning once.
+  A fixture small enough to build inside a test is walked in a couple of
+  frames, which would measure almost nothing; the worker re-walks it
+  until the render loop has its samples, so every sample is taken with
+  the rayon pool, the atomics, and the allocation churn of a real walk
+  underneath it.
+
+The last row is easy to lose by accident. Until 0.3.0 the app answered a
+scan in progress with `request_repaint_after(33ms)`, which caps the window
+at 30 FPS for the whole of a scan no matter how much headroom the machine
+has — no individual frame is slow, and the target is still missed by a
+factor of four. A busy app now asks for the next frame immediately and
+lets vsync do the pacing.
+
 ## 1. The GUI is immediate mode: every frame rebuilds the window
 
 `gui::ui::draw` runs top to bottom on every frame. There is no retained

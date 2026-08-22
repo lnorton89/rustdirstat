@@ -185,7 +185,7 @@ pub(super) fn draw_menu_bar(app: &mut GuiApp, ui: &mut egui::Ui) {
                             ui.close();
                         }
                         if icon_button(ui, selected, Icon::Info, "Properties").clicked() {
-                            app.open_modal(ModalPage::Properties);
+                            app.toggle_properties();
                             ui.close();
                         }
                         ui.separator();
@@ -369,7 +369,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                 }
                 if tool_enabled(ui, app.selected_path.is_some(), Icon::Info, "Properties").clicked()
                 {
-                    app.open_modal(ModalPage::Properties);
+                    app.toggle_properties();
                 }
                 toolbar_separator(ui);
                 if tool_enabled(
