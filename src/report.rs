@@ -22,8 +22,56 @@ use crate::stats;
 use crate::util::human_bytes;
 use std::fmt::Write as _;
 
+/// Prints a report for a whole [`crate::model::Tree`], however many roots
+/// it has.
+///
+/// A multi-root tree's `root_path` is a label, not a path, so a report
+/// built from it would head every line with a place that does not exist.
+/// Each root gets its own section against its own path instead.
+pub fn print_tree_report(tree: &crate::model::Tree, top: usize, max_depth: usize) {
+    match tree.roots.as_slice() {
+        [] => print_report(&tree.root_path, &tree.root, top, max_depth),
+        roots => {
+            for (index, root) in roots.iter().enumerate() {
+                let Some(node) = tree.root.children.get(index) else {
+                    continue;
+                };
+                if index > 0 {
+                    println!();
+                }
+                print_report(&root.path, node, top, max_depth);
+            }
+        }
+    }
+}
+
 pub fn print_report(root_path: &std::path::Path, root: &Node, top: usize, max_depth: usize) {
     print!("{}", build_report(root_path, root, top, max_depth));
+}
+
+/// [`print_tree_report`], to a file.
+pub fn write_tree_report_to_file(
+    tree: &crate::model::Tree,
+    top: usize,
+    max_depth: usize,
+    out_path: &std::path::Path,
+) -> std::io::Result<()> {
+    let mut text = String::new();
+    match tree.roots.as_slice() {
+        [] => text.push_str(&build_report(&tree.root_path, &tree.root, top, max_depth)),
+        roots => {
+            for (index, root) in roots.iter().enumerate() {
+                let Some(node) = tree.root.children.get(index) else {
+                    continue;
+                };
+                if index > 0 {
+                    text.push('\n');
+                }
+                text.push_str(&build_report(&root.path, node, top, max_depth));
+            }
+        }
+    }
+    std::fs::write(out_path, text)
 }
 
 pub fn write_report_to_file(

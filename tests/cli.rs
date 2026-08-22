@@ -269,3 +269,53 @@ fn a_missing_second_path_is_an_error() -> Result<()> {
     let _ = fs::remove_dir_all(&real);
     Ok(())
 }
+
+/// A multi-root CSV names paths that exist.
+///
+/// The tree's `root_path` is a label when several places are scanned, so
+/// an export built from it would head every row with
+/// `Selected locations/...` — a path that resolves nowhere, in the one
+/// output whose entire purpose is to be fed to something else.
+#[test]
+fn a_multi_root_csv_uses_each_root_path() -> Result<()> {
+    let first = scratch("csv_multi_first");
+    let second = scratch("csv_multi_second");
+    let out = scratch("csv_multi_out");
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    fs::create_dir_all(&first)?;
+    fs::create_dir_all(&second)?;
+    fs::write(first.join("one.bin"), vec![b'a'; 10])?;
+    fs::write(second.join("two.bin"), vec![b'b'; 20])?;
+
+    let first_arg = first
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let second_arg = second
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let out_arg = out
+        .to_str()
+        .ok_or_else(|| anyhow!("scratch path is not UTF-8"))?;
+    let (ok, text) = run(&["--csv", out_arg, first_arg, second_arg])?;
+    assert!(ok, "the export should succeed: {text}");
+
+    let csv = fs::read_to_string(&out)?;
+    assert!(
+        !csv.contains("Selected locations"),
+        "no row may be built from the multi-root label: {csv}"
+    );
+    for path in [first.join("one.bin"), second.join("two.bin")] {
+        let needle = path.to_string_lossy().replace('\\', "/");
+        let hay = csv.replace('\\', "/");
+        assert!(
+            hay.contains(&needle),
+            "every scanned file should appear at its real path; missing {needle} in {csv}"
+        );
+    }
+
+    let _ = fs::remove_file(&out);
+    let _ = fs::remove_dir_all(&first);
+    let _ = fs::remove_dir_all(&second);
+    Ok(())
+}

@@ -79,10 +79,10 @@ fn main() -> Result<()> {
 
     if let Some(csv_path) = &cli.csv {
         let tree = scanner::scan_many_to_completion(&roots, options)?;
-        csv_export::write_csv_to_file(&tree.root_path, &tree.root, csv_path)?;
+        csv_export::write_tree_csv(&tree, csv_path)?;
     } else if cli.no_tui {
         let tree = scanner::scan_many_to_completion(&roots, options)?;
-        report::print_report(&tree.root_path, &tree.root, cli.top, cli.depth);
+        report::print_tree_report(&tree, cli.top, cli.depth);
     } else {
         tui::run(roots, options)?;
     }

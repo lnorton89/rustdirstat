@@ -3911,3 +3911,92 @@ fn wait_for_background(app: &mut GuiApp, ctx: &egui::Context) {
         app.poll_background(ctx);
     }
 }
+
+/// The inspector can be dragged, and remembers where it was left.
+///
+/// The whole point of it being a window rather than a modal page. It is
+/// positioned from `app.properties.pos` every frame, so if that were not
+/// written back from the window's own rect a drag would spring straight
+/// back to where it started.
+#[test]
+fn the_inspector_can_be_dragged() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_sortable_files();
+    app.toggle_properties();
+    app.properties.pos = Some([400.0, 200.0]);
+    for _ in 0..3 {
+        render_window(&ctx, &mut app, window_input(Vec::new()));
+    }
+
+    // The title strip, a little in from the window's top-left corner.
+    let grab = egui::pos2(460.0, 210.0);
+    render_window(&ctx, &mut app, window_input(pointer_button(grab, true)));
+    for step in 1..=4 {
+        let to = grab + egui::vec2(30.0 * step as f32 / 4.0, 20.0 * step as f32 / 4.0);
+        render_window(&ctx, &mut app, window_input(pointer_move(to)));
+    }
+    let end = grab + egui::vec2(30.0, 20.0);
+    render_window(&ctx, &mut app, window_input(pointer_button(end, false)));
+    render_window(&ctx, &mut app, window_input(Vec::new()));
+
+    let moved = app.properties.pos.unwrap_or_default();
+    assert!(
+        moved[0] > 420.0 && moved[1] > 210.0,
+        "dragging the inspector left it at {moved:?}, which is where it started"
+    );
+    Ok(())
+}
+
+/// A maintenance tool never runs against a fabricated volume.
+///
+/// `wintools` takes the first component of the path it is given as the
+/// volume, and a multi-root tree's `root_path` is the label standing in
+/// for its roots — so the tools were being handed the first word of a UI
+/// string. These are the most destructive things in the app.
+#[test]
+fn a_maintenance_tool_refuses_a_multi_root_scan_with_no_selection() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut app = app_with_one_file();
+    app.tree = std::sync::Arc::new(Tree {
+        root_path: std::path::PathBuf::from(crate::scanner::MULTI_ROOT_LABEL),
+        root: Node {
+            name: std::ffi::OsString::from(crate::scanner::MULTI_ROOT_LABEL),
+            is_dir: true,
+            is_symlink: false,
+            size: 0,
+            physical_size: 0,
+            file_count: 0,
+            dir_count: 1,
+            modified: None,
+            children: vec![file("only.txt", 1)],
+            error: false,
+            category: None,
+            ext_totals: vec![(0, 0, 0); Category::COUNT],
+            unreadable_count: 0,
+            file_id: None,
+            other_filesystem: false,
+        },
+        volume_free: None,
+        volume_total: None,
+        roots: vec![crate::model::Root {
+            path: std::path::PathBuf::from("C:\\"),
+            volume_free: None,
+            volume_total: None,
+        }],
+    });
+    app.selected_path = None;
+
+    app.request_windows_tool(0);
+    app.confirm_windows_tool();
+
+    assert!(
+        !app.is_busy(),
+        "no tool should have been started without a volume to point it at"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.contains("Select an item"),
+        "the refusal should say what to do, got {status:?}"
+    );
+}

@@ -149,6 +149,12 @@ fn resolve_identity_exact(tree: &Tree, identity: &[std::ffi::OsString]) -> Optio
     Some(resolved)
 }
 
+/// How often a hidden window wakes to collect background work.
+///
+/// Slow on purpose: there is nothing to draw, so this only has to keep a
+/// finished scan from sitting undelivered until the window is restored.
+const HIDDEN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl GuiApp {
     pub(in crate::gui) fn loading(roots: Vec<PathBuf>) -> Self {
         // The placeholder tree is what the window draws until the first
@@ -610,7 +616,19 @@ impl GuiApp {
             // in stages. eframe paces the actual presentation against
             // vsync, so asking for the next frame immediately means "as
             // fast as this display runs", not a spin.
-            ctx.request_repaint();
+            //
+            // Unless nothing is being presented. A minimized window has
+            // no vsync to pace it, and an unpaced request-repaint loop
+            // burns the one core the scan pool deliberately left free —
+            // slowing the very scan that is being waited on, to animate
+            // counters nobody can see. Hidden, it falls back to a slow
+            // heartbeat that only has to keep the worker polled.
+            let hidden = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+            if hidden {
+                ctx.request_repaint_after(HIDDEN_POLL);
+            } else {
+                ctx.request_repaint();
+            }
         }
     }
 }

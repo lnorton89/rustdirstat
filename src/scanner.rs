@@ -286,16 +286,32 @@ fn combine(children: Vec<Node>) -> Node {
     let mut dir_count = 0u64;
     let mut unreadable_count = 0u64;
     let mut ext_totals = vec![(0u64, 0u64, 0u64); Category::COUNT];
+    let mut root_dirs = 0u64;
     for child in &children {
         size = size.saturating_add(child.size);
         physical_size = physical_size.saturating_add(child.physical_size);
         file_count = file_count.saturating_add(child.file_count);
         dir_count = dir_count.saturating_add(child.dir_count);
         unreadable_count = unreadable_count.saturating_add(child.unreadable_count);
-        for (slot, add) in ext_totals.iter_mut().zip(child.ext_totals.iter()) {
-            slot.0 = slot.0.saturating_add(add.0);
-            slot.1 = slot.1.saturating_add(add.1);
-            slot.2 = slot.2.saturating_add(add.2);
+        // A root can be a file — both binaries accept one — and a file
+        // carries no `ext_totals` of its own, because in an ordinary
+        // walk its parent directory is what files it under its category.
+        // Here the synthetic node is that parent, so it has to do the
+        // same filing, exactly as `finish_dir` does. Adding the empty
+        // vector instead lost the file from the extension breakdown and
+        // counted it as a folder.
+        if child.is_dir {
+            root_dirs += 1;
+            for (slot, add) in ext_totals.iter_mut().zip(child.ext_totals.iter()) {
+                slot.0 = slot.0.saturating_add(add.0);
+                slot.1 = slot.1.saturating_add(add.1);
+                slot.2 = slot.2.saturating_add(add.2);
+            }
+        } else if let Some(category) = child.category {
+            let slot = &mut ext_totals[category.index()];
+            slot.0 = slot.0.saturating_add(child.size);
+            slot.1 = slot.1.saturating_add(child.physical_size);
+            slot.2 = slot.2.saturating_add(1);
         }
     }
     Node {
@@ -305,7 +321,7 @@ fn combine(children: Vec<Node>) -> Node {
         size,
         physical_size,
         file_count,
-        dir_count: dir_count.saturating_add(children.len() as u64),
+        dir_count: dir_count.saturating_add(root_dirs),
         modified: None,
         children,
         error: false,
@@ -1334,6 +1350,41 @@ mod tests {
         let tree = scan_to_completion(&root)?;
         assert_eq!(tree.root.file_count, 1, "the scan still produced a tree");
         assert!(tree.root.size >= 100);
+        Ok(())
+    }
+
+    /// A file passed as one of several roots is still a file.
+    ///
+    /// The synthetic node above the roots is their parent, so it has to
+    /// file a non-directory child under its category the way any other
+    /// parent does. Summing the child's own `ext_totals` instead — which
+    /// a file does not have — dropped it out of the extension breakdown
+    /// entirely and counted it as a folder: 30 bytes of tree reporting 10
+    /// bytes of extensions and two directories where there was one.
+    #[test]
+    fn a_file_root_is_counted_as_a_file_not_a_folder() -> anyhow::Result<()> {
+        let dir = scratch_dir("scanner", "combine_dir");
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join("inside.txt"), vec![b'x'; 10])?;
+        let holder = scratch_dir("scanner", "combine_file");
+        fs::create_dir_all(&holder)?;
+        let loose = holder.join("loose.txt");
+        fs::write(&loose, vec![b'y'; 20])?;
+
+        let tree = scan_many_to_completion(&[dir, loose], ScanOptions::default())?;
+
+        let ext_bytes: u64 = tree.root.ext_totals.iter().map(|(size, _, _)| size).sum();
+        let ext_files: u64 = tree.root.ext_totals.iter().map(|(_, _, files)| files).sum();
+        assert_eq!(tree.root.size, 30, "both roots contribute their bytes");
+        assert_eq!(
+            ext_bytes, 30,
+            "and both are filed under an extension, not just the one inside a folder"
+        );
+        assert_eq!(ext_files, 2, "two files, both categorised");
+        assert_eq!(
+            tree.root.dir_count, 1,
+            "one of the two roots is a file, so there is one folder"
+        );
         Ok(())
     }
 

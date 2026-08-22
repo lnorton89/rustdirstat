@@ -57,6 +57,26 @@ pub(in crate::gui) struct ToolsState {
 }
 
 impl GuiApp {
+    /// The volume a Windows maintenance tool should act on.
+    ///
+    /// `tree.root_path` was the obvious answer and is wrong as soon as a
+    /// scan has several roots: it is a label there, and `wintools`
+    /// derives a volume from a path's first component, so the tools were
+    /// being handed the first word of a UI string. These are the app's
+    /// most destructive surface; a fabricated volume argument is not
+    /// something to pass to `cleanmgr` or `vssadmin` and hope it errors.
+    ///
+    /// So a multi-root scan resolves the volume from the *selection* —
+    /// the one thing that says which root the user means — and the
+    /// caller refuses when there is none.
+    fn tool_volume(&self) -> Option<std::path::PathBuf> {
+        if !self.tree.is_multi_root() {
+            return Some(self.tree.root_path.clone());
+        }
+        let selected = self.selected_path.as_deref()?;
+        self.tree.root_for(selected).map(|root| root.path)
+    }
+
     pub(in crate::gui) fn find_duplicates(&mut self) {
         if self.is_busy() {
             self.status = Some("Another background operation is already running".to_string());
@@ -101,7 +121,15 @@ impl GuiApp {
         let Some(tool) = crate::wintools::TOOLS.get(index) else {
             return;
         };
-        let root = self.tree.root_path.clone();
+        let Some(root) = self.tool_volume() else {
+            self.status = Some(
+                "Select an item first: with several locations scanned, there is no one \
+                 volume for a maintenance tool to act on"
+                    .to_string(),
+            );
+            self.tools.pending = None;
+            return;
+        };
         let name = tool.name.to_string();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {

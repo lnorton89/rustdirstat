@@ -253,10 +253,15 @@ pub fn directory_listing(dir: &std::path::Path) -> Option<Vec<DirEntryInfo>> {
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     };
     let handle = win::open_directory(dir)?;
-    // A volume serial is a property of the volume, so it is asked for
-    // once per volume rather than once per directory. On a
-    // million-directory scan that is a million syscalls not made.
-    let volume = win::cached_volume_serial(dir, &handle)?;
+    // Asked per directory, not cached per drive letter. A path prefix
+    // is not a volume: an NTFS volume mounted at a folder shares its
+    // parent's letter, and a letter is reused when a removable disk is
+    // swapped — either way a cached serial would hand a file the
+    // identity of a different volume, and half of `FileId` being wrong
+    // is how two unrelated files come to look like hard links to one.
+    // Caching it measured as no gain, so there is nothing to weigh
+    // against that.
+    let volume = win::volume_serial(&handle)?;
     let mut entries = Vec::new();
     win::for_each_entry(&handle, |wide, entry| {
         // `.` and `..` are the directory itself and its parent; `read_dir`
@@ -399,38 +404,6 @@ mod win {
         Some(info.dwVolumeSerialNumber as u64)
     }
 
-    /// The volume serial for the volume `dir` sits on.
-    ///
-    /// Keyed by the path's prefix (`C:`, a UNC share), which is what a
-    /// volume boundary looks like from a path. A scan stays on one
-    /// volume by default, so this is a single entry read a million
-    /// times: an `RwLock` read is a few nanoseconds against the ~5µs the
-    /// syscall costs, and the write happens once.
-    ///
-    /// A path with no prefix — nothing this scanner produces, but the
-    /// type allows it — simply asks every time.
-    pub(super) fn cached_volume_serial(dir: &Path, handle: &File) -> Option<u64> {
-        use std::sync::RwLock;
-        static CACHE: RwLock<Vec<(std::ffi::OsString, u64)>> = RwLock::new(Vec::new());
-
-        let Some(std::path::Component::Prefix(prefix)) = dir.components().next() else {
-            return volume_serial(handle);
-        };
-        let key = prefix.as_os_str();
-        if let Ok(cache) = CACHE.read() {
-            if let Some((_, serial)) = cache.iter().find(|(seen, _)| seen == key) {
-                return Some(*serial);
-            }
-        }
-        let serial = volume_serial(handle)?;
-        if let Ok(mut cache) = CACHE.write() {
-            if !cache.iter().any(|(seen, _)| seen == key) {
-                cache.push((key.to_os_string(), serial));
-            }
-        }
-        Some(serial)
-    }
-
     /// Bytes per enumeration call.
     ///
     /// Each record is around 100 bytes plus the name, so this holds a few
@@ -482,6 +455,17 @@ mod win {
                 // `read_unaligned` rather than a dereference because the
                 // guarantee about record alignment is documented but not
                 // enforceable here.
+                // Checked before the read, not after: the callee is the
+                // kernel and its chain should never point this close to
+                // the end of the buffer, but reading a 100-odd byte
+                // record from an offset that only had to satisfy
+                // `< BUFFER_BYTES` would run past the allocation, and
+                // that is undefined behaviour rather than a wrong
+                // answer. `FileNameLength` is distrusted below for the
+                // same reason.
+                if offset + std::mem::size_of::<FILE_ID_BOTH_DIR_INFO>() > BUFFER_BYTES {
+                    return None;
+                }
                 let record: FILE_ID_BOTH_DIR_INFO = unsafe {
                     base.add(offset)
                         .cast::<FILE_ID_BOTH_DIR_INFO>()
@@ -489,7 +473,7 @@ mod win {
                 };
                 let name_bytes = record.FileNameLength as usize;
                 let name_at = offset + std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
-                if name_at + name_bytes > BUFFER_BYTES {
+                if name_at.saturating_add(name_bytes) > BUFFER_BYTES {
                     // A record claiming to run past the buffer is not
                     // something to reason about; abandon the listing.
                     return None;
