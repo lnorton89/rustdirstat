@@ -186,7 +186,17 @@ Cutting a release, in this order:
 4. Merge (a merge commit, never a squash — the changelog pins the
    individual commit hashes), then tag the merge commit, annotated to
    match the existing tags: `git tag -a v0.3.0 -m "rustdirstat v0.3.0"`,
-   and push the tag. The tag push triggers the release workflow.
+   and push the tag. The tag push triggers the release workflow, whose
+   first job re-checks the tag against `Cargo.toml` and stops before
+   creating the draft if they disagree. Step 1 is checked twice on
+   purpose: the changelog generator only sees the version when it is
+   run, so a bump that is skipped, mistyped, or made after the section
+   was written would otherwise reach the tag unnoticed — and every
+   asset *filename* comes from the tag while the version *inside* the
+   `.deb`, the `.rpm` and the binaries comes from the crate. Those
+   disagreeing is the one release defect that looks fine from the
+   outside: apt reads the internal version, sees the release already
+   installed, and declines the upgrade.
 
 The point of writing the section first is that the tag then names a tree
 whose changelog is already finished. `v0.2.1` was cut the other way

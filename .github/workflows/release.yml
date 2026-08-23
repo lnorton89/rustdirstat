@@ -35,6 +35,40 @@ jobs:
         shell: bash
         run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
+      # Nothing else ties the tag to the version in Cargo.toml, and the
+      # two feed different halves of a release: every asset *filename*
+      # and every rendered manifest comes from the tag, while the version
+      # recorded *inside* the .deb, the .rpm and the binaries comes from
+      # the crate. A mismatch therefore produces a release that looks
+      # correct from the outside and is not — `rustdirstat-v0.3.0-amd64.deb`
+      # carrying `Version: 0.2.2-1`, which apt reads as already-installed
+      # and declines to upgrade, and a binary whose --version disagrees
+      # with the tap that shipped it.
+      #
+      # CONTRIBUTING.md puts a version-bump commit first in the release
+      # order; this is what makes forgetting it a failed workflow instead
+      # of a bad release. It runs before the draft is created, so a
+      # mistyped tag never gets as far as producing assets.
+      - name: Tag agrees with the crate version
+        shell: bash
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The first table in Cargo.toml is [package]; stopping at its
+          # end keeps a dependency's `version =` from being read instead.
+          crate=$(awk -F\" '/^\[/{n++} n==1 && /^version[[:space:]]*=/{print $2; exit}' Cargo.toml)
+          if [ -z "$crate" ]; then
+            echo "::error::could not read the version out of Cargo.toml"
+            exit 1
+          fi
+          if [ "$crate" != "${TAG#v}" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $crate."
+            echo "::error::Bump the crate version and commit it before tagging."
+            exit 1
+          fi
+          echo "tag $TAG matches Cargo.toml version $crate"
+
       - name: Create draft release
         shell: bash
         env:
