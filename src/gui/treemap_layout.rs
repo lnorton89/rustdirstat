@@ -60,6 +60,28 @@ pub(super) struct Tile {
     /// draw one, or the children painted after it cover the tile's own
     /// name (or the name covers them, depending on draw order).
     pub can_label: bool,
+    /// This tile's extension label, resolved once here rather than per
+    /// frame. Empty for anything that is not a file with a name.
+    ///
+    /// The paint loop needs it twice — to colour the tile, and to decide
+    /// whether an extension highlight dims it — and both used to call
+    /// `extension_label`, which allocates twice (`to_ascii_lowercase`
+    /// then `format!`). `extension_hue` then allocated a third time.
+    /// That is per tile, *per frame*, against a budget of 40 000 tiles:
+    /// a full-drive treemap was doing six figures of allocation every
+    /// frame to recompute an answer that cannot change while the tiles
+    /// stand. See [`Tile::hue`].
+    pub extension: String,
+    /// The tile's hue, or `None` for a file with no extension, which
+    /// takes the `NoExtension` category colour instead.
+    ///
+    /// Only the *hue* is cached, not the finished colour: saturation and
+    /// value come from the active theme, which can change without the
+    /// tiles being re-laid-out (`TreemapKey` does not include the theme,
+    /// and should not — a theme switch must not cost a relayout). So the
+    /// expensive, theme-independent half is stored and the cheap,
+    /// theme-dependent half stays at the paint site.
+    pub hue: Option<f32>,
 }
 
 impl Tile {
@@ -317,6 +339,8 @@ fn expand<'a>(
                 is_free_space: true,
                 is_aggregate: false,
                 can_label: true,
+                extension: String::new(),
+                hue: None,
             });
             continue;
         }
@@ -338,6 +362,8 @@ fn expand<'a>(
                 is_free_space: false,
                 is_aggregate: true,
                 can_label: true,
+                extension: String::new(),
+                hue: None,
             });
             continue;
         }
@@ -356,6 +382,24 @@ fn expand<'a>(
         let mut child_path = pending.index_path.clone();
         child_path.push(orig_idx);
 
+        // Display only — the tile's label; navigation follows
+        // `index_path`, and the raw bytes stay on the node.
+        let name = child.name.to_string_lossy().to_string();
+        // Resolved here, once, because the paint loop runs every frame
+        // over as many as `MAX_TILES` of these. See [`Tile::extension`].
+        // Directories take the directory colour and never consult it.
+        let (extension, hue) = if child.is_dir {
+            (String::new(), None)
+        } else {
+            let label = crate::gui::app::extension_label(&name);
+            let hue = if label == crate::gui::app::NO_EXTENSION_LABEL {
+                None
+            } else {
+                Some(crate::color::extension_hue(&label))
+            };
+            (label, hue)
+        };
+
         out.push(Tile {
             x: rx,
             y: ry,
@@ -363,14 +407,14 @@ fn expand<'a>(
             h: rh,
             is_dir: child.is_dir,
             depth,
-            // Display only — the tile's label; navigation follows
-            // `index_path`, and the raw bytes stay on the node.
-            name: child.name.to_string_lossy().to_string(),
+            name,
             category: child.category,
             index_path: child_path.clone(),
             is_free_space: false,
             is_aggregate: false,
             can_label: !expands || reserve_label,
+            extension,
+            hue,
         });
 
         if expands {

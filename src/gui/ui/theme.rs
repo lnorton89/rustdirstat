@@ -290,6 +290,25 @@ pub(super) fn panel_frame() -> Frame {
         .inner_margin(Margin::same(px(PAD)))
 }
 
+/// [`extension_color`] for a hue that has already been resolved.
+///
+/// The treemap stores each tile's hue at layout time and paints tens of
+/// thousands of them per frame, so the paint site must not re-derive it:
+/// `extension_color` allocates twice inside `extension_hue` and its
+/// caller. Only the theme-dependent half is left here, which is what
+/// keeps a theme switch from needing a relayout. `None` is a file with
+/// no extension, which takes the category colour instead of a hue.
+pub(super) fn extension_color_for_hue(hue: Option<f32>) -> Color32 {
+    let Some(hue) = hue else {
+        return to_color32(crate::color::Category::NoExtension.color());
+    };
+    if palette().mode.is_dark() {
+        hsv_to_rgb(hue, 0.68, 0.88)
+    } else {
+        hsv_to_rgb(hue, 0.78, 0.72)
+    }
+}
+
 pub(super) fn extension_color(extension: &str) -> Color32 {
     // The hue comes from `crate::color`, the same one the TUI draws
     // this extension at. Only the saturation and value are the GUI's

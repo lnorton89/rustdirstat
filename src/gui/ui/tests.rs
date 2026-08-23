@@ -3661,6 +3661,97 @@ fn a_frame_over_a_huge_tree_fits_the_budget() {
     );
 }
 
+/// Every leaf the same size, so squarify gives them equal area and each
+/// one clears `MIN_TILE_AREA_PX` — the shape that actually fills the
+/// tile budget. `wide_deep_tree`'s sizes fall off steeply enough that
+/// most of its subtree lands under the floor and is aggregated away.
+fn even_tree(breadth: usize, depth: usize) -> Node {
+    fn level(breadth: usize, depth: usize, at: usize) -> Node {
+        if depth == 0 {
+            return crate::model::fixtures::file(&format!("leaf{at}.bin"), 4_096);
+        }
+        let children: Vec<Node> = (0..breadth)
+            .map(|index| level(breadth, depth - 1, index))
+            .collect();
+        crate::model::fixtures::dir(&format!("d{at}"), children)
+    }
+    level(breadth, depth, 0)
+}
+
+/// The median frame at an explicit window size. See [`median_frame_time`],
+/// which is this at the 900x500 default.
+fn median_frame_time_sized(
+    ctx: &egui::Context,
+    app: &mut GuiApp,
+    frames: usize,
+    width: f32,
+    height: f32,
+) -> std::time::Duration {
+    for _ in 0..4 {
+        render_window(ctx, app, raw_input_sized(Vec::new(), width, height));
+    }
+    let mut samples = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let started = std::time::Instant::now();
+        render_window(ctx, app, raw_input_sized(Vec::new(), width, height));
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    samples.get(samples.len() / 2).copied().unwrap_or_default()
+}
+
+/// The budget holds at the *tile* budget, not just at the window size
+/// the other frame tests happen to use.
+///
+/// This is the hole the rest of this section had. Frame cost tracks tile
+/// count, not node count — a three-million-node tree and a
+/// quarter-million-node one both draw about 1 900 tiles at 900x500 and
+/// both come in around half a millisecond. But tiles are bounded by
+/// panel *area*, so the same fixture at 1920x1080 draws twelve times as
+/// many, and `MAX_TILES` lets a real drive reach forty thousand. Every
+/// other test here renders at 900x500 against a fixture that tops out
+/// near 1 900, so the configuration a maximised window on a real monitor
+/// is actually in — the one where a full-drive scan made the window
+/// unusable — was never measured at all.
+///
+/// Note the two assertions. Measuring the frame is only half of it: a
+/// fixture that quietly stopped producing tiles would leave this passing
+/// while testing nothing, which is exactly how the gap survived, so the
+/// tile count is pinned too.
+#[test]
+fn a_frame_at_the_tile_budget_fits_the_budget() {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 200 directories of 200 equal files: forty thousand leaves, which
+    // is the tile ceiling, from a tree cheap enough to build in a debug
+    // test. Reaching the same tile count by depth costs a million nodes.
+    let ctx = egui::Context::default();
+    let mut app = GuiApp::new(Tree {
+        root_path: std::path::PathBuf::from("big"),
+        root: even_tree(200, 2),
+        volume_free: None,
+        volume_total: None,
+        roots: Vec::new(),
+        hard_link_bytes: None,
+    });
+    app.expanded.insert(Vec::new());
+
+    const WIDTH: f32 = 2560.0;
+    const HEIGHT: f32 = 1440.0;
+    let median = median_frame_time_sized(&ctx, &mut app, 25, WIDTH, HEIGHT);
+    let tiles = app.treemap_tiles.len();
+    let budget = frame_budget();
+
+    assert!(
+        tiles > 30_000,
+        "the fixture drew only {tiles} tiles at {WIDTH}x{HEIGHT}; it is meant to          reach the {} tile budget, and measuring a frame that does not is          measuring nothing",
+        crate::gui::treemap_layout::MAX_TILES
+    );
+    assert!(
+        median <= budget,
+        "the median frame took {median:?} against a {budget:?} budget,          drawing {tiles} tiles at {WIDTH}x{HEIGHT}"
+    );
+}
+
 /// And it still fits while a scan is running.
 ///
 /// This is the sprint's actual claim. The scan pool leaves a core free
