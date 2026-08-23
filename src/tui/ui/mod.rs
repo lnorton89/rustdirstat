@@ -52,8 +52,15 @@ pub(super) fn draw_scanning(
 
     progress_splash_with(
         f,
-        format!("Scanning... {elapsed:.1}s"),
-        format!("{dirs} directories, {files} files, {}", human_bytes(bytes)),
+        tr_with("tui.scan.elapsed", &[("seconds", &format!("{elapsed:.1}"))]),
+        tr_with(
+            "tui.scan.counts",
+            &[
+                ("folders", &dirs.to_string()),
+                ("files", &files.to_string()),
+                ("size", &human_bytes(bytes)),
+            ],
+        ),
         found,
     );
 }
@@ -68,18 +75,20 @@ pub(super) fn draw_duplicate_progress(
     let elapsed = started.elapsed().as_secs_f64();
 
     let status = if total > 0 {
-        format!(
-            "Hashed {} of {} candidate files",
-            thousands(hashed),
-            thousands(total)
+        tr_with(
+            "tui.duplicates.hashed",
+            &[("done", &thousands(hashed)), ("total", &thousands(total))],
         )
     } else {
-        "Finding same-size candidates...".to_string()
+        tr("tui.duplicates.prefilter")
     };
 
     progress_splash(
         f,
-        format!("Scanning for duplicates... {elapsed:.1}s"),
+        tr_with(
+            "tui.duplicates.elapsed",
+            &[("seconds", &format!("{elapsed:.1}"))],
+        ),
         status,
     );
 }

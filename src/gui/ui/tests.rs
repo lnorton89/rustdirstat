@@ -461,13 +461,13 @@ fn a_toolbar_button_shows_its_tooltip_without_waiting_for_a_timer() {
 }
 
 fn latest_header_position(
-    headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
+    headers: &'static std::sync::Mutex<Vec<(String, egui::Rect)>>,
     label: &str,
 ) -> egui::Pos2 {
     let position = probe(headers)
         .iter()
         .rev()
-        .find(|(header, _)| *header == label)
+        .find(|(header, _)| header == label)
         .map(|(_, rect)| rect.center());
     assert!(
         position.is_some(),
@@ -573,13 +573,13 @@ fn latest_header_icon(label: &str) -> Option<Icon> {
         .and_then(|(_, icon)| *icon)
 }
 
-fn latest_directory_header_labels() -> Vec<&'static str> {
+fn latest_directory_header_labels() -> Vec<String> {
     let headers = probe(&TEST_DIRECTORY_HEADER_RECTS);
     let mut labels: Vec<_> = headers
         .iter()
         .rev()
         .take(8)
-        .map(|(label, _)| *label)
+        .map(|(label, _)| label.clone())
         .collect();
     labels.reverse();
     labels
@@ -622,13 +622,13 @@ fn latest_extension_header_icon(label: &str) -> Option<Icon> {
         .and_then(|(_, icon)| *icon)
 }
 
-fn latest_extension_header_labels() -> Vec<&'static str> {
+fn latest_extension_header_labels() -> Vec<String> {
     let headers = probe(&TEST_EXTENSION_HEADER_RECTS);
     let mut labels: Vec<_> = headers
         .iter()
         .rev()
         .take(6)
-        .map(|(label, _)| *label)
+        .map(|(label, _)| label.clone())
         .collect();
     labels.reverse();
     labels
@@ -1462,10 +1462,7 @@ const COLUMN_GRAB_INSET: f32 = 1.0;
 /// Missing headers assert rather than reading 0.0. A silent zero makes
 /// "the column got wider" true of any column at all, and a resize test
 /// written that way passed with the fix reverted.
-fn header_width(
-    headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
-    label: &str,
-) -> f32 {
+fn header_width(headers: &'static std::sync::Mutex<Vec<(String, egui::Rect)>>, label: &str) -> f32 {
     let width = probe(headers)
         .iter()
         .rev()
@@ -1487,7 +1484,7 @@ fn header_width(
 /// it.
 fn drag_column_border(
     render: fn(&egui::Context, &mut GuiApp, egui::RawInput),
-    headers: &'static std::sync::Mutex<Vec<(&'static str, egui::Rect)>>,
+    headers: &'static std::sync::Mutex<Vec<(String, egui::Rect)>>,
     ctx: &egui::Context,
     app: &mut GuiApp,
     label: &str,
@@ -1502,7 +1499,7 @@ fn drag_column_border(
     // spacing constant: the probe records every header in draw order, so
     // the entry after the last copy of `label` is the column to its
     // right.
-    let rendered: Vec<(&'static str, egui::Rect)> = probe(headers).iter().copied().collect();
+    let rendered: Vec<(String, egui::Rect)> = probe(headers).iter().cloned().collect();
     let this = rendered
         .iter()
         .rposition(|(seen, _)| *seen == label)
@@ -2060,7 +2057,7 @@ fn every_destructive_tool_is_marked_before_it_is_clicked() -> anyhow::Result<()>
         assert_eq!(
             drawn.1, tool.destructive,
             "{} renders with the wrong severity",
-            tool.name
+            tool.name_key
         );
     }
     Ok(())
@@ -2115,8 +2112,8 @@ fn maintenance_rows_stay_row_sized_and_do_not_overlap() -> anyhow::Result<()> {
     for (index, rect) in &rows {
         let name = crate::wintools::TOOLS
             .get(*index)
-            .map(|tool| tool.name)
-            .unwrap_or("?");
+            .map(|tool| tool.name())
+            .unwrap_or_else(|| "?".to_string());
         assert!(
             rect.height() <= MAX_ROW_HEIGHT,
             "the {name} row is {:.0}px tall — it has swallowed the page",
@@ -2168,8 +2165,8 @@ fn page_boxes_share_one_left_and_right_edge_inside_the_card() -> anyhow::Result<
     for (index, rect) in &rows {
         let name = crate::wintools::TOOLS
             .get(*index)
-            .map(|tool| tool.name)
-            .unwrap_or("?");
+            .map(|tool| tool.name())
+            .unwrap_or_else(|| "?".to_string());
         assert!(
             (rect.left() - first.left()).abs() <= EDGE_TOLERANCE,
             "the {name} row starts at {:.1}, not the shared {:.1}",
@@ -2910,7 +2907,7 @@ fn no_column_disappears_when_the_pane_narrows() {
     let ctx = egui::Context::default();
     let mut app = app_with_one_file();
 
-    let expected: Vec<&'static str> = app
+    let expected: Vec<String> = app
         .directory_column_order
         .iter()
         .map(|column| directory_column_label(*column))
@@ -2926,12 +2923,12 @@ fn no_column_disappears_when_the_pane_narrows() {
         }
 
         let headers = probe(&TEST_DIRECTORY_HEADER_RECTS);
-        let drawn: Vec<&str> = headers
+        let drawn: Vec<String> = headers
             .iter()
             .rev()
             .take(expected.len())
             .rev()
-            .map(|(label, _)| *label)
+            .map(|(label, _)| label.clone())
             .collect();
         assert_eq!(
             drawn, expected,
@@ -3081,7 +3078,7 @@ fn the_extension_table_scrolls_rather_than_dropping_columns() {
     let mut app = app_with_many_extensions();
     apply_style(&ctx, app.palette);
 
-    let expected: Vec<&'static str> = app
+    let expected: Vec<String> = app
         .extension_column_order
         .iter()
         .map(|column| extension_column_label(*column))
@@ -3097,12 +3094,12 @@ fn the_extension_table_scrolls_rather_than_dropping_columns() {
         }
 
         let headers = probe(&TEST_EXTENSION_HEADER_RECTS);
-        let drawn: Vec<&str> = headers
+        let drawn: Vec<String> = headers
             .iter()
             .rev()
             .take(expected.len())
             .rev()
-            .map(|(label, _)| *label)
+            .map(|(label, _)| label.clone())
             .collect();
         assert_eq!(
             drawn, expected,
@@ -3966,9 +3963,9 @@ fn a_maintenance_tool_refuses_a_multi_root_scan_with_no_selection() {
     let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = app_with_one_file();
     app.tree = std::sync::Arc::new(Tree {
-        root_path: std::path::PathBuf::from(crate::scanner::MULTI_ROOT_LABEL),
+        root_path: std::path::PathBuf::from(crate::scanner::multi_root_label()),
         root: Node {
-            name: std::ffi::OsString::from(crate::scanner::MULTI_ROOT_LABEL),
+            name: std::ffi::OsString::from(crate::scanner::multi_root_label()),
             is_dir: true,
             is_symlink: false,
             size: 0,
@@ -4521,7 +4518,7 @@ fn a_multi_root_scan_never_resolves_through_its_label() -> anyhow::Result<()> {
         for index in 0..app.tree.root.children.len() {
             if let Some(path) = app.tree.path_for(&[index]) {
                 assert!(
-                    !path.starts_with(crate::scanner::MULTI_ROOT_LABEL),
+                    !path.starts_with(crate::scanner::multi_root_label()),
                     "no path may be built from the multi-root label, got {path:?}"
                 );
             }

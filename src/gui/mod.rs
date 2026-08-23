@@ -35,7 +35,12 @@ pub fn run(roots: Vec<PathBuf>) -> Result<()> {
         options,
         Box::new(|_cc| Ok(Box::new(gui_app))),
     )
-    .map_err(|e| anyhow::anyhow!("GUI failed: {e}"))
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            crate::i18n::tr_with("status.gui_failed", &[("error", &e.to_string())])
+        )
+    })
 }
 
 fn native_options() -> eframe::NativeOptions {

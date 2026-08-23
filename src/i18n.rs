@@ -39,6 +39,43 @@ use std::sync::RwLock;
 /// complete UI.
 const ENGLISH: &str = include_str!("../assets/lang/en.toml");
 
+/// The translations that ship with the program, compiled in beside
+/// English.
+///
+/// They used to live only in the source tree. `assets/lang/` is in no
+/// `.deb`, no `.rpm` and no release archive, and `set_language` read only
+/// the user's config directory — so the German translation this project
+/// maintains was unreachable from every installed build, and the language
+/// picker offered exactly one language forever. Compiling them in is what
+/// makes a shipped translation a feature rather than a file in a
+/// repository: it needs no packaging, cannot be half-installed, and costs
+/// tens of kilobytes.
+///
+/// A user's own catalogue in [`catalog_dir`] still wins over the one
+/// here, so a translation can be corrected without waiting for a release.
+/// `every_shipped_catalogue_is_listed_here` fails the build if a file is
+/// added to `assets/lang/` and not to this table.
+/// Every language here draws in the font the window bundles, and that is
+/// the constraint on which languages can be here at all: egui ships
+/// Ubuntu-Light, which covers Latin, Latin Extended and Cyrillic and has
+/// no CJK glyphs whatever. Adding `ja`/`zh`/`ko` without also bundling a
+/// CJK face would put entries in the language picker that render as rows
+/// of empty boxes. `every_shipped_catalogue_draws_in_the_bundled_font`
+/// enforces it.
+const SHIPPED: &[(&str, &str)] = &[
+    ("cs", include_str!("../assets/lang/cs.toml")),
+    ("de", include_str!("../assets/lang/de.toml")),
+    ("es", include_str!("../assets/lang/es.toml")),
+    ("fr", include_str!("../assets/lang/fr.toml")),
+    ("it", include_str!("../assets/lang/it.toml")),
+    ("nl", include_str!("../assets/lang/nl.toml")),
+    ("pl", include_str!("../assets/lang/pl.toml")),
+    ("pt-BR", include_str!("../assets/lang/pt-BR.toml")),
+    ("ru", include_str!("../assets/lang/ru.toml")),
+    ("sv", include_str!("../assets/lang/sv.toml")),
+    ("tr", include_str!("../assets/lang/tr.toml")),
+];
+
 /// A language's messages, keyed the way the code asks for them.
 #[derive(Default)]
 struct Catalog {
@@ -73,30 +110,31 @@ fn parse(text: &str) -> Option<HashMap<String, String>> {
     )
 }
 
-/// The languages this build can offer, newest lookup first.
+/// The languages this build can offer.
 ///
-/// English always, plus any `*.toml` beside the user's config. Shipping
-/// translations as files rather than compiling them in is what lets
-/// someone add one without rebuilding — a translation is content, and
-/// content that needs a compiler is a translation nobody writes.
+/// English always; the translations in [`SHIPPED`], which are part of the
+/// binary and therefore present however the program was installed; and
+/// any `*.toml` beside the user's config, which is what lets someone add
+/// a language without rebuilding — a translation is content, and content
+/// that needs a compiler is a translation nobody writes.
 pub fn available() -> Vec<String> {
     let mut tags = vec!["en".to_string()];
-    let Some(dir) = catalog_dir() else {
-        return tags;
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return tags;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
-            continue;
-        }
-        let Some(tag) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if tag != "en" {
-            tags.push(tag.to_string());
+    tags.extend(SHIPPED.iter().map(|(tag, _)| (*tag).to_string()));
+    if let Some(entries) = catalog_dir().and_then(|dir| std::fs::read_dir(dir).ok()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            let Some(tag) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            // `en.toml` in that folder is the starter template
+            // [`write_starter_catalogue`] leaves there, not a language to
+            // offer — English is already the first entry.
+            if tag != "en" {
+                tags.push(tag.to_string());
+            }
         }
     }
     tags.sort();
@@ -145,11 +183,21 @@ pub fn set_language(tag: &str) {
     let entries = if tag == "en" {
         HashMap::new()
     } else {
-        catalog_dir()
+        // The user's own file first, then the one compiled in. That
+        // order is the point: a shipped translation can be corrected or
+        // extended locally without waiting for a release, by dropping a
+        // file of the same name into the config directory.
+        let theirs = catalog_dir()
             .map(|dir| dir.join(format!("{tag}.toml")))
             .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|text| parse(&text))
-            .unwrap_or_default()
+            .and_then(|text| parse(&text));
+        let ours = || {
+            SHIPPED
+                .iter()
+                .find(|(shipped, _)| *shipped == tag)
+                .and_then(|(_, text)| parse(text))
+        };
+        theirs.or_else(ours).unwrap_or_default()
     };
     if let Ok(mut catalog) = catalog().write() {
         catalog.active = entries;
@@ -397,6 +445,188 @@ mod catalogue_tests {
              which means the text they describe is hardcoded somewhere: {unused:#?}"
         );
         Ok(())
+    }
+
+    /// Every catalogue in `assets/lang/` is in the compiled-in table.
+    ///
+    /// `SHIPPED` is written by hand, so adding `fr.toml` to the directory
+    /// without adding a line to it produces a translation that exists in
+    /// the source tree and in no build — which is exactly the state
+    /// German was in for a whole release.
+    #[test]
+    fn every_shipped_catalogue_is_listed_here() -> anyhow::Result<()> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/lang");
+        let listed: Vec<&str> = SHIPPED.iter().map(|(tag, _)| *tag).collect();
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            let Some(tag) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if tag == "en" {
+                continue;
+            }
+            assert!(
+                listed.contains(&tag),
+                "assets/lang/{tag}.toml is in the tree but not in `SHIPPED`, so no build \
+                 can offer it"
+            );
+        }
+        Ok(())
+    }
+
+    /// A language that ships with the program is selectable without any
+    /// file on disk.
+    ///
+    /// This is the whole point of compiling them in: `assets/lang/` is in
+    /// no package and no archive, so before this a fresh install offered
+    /// English and nothing else however many translations the project
+    /// maintained.
+    #[test]
+    fn a_shipped_language_can_be_selected_with_no_files_installed() {
+        for (tag, _) in SHIPPED {
+            assert!(
+                available().iter().any(|offered| offered == tag),
+                "{tag} ships with the program, so the picker must offer it"
+            );
+            set_language(tag);
+            assert_eq!(language(), *tag);
+            assert_ne!(
+                tr("menu.file"),
+                "menu.file",
+                "{tag} should resolve a key rather than echo it"
+            );
+            // Measured across the catalogue rather than on one chosen
+            // key: a real translation legitimately keeps some words
+            // ("File" is Italian for File, "Video" is most languages'
+            // word for video), so a single-key check tests the key, not
+            // the translation.
+            let english = english();
+            let translated = SHIPPED
+                .iter()
+                .find(|(shipped, _)| shipped == tag)
+                .and_then(|(_, text)| parse(text))
+                .unwrap_or_default();
+            let differing = translated
+                .iter()
+                .filter(|(key, text)| english.get(*key).is_some_and(|ours| ours != *text))
+                .count();
+            assert!(
+                differing * 2 > english.len(),
+                "{tag} differs from English in only {differing} of {} entries, \
+                 which is not a translation",
+                english.len()
+            );
+        }
+        set_language("en");
+    }
+
+    /// A translation *shipped in this repository* is complete.
+    ///
+    /// The forgiving rule — a missing key falls back to English — is for
+    /// the translations people write for themselves, where a half-done
+    /// file is better than none. It is the wrong rule for the one
+    /// translation this project ships, which is both a feature and the
+    /// worked example somebody copies: German sat at 51% of the
+    /// catalogue for a whole release, so a German window showed a
+    /// translated menu bar over an English everything-else, and nothing
+    /// said so.
+    ///
+    /// Note this checks `assets/lang/`, not the user's config directory.
+    /// A file someone wrote themselves is theirs to leave half done.
+    #[test]
+    fn a_shipped_translation_is_complete() -> anyhow::Result<()> {
+        let english = english();
+        for (name, entries) in shipped_translations()? {
+            let missing: Vec<&String> = english
+                .keys()
+                .filter(|key| !entries.contains_key(*key))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "{name} is shipped with this project, so it has to cover every key. \
+                 {} of {} missing: {missing:#?}",
+                missing.len(),
+                english.len()
+            );
+        }
+        Ok(())
+    }
+
+    /// A translation uses the same placeholders as the English it
+    /// replaces.
+    ///
+    /// Substitution is by name, so a translation may reorder `{files}`
+    /// and `{folders}` freely — but one that invents `{dateien}`, or
+    /// drops `{error}`, produces a message with a literal brace in it or
+    /// with the interesting part missing. Neither shows up until someone
+    /// switches language and hits that exact line.
+    #[test]
+    fn a_translation_keeps_the_placeholders_it_was_given() -> anyhow::Result<()> {
+        let english = english();
+        let mut wrong = Vec::new();
+        for (name, entries) in shipped_translations()? {
+            for (key, text) in &entries {
+                let Some(original) = english.get(key) else {
+                    continue;
+                };
+                let (mut theirs, mut ours) = (placeholders(text), placeholders(original));
+                theirs.sort();
+                ours.sort();
+                if theirs != ours {
+                    wrong.push(format!(
+                        "{name}: {key} has {theirs:?}, English has {ours:?}"
+                    ));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "a translation may reorder placeholders but not invent or drop them: {wrong:#?}"
+        );
+        Ok(())
+    }
+
+    /// The `{name}`s in one message.
+    fn placeholders(text: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('{') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('}') else {
+                break;
+            };
+            found.push(after[..close].to_string());
+            rest = &after[close + 1..];
+        }
+        found
+    }
+
+    /// Every catalogue under `assets/lang/`, English excepted.
+    fn shipped_translations() -> anyhow::Result<Vec<(String, HashMap<String, String>)>> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/lang");
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if name == "en.toml" {
+                continue;
+            }
+            let Some(entries) = parse(&std::fs::read_to_string(&path)?) else {
+                anyhow::bail!("{name} is not a readable catalogue");
+            };
+            out.push((name, entries));
+        }
+        Ok(out)
     }
 
     /// A translation file may be partial, but it may not be *wrong*: every

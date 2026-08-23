@@ -19,9 +19,9 @@ use super::*;
 pub(super) fn draw_search_prompt(f: &mut Frame, app: &mut App) {
     text_prompt(
         f,
-        " Search this subtree (Esc to cancel) ".to_string(),
+        format!(" {} ", tr("tui.prompt.search")),
         &app.search.query,
-        "Enter to search, Esc to cancel. * and ? are wildcards; prefix with re: for a regex.",
+        &tr("tui.prompt.search.hint"),
     );
 }
 
@@ -33,9 +33,9 @@ pub(super) fn draw_move_prompt(f: &mut Frame, app: &mut App) {
         .unwrap_or_default();
     text_prompt(
         f,
-        format!(" Move '{name}' to (Esc to cancel) "),
+        format!(" {} ", tr_with("tui.prompt.move", &[("name", &name)])),
         &app.move_to.destination,
-        "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
+        &tr("tui.prompt.move.hint"),
     );
 }
 
@@ -52,41 +52,51 @@ pub(super) fn draw_properties_popup(f: &mut Frame, app: &mut App) {
         .get(app.selected)
         .map(|(i, n)| (*i, *n))
     else {
-        f.render_widget(Paragraph::new("Nothing selected."), inner);
+        f.render_widget(Paragraph::new(tr("properties.empty.title")), inner);
         return;
     };
 
     let mut full_path = app.current_path();
     full_path.push(&node.name);
-    let kind = if node.is_dir {
-        "Directory"
+    let kind = tr(if node.is_dir {
+        "properties.type.folder"
     } else if node.is_symlink {
-        "Symlink"
+        "properties.type.link"
     } else {
-        "File"
+        "properties.type.file"
+    });
+    // A directory has no category of its own; a file always lands in
+    // one, so the fallback is only reached for a node the scan filed
+    // nowhere.
+    let category = match node.category {
+        Some(category) => category.label(),
+        None if node.is_dir => "-".to_string(),
+        None => tr("category.other"),
     };
-    let category =
-        node.category
-            .map(|c| c.label())
-            .unwrap_or(if node.is_dir { "-" } else { "Other" });
 
-    let mut rows: Vec<(&str, String)> = vec![
-        ("Path", crate::util::display_path(&full_path)),
-        ("Type", kind.to_string()),
-        ("Category", category.to_string()),
-        ("Size (logical)", human_bytes(node.size)),
-        ("Size (physical)", human_bytes(node.physical_size)),
-        ("Modified", format_modified(node.modified)),
+    let mut rows: Vec<(String, String)> = vec![
+        (tr("properties.path"), crate::util::display_path(&full_path)),
+        (tr("properties.type"), kind),
+        (tr("tui.properties.category"), category),
+        (tr("tui.properties.logical"), human_bytes(node.size)),
+        (
+            tr("tui.properties.physical"),
+            human_bytes(node.physical_size),
+        ),
+        (tr("properties.modified"), format_modified(node.modified)),
     ];
     if node.is_dir {
-        rows.push(("Files", thousands(node.file_count)));
-        rows.push(("Subdirectories", thousands(node.dir_count)));
+        rows.push((tr("properties.files"), thousands(node.file_count)));
+        rows.push((tr("properties.subfolders"), thousands(node.dir_count)));
     }
     if node.unreadable_count > 0 {
-        rows.push(("Unreadable entries", thousands(node.unreadable_count)));
+        rows.push((
+            tr("tui.properties.unreadable"),
+            thousands(node.unreadable_count),
+        ));
     }
     if node.error {
-        rows.push(("Access", "denied".to_string()));
+        rows.push((tr("tui.properties.access"), tr("tui.properties.denied")));
     }
 
     let lines: Vec<Line> = rows
@@ -156,7 +166,7 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
         };
         let marker = if selected { "> " } else { "  " };
         lines.push(Line::from(Span::styled(
-            format!("{marker}{}", tool.name),
+            format!("{marker}{}", tool.name()),
             name_style,
         )));
         if row < inner.height {
@@ -170,7 +180,8 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
         }
         row += 1;
         if selected {
-            for desc_line in wrap_text(&format!("    {}", tool.description), inner.width as usize) {
+            for desc_line in wrap_text(&format!("    {}", tool.description()), inner.width as usize)
+            {
                 lines.push(Line::from(Span::styled(
                     desc_line,
                     Style::default().fg(theme::MUTED),
@@ -182,7 +193,7 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
     if !available {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "These tools call native Windows utilities and aren't available on this platform.",
+            tr("tui.wintools.unavailable"),
             Style::default().fg(theme::MUTED),
         )));
     }
@@ -353,8 +364,11 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
     // Pre-wrapping by hand, the same width `Paragraph` will use, means
     // the row math and the rendered text can never disagree.
     let inner_w = inner.width as usize;
-    let question_lines = wrap_text(&format!("Run '{}'?", tool.name), inner_w);
-    let desc_lines = wrap_text(tool.description, inner_w);
+    let question_lines = wrap_text(
+        &tr_with("tui.wintools.question", &[("name", &tool.name())]),
+        inner_w,
+    );
+    let desc_lines = wrap_text(&tool.description(), inner_w);
 
     let mut text = confirm_body(&question_lines, &desc_lines);
     text.push(Line::from(""));
@@ -453,11 +467,14 @@ pub(super) fn draw_confirm_popup(
     is_dir: bool,
 ) {
     let area = centered_rect(60, 24, f.area());
-    let title = if permanent {
-        " Permanently Delete "
-    } else {
-        " Move to Trash "
-    };
+    let title = format!(
+        " {} ",
+        tr(if permanent {
+            "tui.delete.title.permanent"
+        } else {
+            "tui.delete.title.trash"
+        })
+    );
     let inner = open_popup(f, area, danger_block(title));
 
     // As in draw_wintool_confirm_popup: the button row can't be a fixed
@@ -466,18 +483,15 @@ pub(super) fn draw_confirm_popup(
     // the deleted item's name is — pre-wrapping by hand keeps the click
     // zones honest about where the buttons actually render.
     let inner_w = inner.width as usize;
-    let question_lines = wrap_text(&format!("Delete '{name}'?"), inner_w);
-    let desc_text = if permanent {
-        "This bypasses the Recycle Bin/Trash and cannot be undone."
+    let question_lines = wrap_text(&tr_with("tui.delete.question", &[("name", name)]), inner_w);
+    let desc_text = tr(if permanent {
+        "tui.delete.permanent"
     } else {
-        "This can be undone from your OS Recycle Bin/Trash."
-    };
-    let desc_lines = wrap_text(desc_text, inner_w);
+        "tui.delete.undoable"
+    });
+    let desc_lines = wrap_text(&desc_text, inner_w);
     let empty_lines: Vec<String> = if is_dir {
-        wrap_text(
-            "Or empty it — delete its contents, keep the folder.",
-            inner_w,
-        )
+        wrap_text(&tr("tui.delete.or_empty"), inner_w)
     } else {
         Vec::new()
     };

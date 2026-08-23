@@ -15,14 +15,16 @@
 //! that exists — which for a delete would mean acting on the parent.
 
 use super::*;
+use crate::i18n::{tr, tr_with};
 
 /// Shown when a queued deletion names something the tree no longer has.
 ///
 /// The usual way to get one is a rescan between queuing the delete and
 /// confirming it: index paths are only meaningful against the tree they
 /// came from.
-pub(in crate::tui) const STALE_TARGET: &str =
-    "That item is no longer in the scan — rescan and try again";
+pub(in crate::tui) fn stale_target() -> String {
+    crate::i18n::tr("status.stale_target")
+}
 
 pub(in crate::tui) enum RemovedExt {
     File(Option<Category>),
@@ -199,8 +201,13 @@ impl App {
             )
         };
         match written {
-            Ok(()) => self.message = Some(format!("Report written to {filename}")),
-            Err(e) => self.message = Some(format!("Failed to write report: {e}")),
+            Ok(()) => self.message = Some(tr_with("status.report_written", &[("path", &filename)])),
+            Err(e) => {
+                self.message = Some(tr_with(
+                    "status.report_failed",
+                    &[("error", &e.to_string())],
+                ))
+            }
         }
     }
 
@@ -225,8 +232,10 @@ impl App {
             )
         };
         match written {
-            Ok(()) => self.message = Some(format!("CSV written to {filename}")),
-            Err(e) => self.message = Some(format!("Failed to write CSV: {e}")),
+            Ok(()) => self.message = Some(tr_with("status.csv_written", &[("path", &filename)])),
+            Err(e) => {
+                self.message = Some(tr_with("status.csv_failed", &[("error", &e.to_string())]))
+            }
         }
     }
 
@@ -311,11 +320,7 @@ impl App {
         // the tools were being handed the first word of a UI string.
         let volume = if self.tree.is_multi_root() {
             let Some(path) = self.tree.root_for(&self.path_indices).map(|root| root.path) else {
-                self.message = Some(
-                    "Open one of the scanned locations first: with several, there is no \
-                     single volume for a maintenance tool"
-                        .to_string(),
-                );
+                self.message = Some(tr("status.no_single_volume_tui"));
                 return;
             };
             path
@@ -333,7 +338,7 @@ impl App {
                 let detail = output.detail.replace(char::is_whitespace, " ");
                 self.message = Some(format!("{}: {}", output.summary, detail.trim()));
             }
-            Err(e) => self.message = Some(format!("{}: {e}", tool.name)),
+            Err(e) => self.message = Some(format!("{}: {e}", tool.name())),
         }
         self.wintools.visible = false;
     }
@@ -374,10 +379,15 @@ impl App {
 
         match crate::util::move_path(&source, &dest) {
             Ok(()) => {
-                self.message = Some(format!("Moved to {}", dest.display()));
+                self.message = Some(tr_with(
+                    "status.moved_to",
+                    &[("path", &crate::util::display_path(&dest))],
+                ));
                 self.refresh_requested = true;
             }
-            Err(e) => self.message = Some(format!("Move failed: {e}")),
+            Err(e) => {
+                self.message = Some(tr_with("status.move_failed", &[("error", &e.to_string())]))
+            }
         }
     }
 
@@ -395,11 +405,11 @@ impl App {
         // does exist — which for a delete would mean confirming against
         // the *parent* directory and removing that instead.
         let Some(target) = self.tree.node_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
         let Some(path) = self.tree.path_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
 
@@ -426,9 +436,12 @@ impl App {
         if let Err(error) = outcome {
             // Nothing is subtracted from the tree: it still matches the
             // disk, because nothing was removed from either.
-            self.message = Some(format!(
-                "Could not delete {}: {error}",
-                crate::util::display_path(&path)
+            self.message = Some(tr_with(
+                "status.delete_refused",
+                &[
+                    ("path", &crate::util::display_path(&path)),
+                    ("error", &error.to_string()),
+                ],
             ));
             return Ok(());
         }
@@ -439,12 +452,14 @@ impl App {
         }
 
         self.after_removal();
-        let verb = if pending.permanent {
-            "Permanently deleted"
-        } else {
-            "Moved to trash"
-        };
-        self.message = Some(format!("{verb}: {}", crate::util::display_path(&path)));
+        self.message = Some(tr_with(
+            if pending.permanent {
+                "status.deleted_permanently"
+            } else {
+                "status.moved_to_trash"
+            },
+            &[("path", &crate::util::display_path(&path))],
+        ));
         Ok(())
     }
 
@@ -467,11 +482,11 @@ impl App {
         // Same as `confirm_delete`: a stale path must not resolve to the
         // nearest surviving ancestor and empty *that*.
         let Some(target) = self.tree.node_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
         let Some(path) = self.tree.path_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
 
@@ -486,9 +501,15 @@ impl App {
         // subtraction below is only correct for a *complete* emptying.
         match crate::util::empty_directory_to_trash(&path)? {
             crate::util::EmptyOutcome::Incomplete { unreadable } => {
-                self.message = Some(format!(
-                    "Nothing was emptied: {unreadable} entr{} could not be read",
-                    if unreadable == 1 { "y" } else { "ies" }
+                // Two whole sentences rather than a spliced "entr" +
+                // "y"/"ies": a plural is not a suffix in every language.
+                self.message = Some(tr_with(
+                    if unreadable == 1 {
+                        "status.empty.incomplete_one_tui"
+                    } else {
+                        "status.empty.incomplete_many_tui"
+                    },
+                    &[("count", &unreadable.to_string())],
                 ));
                 self.refresh_requested = true;
                 return Ok(());
@@ -499,17 +520,23 @@ impl App {
                 first_error,
             } => {
                 let failed = total - done;
-                self.message = Some(match first_error {
-                    Some(error) => format!(
-                        "Emptied {done} of {total} items; {failed} could not be moved \
-                         to trash ({error})"
-                    ),
-                    None => {
-                        format!(
-                            "Emptied {done} of {total} items; {failed} could not be moved to trash"
-                        )
+                let mut fields = vec![
+                    ("done", done.to_string()),
+                    ("total", total.to_string()),
+                    ("failed", failed.to_string()),
+                ];
+                let key = match first_error {
+                    Some(error) => {
+                        fields.push(("error", error));
+                        "status.empty.partial_with_error_tui"
                     }
-                });
+                    None => "status.empty.partial_tui",
+                };
+                let fields: Vec<(&str, &str)> = fields
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                self.message = Some(tr_with(key, &fields));
                 self.refresh_requested = true;
                 return Ok(());
             }
@@ -531,7 +558,10 @@ impl App {
         node.children.clear();
 
         self.after_removal();
-        self.message = Some(format!("Emptied: {}", crate::util::display_path(&path)));
+        self.message = Some(tr_with(
+            "status.emptied",
+            &[("path", &crate::util::display_path(&path))],
+        ));
         Ok(())
     }
 

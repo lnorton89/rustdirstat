@@ -79,7 +79,13 @@ fn main() -> Result<()> {
     let mut roots = Vec::with_capacity(cli.paths.len());
     for path in &cli.paths {
         if !path.exists() {
-            bail!("path does not exist: {}", path.display());
+            bail!(
+                "{}",
+                rustdirstat::i18n::tr_with(
+                    "cli.path_missing",
+                    &[("path", &path.display().to_string())]
+                )
+            );
         }
         roots.push(path.canonicalize().unwrap_or_else(|_| path.clone()));
     }

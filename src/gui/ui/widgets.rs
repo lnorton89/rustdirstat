@@ -16,6 +16,7 @@
 
 use crate::gui::app::FileView;
 use crate::gui::icons::Icon;
+use crate::i18n::tr;
 use eframe::egui::{self, Color32, RichText, Sense, Stroke, TextStyle, Vec2};
 
 #[cfg(test)]
@@ -115,15 +116,20 @@ pub(super) fn row_hover_edge(painter: &egui::Painter, response: &egui::Response,
 /// Shared rather than written twice: the Properties inspector and the
 /// modal pages both need it, and two hand-laid versions drift — the
 /// second one always ends up a different distance from its heading.
-pub(super) fn empty_state(ui: &mut egui::Ui, icon: Icon, title: &str, body: &str) {
+pub(super) fn empty_state(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    title: impl AsRef<str>,
+    body: impl AsRef<str>,
+) {
     let palette = palette();
     ui.add_space(SPACE_LG);
     ui.vertical_centered(|ui| {
         paint_inline_icon(ui, icon, 38.0, palette.secondary_text);
         ui.add_space(SPACE_MD);
-        ui.label(RichText::new(title).strong());
+        ui.label(RichText::new(title.as_ref()).strong());
         ui.add_space(SPACE_XS);
-        ui.label(RichText::new(body).color(palette.secondary_text));
+        ui.label(RichText::new(body.as_ref()).color(palette.secondary_text));
     });
 }
 
@@ -280,7 +286,11 @@ pub(super) fn expand_toggle(ui: &mut egui::Ui, id: egui::Id, expanded: bool) -> 
         ui.style().interact(&response).fg_stroke.color,
         turns,
     );
-    response.on_hover_text(if expanded { "Collapse" } else { "Expand" })
+    response.on_hover_text(if expanded {
+        tr("action.collapse")
+    } else {
+        tr("action.expand")
+    })
 }
 
 /// Returns where the icon landed, which the tree's row-alignment test
@@ -503,19 +513,19 @@ pub(super) fn menu_item(
     .inner
 }
 
-pub(super) fn accent_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+pub(super) fn accent_button(ui: &mut egui::Ui, label: impl AsRef<str>) -> egui::Response {
     let palette = palette();
     ui.scope(|ui| {
         ui.visuals_mut().widgets.inactive.weak_bg_fill = palette.accent_muted;
         ui.visuals_mut().widgets.inactive.bg_fill = palette.accent_muted;
         ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.accent);
         ui.visuals_mut().widgets.inactive.fg_stroke.color = palette.on_accent;
-        ui.button(label)
+        ui.button(label.as_ref())
     })
     .inner
 }
 
-pub(super) fn danger_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+pub(super) fn danger_button(ui: &mut egui::Ui, label: impl AsRef<str>) -> egui::Response {
     let palette = palette();
     // A little stronger than the callout background: this is the control
     // that performs the destructive action, so it has to outrank the
@@ -530,7 +540,7 @@ pub(super) fn danger_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         ui.visuals_mut().widgets.inactive.bg_fill = fill;
         ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.danger);
         ui.visuals_mut().widgets.inactive.fg_stroke.color = readable_text_color(fill);
-        ui.button(label)
+        ui.button(label.as_ref())
     })
     .inner
 }
@@ -564,7 +574,7 @@ pub(super) const HEADER_TEXT_INSET: f32 = 7.0;
 /// behaves identically; it just stops claiming the width as a floor.
 pub(super) fn sortable_header(
     ui: &mut egui::Ui,
-    label: &'static str,
+    label: &str,
     direction: Option<Icon>,
     claims_width: bool,
 ) -> egui::Response {
@@ -642,7 +652,7 @@ pub(super) fn sortable_header(
         }
     }
     #[cfg(test)]
-    probe(&TEST_DIRECTORY_HEADER_ICONS).push((label, direction));
+    probe(&TEST_DIRECTORY_HEADER_ICONS).push((label.to_string(), direction));
     let cursor = if response.dragged() {
         egui::CursorIcon::Grabbing
     } else {
@@ -650,7 +660,10 @@ pub(super) fn sortable_header(
     };
     response
         .on_hover_cursor(cursor)
-        .on_hover_text(format!("Click to sort by {label} · drag to reorder"))
+        .on_hover_text(crate::i18n::tr_with(
+            "tooltip.sort_column",
+            &[("column", label)],
+        ))
 }
 
 /// A column name in a table whose columns cannot be sorted or reordered.

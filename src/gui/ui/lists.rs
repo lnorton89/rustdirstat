@@ -14,6 +14,7 @@
 
 use crate::gui::app::GuiApp;
 use crate::gui::icons::Icon;
+use crate::i18n::tr;
 use crate::util::{format_modified, human_bytes};
 use eframe::egui::{self, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
@@ -82,7 +83,7 @@ pub(super) fn path_size_date_table(
         .header(TABLE_HEADER_HEIGHT, |mut header| {
             header.col(|ui| table_header_label(ui, "Path"));
             header.col(|ui| table_header_label(ui, "Size"));
-            header.col(|ui| table_header_label(ui, "Last change"));
+            header.col(|ui| table_header_label(ui, &tr("column.modified")));
         })
         .body(|mut body| {
             let painter = body.ui_mut().painter().clone();
@@ -160,32 +161,26 @@ pub(super) fn draw_largest_files(app: &mut GuiApp, ui: &mut egui::Ui) {
 pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
     let mut run = false;
     ui.horizontal(|ui| {
-        section_title(ui, Icon::Search, "Search");
+        section_title(ui, Icon::Search, &tr("label.search"));
         ui.label(
             RichText::new(format!("{} results", app.search.results.len()))
                 .small()
                 .color(palette().secondary_text),
         );
     });
-    ui.label(
-        RichText::new(
-            "Find files by glob pattern — * ? [a-z] {jpg,png} — or by regular \
-             expression with re:.",
-        )
-        .color(palette().secondary_text),
-    );
+    ui.label(RichText::new(tr("search.hint")).color(palette().secondary_text));
     ui.add_space(SPACE_SM);
     ui.horizontal(|ui| {
         let search_width = ui.available_width().min(420.0);
         let edit = ui.add(
             egui::TextEdit::singleline(&mut app.search.query)
-                .hint_text("*.{iso,img} or re:^archive-")
+                .hint_text(tr("search.placeholder"))
                 .desired_width(search_width),
         );
         if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             run = true;
         }
-        if icon_button(ui, true, Icon::Search, "Search").clicked() {
+        if icon_button(ui, true, Icon::Search, &tr("label.search")).clicked() {
             run = true;
         }
     });
@@ -200,11 +195,8 @@ pub(super) fn draw_search(app: &mut GuiApp, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(SPACE_LG + SPACE_SM);
             paint_inline_icon(ui, Icon::Search, 40.0, palette().secondary_text);
-            ui.heading("No search results yet");
-            ui.label(
-                RichText::new("Enter a pattern above and press Enter to search the current scan.")
-                    .color(palette().secondary_text),
-            );
+            ui.heading(tr("search.empty.title"));
+            ui.label(RichText::new(tr("search.empty.body")).color(palette().secondary_text));
         });
         return;
     }
@@ -219,15 +211,15 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
             ui.add_space(SPACE_LG + SPACE_SM);
             if app.duplicate_running() {
                 ui.spinner();
-                ui.heading("Finding duplicate files…");
-                ui.label("Files with matching sizes are being hashed in the background.");
+                ui.heading(tr("duplicates.running.title"));
+                ui.label(tr("duplicates.running.body"));
             } else {
                 paint_inline_icon(ui, Icon::Duplicate, 46.0, palette().accent);
-                ui.heading("No duplicate groups found");
-                ui.label("Scan the current tree for files with identical content.");
+                ui.heading(tr("duplicates.empty.title"));
+                ui.label(tr("duplicates.empty.body"));
             }
             if !app.duplicate_running()
-                && icon_button(ui, true, Icon::Duplicate, "Scan for duplicates").clicked()
+                && icon_button(ui, true, Icon::Duplicate, &tr("duplicates.scan")).clicked()
             {
                 app.find_duplicates();
             }
@@ -249,12 +241,14 @@ pub(super) fn draw_duplicates(app: &mut GuiApp, ui: &mut egui::Ui) {
                 // same number the TUI shows — the hard-link awareness is
                 // carried by the reclaimable figure, which already
                 // counts aliases as nothing.
-                egui::CollapsingHeader::new(format!(
-                    "Group {} · {} copies · {} each · {} reclaimable",
-                    group_idx + 1,
-                    group.files.len(),
-                    human_bytes(group.size),
-                    human_bytes(wasted)
+                egui::CollapsingHeader::new(crate::i18n::tr_with(
+                    "duplicates.group",
+                    &[
+                        ("number", &(group_idx + 1).to_string()),
+                        ("copies", &group.files.len().to_string()),
+                        ("size", &human_bytes(group.size)),
+                        ("reclaimable", &human_bytes(wasted)),
+                    ],
                 ))
                 .default_open(group_idx < 5)
                 .show(ui, |ui| {

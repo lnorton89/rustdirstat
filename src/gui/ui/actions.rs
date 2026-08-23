@@ -14,6 +14,7 @@
 //! be its equivalent cannot drift apart.
 
 use crate::gui::app::{FileView, GuiApp};
+use crate::i18n::tr_with;
 use eframe::egui::{self};
 
 use super::modal::{dismiss_top, modal_is_open};
@@ -146,21 +147,24 @@ pub(super) fn choose_folder(app: &mut GuiApp) {
         .unwrap_or_else(|| app.tree.root_path.clone());
     if let Some(path) = rfd::FileDialog::new().set_directory(&start).pick_folder() {
         if let Err(e) = app.open_folder(&path) {
-            app.status = Some(format!("Scan failed: {e}"));
+            app.status = Some(tr_with("status.scan_failed", &[("error", &e.to_string())]));
         }
     }
 }
 
 pub(super) fn refresh(app: &mut GuiApp) {
     if let Err(e) = app.refresh_scan() {
-        app.status = Some(format!("Refresh failed: {e}"));
+        app.status = Some(tr_with(
+            "status.refresh_failed",
+            &[("error", &e.to_string())],
+        ));
     }
 }
 
 pub(super) fn open_selected(app: &mut GuiApp) {
     if let Some(path) = app.selected_fs_path() {
         if let Err(e) = crate::util::open_path(&path) {
-            app.status = Some(format!("Open failed: {e}"));
+            app.status = Some(tr_with("status.open_failed", &[("error", &e.to_string())]));
         }
     }
 }
@@ -173,7 +177,10 @@ pub(super) fn reveal_selected(app: &mut GuiApp) {
             path.parent().unwrap_or(&path).to_path_buf()
         };
         if let Err(e) = crate::util::open_in_file_manager(&target) {
-            app.status = Some(format!("Explorer failed: {e}"));
+            app.status = Some(tr_with(
+                "status.reveal_failed",
+                &[("error", &e.to_string())],
+            ));
         }
     }
 }
@@ -186,8 +193,10 @@ pub(super) fn copy_path(app: &mut GuiApp) {
         // them. See `util::display_path`.
         let text = crate::util::display_path(&path);
         match crate::util::copy_to_clipboard(&text) {
-            Ok(()) => app.status = Some(format!("Copied: {text}")),
-            Err(e) => app.status = Some(format!("Copy failed: {e}")),
+            Ok(()) => app.status = Some(tr_with("status.copied", &[("path", &text)])),
+            Err(e) => {
+                app.status = Some(tr_with("status.copy_failed", &[("error", &e.to_string())]))
+            }
         }
     }
 }
@@ -205,8 +214,18 @@ pub(super) fn export_csv(app: &mut GuiApp) {
         // to be read by something else. It writes each root against its
         // own path, and a single-root tree exactly as before.
         match crate::csv_export::write_tree_csv(&app.tree, &path) {
-            Ok(()) => app.status = Some(format!("Exported: {}", crate::util::display_path(&path))),
-            Err(e) => app.status = Some(format!("Export failed: {e}")),
+            Ok(()) => {
+                app.status = Some(tr_with(
+                    "status.exported",
+                    &[("path", &crate::util::display_path(&path))],
+                ))
+            }
+            Err(e) => {
+                app.status = Some(tr_with(
+                    "status.export_failed",
+                    &[("error", &e.to_string())],
+                ))
+            }
         }
     }
 }

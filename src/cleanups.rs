@@ -79,11 +79,15 @@ impl std::error::Error for CleanupError {}
 impl std::fmt::Display for CleanupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownPlaceholder(c) => {
-                write!(f, "unknown placeholder %{c} — use %p, %n, %d or %%")
+            Self::UnknownPlaceholder(c) => write!(
+                f,
+                "{}",
+                crate::i18n::tr_with("cleanup.unknown_placeholder", &[("char", &c.to_string())])
+            ),
+            Self::TrailingPercent => {
+                write!(f, "{}", crate::i18n::tr("cleanup.trailing_percent"))
             }
-            Self::TrailingPercent => write!(f, "an argument ends with % and names no placeholder"),
-            Self::NoTarget => write!(f, "select an item for the cleanup to act on"),
+            Self::NoTarget => write!(f, "{}", crate::i18n::tr("cleanup.no_target")),
         }
     }
 }
@@ -183,27 +187,39 @@ pub fn run(command: &Command, capture_output: bool) -> Result<crate::wintools::T
         return process
             .spawn()
             .map(|_| crate::wintools::ToolOutput {
-                summary: format!("Launched {}", command.program),
+                summary: crate::i18n::tr_with("tool.launched", &[("program", &command.program)]),
                 detail: String::new(),
             })
-            .map_err(|error| format!("Failed to launch {}: {error}", command.program));
+            .map_err(|error| {
+                crate::i18n::tr_with(
+                    "tool.launch_failed",
+                    &[("program", &command.program), ("error", &error.to_string())],
+                )
+            });
     }
 
-    let output = process
-        .output()
-        .map_err(|error| format!("Failed to run {}: {error}", command.program))?;
+    let output = process.output().map_err(|error| {
+        crate::i18n::tr_with(
+            "tool.run_failed",
+            &[("program", &command.program), ("error", &error.to_string())],
+        )
+    })?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if output.status.success() {
         Ok(crate::wintools::ToolOutput {
-            summary: format!("{} completed", command.program),
+            summary: crate::i18n::tr_with("cleanup.completed", &[("program", &command.program)]),
             detail: stdout,
         })
     } else {
         let detail = if stderr.is_empty() { stdout } else { stderr };
-        Err(format!(
-            "{} exited with {}: {detail}",
-            command.program, output.status
+        Err(crate::i18n::tr_with(
+            "tool.exited",
+            &[
+                ("program", &command.program),
+                ("status", &output.status.to_string()),
+                ("detail", &detail),
+            ],
         ))
     }
 }

@@ -342,7 +342,7 @@ fn scan_many_inner(
         // Not a path: a multi-root tree has no single place it came
         // from, and `path_for` never reads this. It is what the window
         // title and the root row show.
-        root_path: PathBuf::from(MULTI_ROOT_LABEL),
+        root_path: PathBuf::from(multi_root_label()),
         root,
         volume_free: None,
         volume_total: None,
@@ -384,7 +384,14 @@ pub fn scan_many_streaming(
     scan_streaming(single, progress, options, sink)
 }
 
-pub const MULTI_ROOT_LABEL: &str = "Selected locations";
+/// What a multi-root scan calls itself, in the active language.
+///
+/// Shown as the window title and the root row, so it is UI copy rather
+/// than an identifier — nothing ever compares against it, and
+/// `Tree::is_multi_root` asks the `roots` list instead.
+pub fn multi_root_label() -> String {
+    crate::i18n::tr("scan.multi_root")
+}
 
 /// Rolls finished root trees up into the synthetic node above them.
 ///
@@ -428,7 +435,7 @@ fn combine(children: Vec<Node>) -> Node {
         }
     }
     Node {
-        name: OsString::from(MULTI_ROOT_LABEL),
+        name: OsString::from(multi_root_label()),
         is_dir: true,
         is_symlink: false,
         size,

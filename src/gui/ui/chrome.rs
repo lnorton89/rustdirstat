@@ -15,7 +15,7 @@ use crate::gui::icons::Icon;
 use crate::util::thousands;
 use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Vec2};
 
-use crate::i18n::tr;
+use crate::i18n::{tr, tr_with};
 
 use super::actions::*;
 use super::theme::*;
@@ -377,10 +377,18 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                 ui.add_space(SPACE_XS);
                 ui.label(RichText::new("RustDirStat").strong().size(15.0));
                 toolbar_separator(ui);
-                if tool_enabled(ui, !app.is_busy(), Icon::FolderOpen, "Select folder").clicked() {
+                if tool_enabled(
+                    ui,
+                    !app.is_busy(),
+                    Icon::FolderOpen,
+                    &tr("tooltip.select_folder"),
+                )
+                .clicked()
+                {
                     choose_folder(app);
                 }
-                if tool_enabled(ui, !app.is_busy(), Icon::Refresh, "Rescan (F5)").clicked() {
+                if tool_enabled(ui, !app.is_busy(), Icon::Refresh, &tr("tooltip.rescan")).clicked()
+                {
                     refresh(app);
                 }
                 toolbar_separator(ui);
@@ -388,7 +396,7 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                     ui,
                     app.selected_path.is_some(),
                     Icon::ExternalLink,
-                    "Open selected",
+                    &tr("tooltip.open_selected"),
                 )
                 .clicked()
                 {
@@ -398,13 +406,19 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                     ui,
                     app.selected_path.is_some(),
                     Icon::Folder,
-                    "Show in Explorer",
+                    &tr("action.reveal"),
                 )
                 .clicked()
                 {
                     reveal_selected(app);
                 }
-                if tool_enabled(ui, app.selected_path.is_some(), Icon::Copy, "Copy path").clicked()
+                if tool_enabled(
+                    ui,
+                    app.selected_path.is_some(),
+                    Icon::Copy,
+                    &tr("action.copy_path"),
+                )
+                .clicked()
                 {
                     copy_path(app);
                 }
@@ -412,13 +426,19 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                     ui,
                     app.selected_path.is_some(),
                     Icon::Trash,
-                    "Delete to Recycle Bin",
+                    &tr("action.delete_to_bin"),
                 )
                 .clicked()
                 {
                     app.request_delete_selected(false);
                 }
-                if tool_enabled(ui, app.selected_path.is_some(), Icon::Info, "Properties").clicked()
+                if tool_enabled(
+                    ui,
+                    app.selected_path.is_some(),
+                    Icon::Info,
+                    &tr("properties.title"),
+                )
+                .clicked()
                 {
                     app.toggle_properties();
                 }
@@ -427,17 +447,23 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                     ui,
                     app.selected_path.is_some(),
                     Icon::ZoomIn,
-                    "Zoom treemap to selection",
+                    &tr("tooltip.zoom_in"),
                 )
                 .clicked()
                 {
                     app.zoom_in();
                 }
-                if tool_enabled(ui, !app.zoom_path.is_empty(), Icon::ZoomOut, "Zoom out").clicked()
+                if tool_enabled(
+                    ui,
+                    !app.zoom_path.is_empty(),
+                    Icon::ZoomOut,
+                    &tr("menu.treemap.zoom_out"),
+                )
+                .clicked()
                 {
                     app.zoom_out();
                 }
-                if tool(ui, Icon::Home, "Reset treemap zoom").clicked() {
+                if tool(ui, Icon::Home, &tr("tooltip.reset_zoom")).clicked() {
                     app.reset_zoom();
                 }
                 toolbar_separator(ui);
@@ -449,19 +475,22 @@ pub(super) fn draw_toolbar(app: &mut GuiApp, ui: &mut egui::Ui) {
                 if tool(
                     ui,
                     orient,
-                    &format!("Layout: {} (click to switch)", app.view.orientation.label()),
+                    &tr_with(
+                        "tooltip.layout",
+                        &[("layout", &app.view.orientation.label())],
+                    ),
                 )
                 .clicked()
                 {
                     app.view.orientation.toggle();
                 }
-                if tool(ui, Icon::Palette, "Appearance and theme").clicked() {
+                if tool(ui, Icon::Palette, &tr("tooltip.appearance")).clicked() {
                     app.open_modal(ModalPage::Appearance);
                 }
-                if tool(ui, Icon::Settings, "Settings").clicked() {
+                if tool(ui, Icon::Settings, &tr("tooltip.settings")).clicked() {
                     app.open_modal(ModalPage::Views);
                 }
-                if tool_enabled(ui, !app.is_busy(), Icon::Tools, "Windows maintenance tools")
+                if tool_enabled(ui, !app.is_busy(), Icon::Tools, &tr("tooltip.maintenance"))
                     .clicked()
                 {
                     app.open_modal(ModalPage::Maintenance);

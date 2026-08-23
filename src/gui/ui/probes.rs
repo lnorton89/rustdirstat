@@ -143,11 +143,11 @@ pub(super) static TEST_DIRECTORY_CELL_COLUMNS: std::sync::Mutex<
 > = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub(super) static TEST_DIRECTORY_HEADER_RECTS: std::sync::Mutex<Vec<(&'static str, egui::Rect)>> =
+pub(super) static TEST_DIRECTORY_HEADER_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub(super) static TEST_DIRECTORY_HEADER_ICONS: std::sync::Mutex<Vec<(&'static str, Option<Icon>)>> =
+pub(super) static TEST_DIRECTORY_HEADER_ICONS: std::sync::Mutex<Vec<(String, Option<Icon>)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// What one rendered menu row actually occupied on screen, so the layout
@@ -184,11 +184,11 @@ pub(super) static TEST_EXTENSION_TEXT_RECTS: std::sync::Mutex<Vec<(String, egui:
     std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub(super) static TEST_EXTENSION_HEADER_RECTS: std::sync::Mutex<Vec<(&'static str, egui::Rect)>> =
+pub(super) static TEST_EXTENSION_HEADER_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub(super) static TEST_EXTENSION_HEADER_ICONS: std::sync::Mutex<Vec<(&'static str, Option<Icon>)>> =
+pub(super) static TEST_EXTENSION_HEADER_ICONS: std::sync::Mutex<Vec<(String, Option<Icon>)>> =
     std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]

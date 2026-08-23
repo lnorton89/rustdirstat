@@ -108,11 +108,11 @@ pub(in crate::gui) enum PaneOrientation {
 }
 
 impl PaneOrientation {
-    pub(in crate::gui) fn label(self) -> &'static str {
-        match self {
-            Self::Horizontal => "Treemap below",
-            Self::Vertical => "Treemap right",
-        }
+    pub(in crate::gui) fn label(self) -> String {
+        crate::i18n::tr(match self {
+            Self::Horizontal => "layout.treemap_below",
+            Self::Vertical => "layout.treemap_right",
+        })
     }
     pub(in crate::gui) fn toggle(&mut self) {
         *self = match self {
@@ -507,7 +507,13 @@ impl GuiApp {
         // the old behavior, which was every failed save looking exactly
         // like a successful one.
         if let Err(error) = result {
-            eprintln!("rustdirstat: preferences were not saved: {error}");
+            eprintln!(
+                "rustdirstat: {}",
+                crate::i18n::tr_with(
+                    "status.preferences_not_saved",
+                    &[("error", &error.to_string())]
+                )
+            );
         }
     }
 }

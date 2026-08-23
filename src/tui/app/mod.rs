@@ -468,7 +468,10 @@ impl App {
                         target.parent().map(|p| p.to_path_buf()).unwrap_or(target)
                     };
                     if let Err(e) = crate::util::open_in_file_manager(&target) {
-                        self.message = Some(format!("Failed to open file manager: {e}"));
+                        self.message = Some(crate::i18n::tr_with(
+                            "status.reveal_failed",
+                            &[("error", &e.to_string())],
+                        ));
                     }
                 }
             }
@@ -478,7 +481,10 @@ impl App {
                     let mut target = self.current_path();
                     target.push(&node.name);
                     if let Err(e) = crate::util::open_path(&target) {
-                        self.message = Some(format!("Failed to open: {e}"));
+                        self.message = Some(crate::i18n::tr_with(
+                            "status.open_failed",
+                            &[("error", &e.to_string())],
+                        ));
                     }
                 }
             }
@@ -493,8 +499,16 @@ impl App {
                     // of them. See `util::display_path`.
                     let text = crate::util::display_path(&target);
                     match crate::util::copy_to_clipboard(&text) {
-                        Ok(()) => self.message = Some(format!("Copied path: {text}")),
-                        Err(e) => self.message = Some(format!("Failed to copy path: {e}")),
+                        Ok(()) => {
+                            self.message =
+                                Some(crate::i18n::tr_with("status.copied", &[("path", &text)]))
+                        }
+                        Err(e) => {
+                            self.message = Some(crate::i18n::tr_with(
+                                "status.copy_failed",
+                                &[("error", &e.to_string())],
+                            ))
+                        }
                     }
                 }
             }
@@ -665,7 +679,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::operations::STALE_TARGET;
+    use super::operations::stale_target;
     use super::*;
     use std::path::PathBuf;
 
@@ -797,7 +811,7 @@ mod tests {
         );
         assert_eq!(
             app.message.as_deref(),
-            Some(STALE_TARGET),
+            Some(stale_target().as_str()),
             "the user should be told the target is gone rather than something else being deleted"
         );
         assert_eq!(

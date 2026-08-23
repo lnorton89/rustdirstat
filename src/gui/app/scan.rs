@@ -246,7 +246,7 @@ impl GuiApp {
         // would name — the single one, or the multi-root label.
         let label = match roots.as_slice() {
             [single] => single.clone(),
-            _ => PathBuf::from(crate::scanner::MULTI_ROOT_LABEL),
+            _ => PathBuf::from(crate::scanner::multi_root_label()),
         };
         let mut app = Self::new(Tree::placeholder(label));
         app.start_scan(roots, true);
@@ -285,7 +285,7 @@ impl GuiApp {
     /// slip, not a failure.
     pub(in crate::gui) fn open_locations(&mut self, roots: Vec<PathBuf>) {
         if roots.is_empty() {
-            self.status = Some("Pick at least one location to scan".to_string());
+            self.status = Some(crate::i18n::tr("status.pick_a_location"));
             return;
         }
         self.start_scan(roots, true);
@@ -309,7 +309,7 @@ impl GuiApp {
         // swaps the previous tree out and by then the request is gone.
         self.pending_root = match roots.as_slice() {
             [single] => single.clone(),
-            _ => PathBuf::from(crate::scanner::MULTI_ROOT_LABEL),
+            _ => PathBuf::from(crate::scanner::multi_root_label()),
         };
         self.pending_children.clear();
         self.pending_finish = None;
@@ -659,9 +659,9 @@ impl GuiApp {
             let next = self.scan_rx.as_ref().and_then(|rx| match rx.try_recv() {
                 Ok(message) => Some(message),
                 Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => Some(ScanMessage::Failed(
-                    "The scan worker stopped unexpectedly".to_string(),
-                )),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(ScanMessage::Failed(crate::i18n::tr("status.worker.scan")))
+                }
             });
             match next {
                 Some(ScanMessage::Child(child)) => self.attach_child(*child),
@@ -778,7 +778,7 @@ impl GuiApp {
             Err(mpsc::TryRecvError::Disconnected) => Some(crate::search::SearchOutcome {
                 hits: vec![],
                 truncated: false,
-                error: Some("The search worker stopped unexpectedly".to_string()),
+                error: Some(crate::i18n::tr("status.worker.search")),
             }),
         });
         if let Some(outcome) = search_result {
@@ -786,9 +786,12 @@ impl GuiApp {
             self.search.results = outcome.hits;
             self.search.error = outcome.error;
             self.status = Some(if outcome.truncated {
-                "Search capped at 2,000 results".to_string()
+                crate::i18n::tr("status.search.capped")
             } else {
-                format!("{} search result(s)", self.search.results.len())
+                crate::i18n::tr_with(
+                    "status.search.results",
+                    &[("count", &self.search.results.len().to_string())],
+                )
             });
         }
 
@@ -820,7 +823,7 @@ impl GuiApp {
                 Ok(groups) => Some(Ok(groups)),
                 Err(mpsc::TryRecvError::Empty) => None,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("The duplicate worker stopped unexpectedly".to_string()))
+                    Some(Err(crate::i18n::tr("status.worker.duplicates")))
                 }
             });
         if let Some(result) = duplicate_result {
@@ -832,17 +835,22 @@ impl GuiApp {
                     // Says so when the search was cut short or files could
                     // not be read. "N duplicate group(s)" reads as the
                     // whole answer when it was not.
-                    let mut message = format!("{groups} duplicate group(s)");
+                    let mut message = crate::i18n::tr_with(
+                        "status.duplicates.groups",
+                        &[("count", &groups.to_string())],
+                    );
                     if scan.skipped > 0 {
-                        message.push_str(&format!(
-                            " — {} file(s) not checked, the candidate limit was reached",
-                            scan.skipped
+                        message.push(' ');
+                        message.push_str(&crate::i18n::tr_with(
+                            "status.duplicates.skipped",
+                            &[("count", &scan.skipped.to_string())],
                         ));
                     }
                     if scan.read_failures > 0 {
-                        message.push_str(&format!(
-                            " — {} file(s) could not be read",
-                            scan.read_failures
+                        message.push(' ');
+                        message.push_str(&crate::i18n::tr_with(
+                            "status.duplicates.unreadable",
+                            &[("count", &scan.read_failures.to_string())],
                         ));
                     }
                     self.status = Some(message);
@@ -854,9 +862,9 @@ impl GuiApp {
         let tool_result = self.tools.rx.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err(
-                "The maintenance tool worker stopped unexpectedly".to_string(),
-            )),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err(crate::i18n::tr("status.worker.tool")))
+            }
         });
         if let Some(result) = tool_result {
             self.tools.rx = None;
@@ -877,7 +885,7 @@ impl GuiApp {
                 },
             };
             self.status = Some(if outcome.failed {
-                format!("Tool failed: {}", outcome.summary)
+                crate::i18n::tr_with("status.tool_failed", &[("detail", &outcome.summary)])
             } else {
                 outcome.summary.clone()
             });

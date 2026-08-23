@@ -12,6 +12,7 @@
 
 use crate::gui::app::{DirectoryColumn, GuiApp, TreeRow};
 use crate::gui::icons::Icon;
+use crate::i18n::tr;
 use crate::model::SortMode;
 use crate::util::{format_modified, human_bytes, thousands};
 use eframe::egui::{self, Align, Layout, Sense, Stroke};
@@ -132,17 +133,23 @@ pub(super) fn slack_column() -> Column {
     Column::remainder().at_least(0.0).resizable(false)
 }
 
-pub(super) fn directory_column_label(column: DirectoryColumn) -> &'static str {
-    match column {
-        DirectoryColumn::Name => "Name",
-        DirectoryColumn::Size => "Size",
-        DirectoryColumn::SubtreePercentage => "Subtree percentage",
-        DirectoryColumn::PercentTotal => "% of total",
-        DirectoryColumn::Files => "Files",
-        DirectoryColumn::Subdirs => "Subdirs",
-        DirectoryColumn::LastChange => "Last change",
-        DirectoryColumn::Attributes => "Attributes",
-    }
+/// What a column heading says, in the active language.
+///
+/// Resolved here with the keys as literals, so the catalogue tests can
+/// see them; a `String` rather than a `&'static str` because a
+/// translation is read from a file at runtime and cannot be borrowed for
+/// the life of the program.
+pub(super) fn directory_column_label(column: DirectoryColumn) -> String {
+    crate::i18n::tr(match column {
+        DirectoryColumn::Name => "column.name",
+        DirectoryColumn::Size => "column.size",
+        DirectoryColumn::SubtreePercentage => "column.subtree_percent",
+        DirectoryColumn::PercentTotal => "column.total_percent",
+        DirectoryColumn::Files => "column.files",
+        DirectoryColumn::Subdirs => "column.subdirs",
+        DirectoryColumn::LastChange => "column.modified",
+        DirectoryColumn::Attributes => "properties.attributes",
+    })
 }
 
 pub(super) fn directory_sort_icon(sort: SortMode, column: DirectoryColumn) -> Option<Icon> {
@@ -326,7 +333,7 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                             let label = directory_column_label(column);
                             let response = sortable_header(
                                 ui,
-                                label,
+                                &label,
                                 directory_sort_icon(app.sort, column),
                                 true,
                             );
@@ -344,7 +351,8 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                                 reorder = Some((*source, column));
                             }
                             #[cfg(test)]
-                            probe(&TEST_DIRECTORY_HEADER_RECTS).push((label, response.rect));
+                            probe(&TEST_DIRECTORY_HEADER_RECTS)
+                                .push((label.clone(), response.rect));
                             if response.clicked() {
                                 sort = directory_sort_after_click(app.sort, column);
                             }
@@ -390,26 +398,35 @@ pub(super) fn draw_directory_tree(app: &mut GuiApp, ui: &mut egui::Ui) {
                                 row_action = Some((RowAction::Open, item.path.clone()));
                                 ui.close();
                             }
-                            if icon_button(ui, true, Icon::Folder, "Show in Explorer").clicked() {
+                            if icon_button(ui, true, Icon::Folder, &tr("action.reveal")).clicked() {
                                 row_action = Some((RowAction::Reveal, item.path.clone()));
                                 ui.close();
                             }
-                            if icon_button(ui, true, Icon::Copy, "Copy path").clicked() {
+                            if icon_button(ui, true, Icon::Copy, &tr("action.copy_path")).clicked()
+                            {
                                 row_action = Some((RowAction::CopyPath, item.path.clone()));
                                 ui.close();
                             }
                             ui.separator();
-                            if icon_button(ui, true, Icon::ZoomIn, "Zoom treemap here").clicked() {
+                            if icon_button(ui, true, Icon::ZoomIn, &tr("action.zoom_here"))
+                                .clicked()
+                            {
                                 row_action = Some((RowAction::Zoom, item.path.clone()));
                                 ui.close();
                             }
-                            if icon_button(ui, true, Icon::Info, "Properties").clicked() {
+                            if icon_button(ui, true, Icon::Info, &tr("properties.title")).clicked()
+                            {
                                 row_action = Some((RowAction::Properties, item.path.clone()));
                                 ui.close();
                             }
                             ui.separator();
-                            if icon_button(ui, !item.path.is_empty(), Icon::Trash, "Delete…")
-                                .clicked()
+                            if icon_button(
+                                ui,
+                                !item.path.is_empty(),
+                                Icon::Trash,
+                                &tr("action.delete"),
+                            )
+                            .clicked()
                             {
                                 row_action = Some((RowAction::Delete, item.path.clone()));
                                 ui.close();

@@ -41,6 +41,7 @@
 
 use crate::gui::app::{Backdrop, GuiApp};
 use crate::gui::icons::Icon;
+use crate::i18n::tr;
 use eframe::egui::{self, Color32, Frame, Margin, RichText, Sense, Stroke, TextStyle, Vec2};
 
 #[cfg(test)]
@@ -630,7 +631,7 @@ fn close_button(ui: &mut egui::Ui) -> egui::Response {
         egui::Rect::from_center_size(response.rect.center(), Vec2::splat(13.0)),
         color,
     );
-    response.on_hover_text("Close (Esc)")
+    response.on_hover_text(tr("action.close"))
 }
 
 /// The shared shell for a confirmation, drawn above any open page.
@@ -687,7 +688,7 @@ impl Tone {
     }
 }
 
-pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
+pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: impl AsRef<str>) {
     let (tone, fill, text_color) = tone.colors();
     Frame::NONE
         .fill(fill)
@@ -699,7 +700,7 @@ pub(super) fn callout(ui: &mut egui::Ui, tone: Tone, icon: Icon, text: &str) {
             ui.horizontal(|ui| {
                 paint_inline_icon(ui, icon, 15.0, tone);
                 ui.add_space(SPACE_XS);
-                ui.label(RichText::new(text).color(text_color));
+                ui.label(RichText::new(text.as_ref()).color(text_color));
             });
         });
 }

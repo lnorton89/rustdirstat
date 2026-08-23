@@ -127,8 +127,8 @@ fn draw_details(app: &GuiApp, ui: &mut egui::Ui) {
         empty_state(
             ui,
             Icon::Info,
-            &tr("properties.empty.title"),
-            &tr("properties.empty.body"),
+            tr("properties.empty.title"),
+            tr("properties.empty.body"),
         );
         return;
     };
@@ -218,7 +218,7 @@ fn draw_details(app: &GuiApp, ui: &mut egui::Ui) {
             // window shows them *per folder* — the extensions pane is
             // about the whole scan or the current zoom.
             for (label, bytes) in top_categories(node, app.use_physical) {
-                row(ui, label, human_bytes(bytes));
+                labelled_row(ui, label, human_bytes(bytes));
             }
         });
     }
@@ -242,8 +242,8 @@ fn draw_details(app: &GuiApp, ui: &mut egui::Ui) {
 }
 
 /// The three biggest categories inside a folder, by the size mode in use.
-fn top_categories(node: &crate::model::Node, physical: bool) -> Vec<(&'static str, u64)> {
-    let mut rows: Vec<(&'static str, u64)> = crate::color::Category::ALL
+fn top_categories(node: &crate::model::Node, physical: bool) -> Vec<(String, u64)> {
+    let mut rows: Vec<(String, u64)> = crate::color::Category::ALL
         .iter()
         .filter_map(|category| {
             let (size, physical_size, _) = *node.ext_totals.get(category.index())?;
@@ -268,9 +268,19 @@ fn section(ui: &mut egui::Ui, title_key: &str, add_contents: impl FnOnce(&mut eg
         .show(ui, add_contents);
 }
 
-/// One label/value pair inside a section.
+/// One label/value pair inside a section, the label named by its
+/// catalogue key.
 fn row(ui: &mut egui::Ui, label_key: &str, value: String) {
-    ui.label(RichText::new(tr(label_key)).color(palette().secondary_text));
+    labelled_row(ui, tr(label_key), value);
+}
+
+/// The same, for a label that is already resolved text.
+///
+/// The category breakdown is the one caller: its labels come from
+/// `Category::label`, which resolves its own keys so that the catalogue
+/// tests can see them as literals.
+fn labelled_row(ui: &mut egui::Ui, label: String, value: String) {
+    ui.label(RichText::new(label).color(palette().secondary_text));
     ui.label(value);
     ui.end_row();
 }

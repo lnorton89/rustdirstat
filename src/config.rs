@@ -191,9 +191,9 @@ pub fn save_merged(cfg: Config) -> std::io::Result<()> {
 /// failed save looked identical to a successful one.
 pub fn save(cfg: &Config) -> std::io::Result<()> {
     let Some(path) = config_path() else {
-        return Err(std::io::Error::other(
-            "no configuration directory could be determined",
-        ));
+        return Err(std::io::Error::other(crate::i18n::tr(
+            "config.no_directory",
+        )));
     };
     let s = toml::to_string_pretty(cfg).map_err(std::io::Error::other)?;
     let Some(parent) = path.parent() else {

@@ -22,6 +22,7 @@
 
 use crate::gui::app::{GuiApp, PaneOrientation};
 use crate::gui::icons::Icon;
+use crate::i18n::{tr, tr_with};
 use crate::util::{human_bytes, thousands};
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Stroke, Vec2};
 
@@ -48,7 +49,12 @@ pub(super) fn draw_page(app: &mut GuiApp, ui: &mut egui::Ui, page: ModalPage) {
 }
 
 /// A titled block of related controls.
-fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn group(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    title: impl AsRef<str>,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
     let palette = palette();
     Frame::NONE
         .fill(palette.raised)
@@ -59,7 +65,7 @@ fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&
             fill_width(ui);
             ui.horizontal(|ui| {
                 paint_inline_icon(ui, icon, 16.0, palette.accent);
-                ui.label(RichText::new(title).strong());
+                ui.label(RichText::new(title.as_ref()).strong());
             });
             ui.add_space(SPACE_SM);
             add_contents(ui);
@@ -68,10 +74,10 @@ fn group(ui: &mut egui::Ui, icon: Icon, title: &str, add_contents: impl FnOnce(&
 }
 
 /// A sentence that ends by sending the reader to another page.
-fn see_also(ui: &mut egui::Ui, app: &mut GuiApp, lead: &str, page: ModalPage) {
+fn see_also(ui: &mut egui::Ui, app: &mut GuiApp, lead: impl AsRef<str>, page: ModalPage) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new(lead).color(palette().secondary_text));
+        ui.label(RichText::new(lead.as_ref()).color(palette().secondary_text));
         if page_link(ui, page) {
             app.modal = Some(page);
         }
@@ -95,59 +101,54 @@ fn draw_language(app: &mut GuiApp, ui: &mut egui::Ui) {
     let available = crate::i18n::available();
     let current = crate::i18n::language();
     let mut wrote: Option<String> = None;
-    group(
-        ui,
-        Icon::Info,
-        &crate::i18n::tr("settings.language"),
-        |ui| {
-            if available.len() == 1 {
-                ui.label(
-                    RichText::new(crate::i18n::tr("settings.language.only_english"))
-                        .color(palette.secondary_text),
-                );
-            }
-            ui.horizontal_wrapped(|ui| {
-                for tag in &available {
-                    if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
-                        crate::i18n::set_language(tag);
-                    }
-                }
-            });
-            ui.add_space(SPACE_XS);
+    group(ui, Icon::Info, crate::i18n::tr("settings.language"), |ui| {
+        if available.len() == 1 {
             ui.label(
-                RichText::new(crate::i18n::tr_with(
-                    "settings.language.folder",
-                    &[(
-                        "path",
-                        &crate::i18n::catalog_dir()
-                            .map(|dir| crate::util::display_path(&dir))
-                            .unwrap_or_default(),
-                    )],
-                ))
-                .color(palette.secondary_text),
+                RichText::new(crate::i18n::tr("settings.language.only_english"))
+                    .color(palette.secondary_text),
             );
-            ui.add_space(SPACE_SM);
-            // The catalogue is compiled into the binary and ships in no
-            // package, so without this an installed build has no way to
-            // obtain the file the sentence above tells you to copy.
-            if ui
-                .button(crate::i18n::tr("settings.language.write_template"))
-                .on_hover_text(crate::i18n::tr("settings.language.write_template_hint"))
-                .clicked()
-            {
-                wrote = Some(match crate::i18n::write_starter_catalogue() {
-                    Ok(path) => crate::i18n::tr_with(
-                        "settings.language.written",
-                        &[("path", &crate::util::display_path(&path))],
-                    ),
-                    Err(error) => crate::i18n::tr_with(
-                        "settings.language.write_failed",
-                        &[("error", &error.to_string())],
-                    ),
-                });
+        }
+        ui.horizontal_wrapped(|ui| {
+            for tag in &available {
+                if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
+                    crate::i18n::set_language(tag);
+                }
             }
-        },
-    );
+        });
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(crate::i18n::tr_with(
+                "settings.language.folder",
+                &[(
+                    "path",
+                    &crate::i18n::catalog_dir()
+                        .map(|dir| crate::util::display_path(&dir))
+                        .unwrap_or_default(),
+                )],
+            ))
+            .color(palette.secondary_text),
+        );
+        ui.add_space(SPACE_SM);
+        // The catalogue is compiled into the binary and ships in no
+        // package, so without this an installed build has no way to
+        // obtain the file the sentence above tells you to copy.
+        if ui
+            .button(crate::i18n::tr("settings.language.write_template"))
+            .on_hover_text(crate::i18n::tr("settings.language.write_template_hint"))
+            .clicked()
+        {
+            wrote = Some(match crate::i18n::write_starter_catalogue() {
+                Ok(path) => crate::i18n::tr_with(
+                    "settings.language.written",
+                    &[("path", &crate::util::display_path(&path))],
+                ),
+                Err(error) => crate::i18n::tr_with(
+                    "settings.language.write_failed",
+                    &[("error", &error.to_string())],
+                ),
+            });
+        }
+    });
     if let Some(message) = wrote {
         app.status = Some(message);
     }
@@ -157,14 +158,8 @@ fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
     draw_language(app, ui);
     ui.add_space(SPACE_MD);
     let mut chosen: Option<&'static str> = None;
-    group(ui, Icon::Palette, "Theme", |ui| {
-        ui.label(
-            RichText::new(
-                "Applies immediately. Drop a .toml file into the themes folder \
-                 beside the config file to add your own.",
-            )
-            .color(palette().secondary_text),
-        );
+    group(ui, Icon::Palette, tr("page.appearance.theme"), |ui| {
+        ui.label(RichText::new(tr("page.appearance.theme.blurb")).color(palette().secondary_text));
         ui.add_space(SPACE_MD);
         // Its own scroll, bounded. The catalog is long enough that
         // letting it run at full height pushes every other control on the
@@ -183,9 +178,13 @@ fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
                         continue;
                     }
                     ui.label(
-                        RichText::new(if mode.is_dark() { "Dark" } else { "Light" })
-                            .small()
-                            .color(palette().secondary_text),
+                        RichText::new(if mode.is_dark() {
+                            tr("page.appearance.dark")
+                        } else {
+                            tr("page.appearance.light")
+                        })
+                        .small()
+                        .color(palette().secondary_text),
                     );
                     ui.add_space(SPACE_XS);
                     for spec in specs {
@@ -201,20 +200,12 @@ fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
     if let Some(id) = chosen {
         app.set_theme(id);
     }
-    group(ui, Icon::App, "Treemap", |ui| {
-        ui.checkbox(&mut app.view.grid, "Grid lines between tiles");
-        ui.checkbox(&mut app.view.labels, "File labels on large tiles");
-        ui.checkbox(
-            &mut app.view.free_space,
-            "Free-space tile for whole-drive scans",
-        );
+    group(ui, Icon::App, tr("label.treemap"), |ui| {
+        ui.checkbox(&mut app.view.grid, tr("page.appearance.grid"));
+        ui.checkbox(&mut app.view.labels, tr("page.appearance.labels"));
+        ui.checkbox(&mut app.view.free_space, tr("page.appearance.free_space"));
     });
-    see_also(
-        ui,
-        app,
-        "To hide the treemap entirely, see",
-        ModalPage::Views,
-    );
+    see_also(ui, app, tr("page.appearance.hide_hint"), ModalPage::Views);
 }
 
 /// One theme in the picker: a live swatch of its own colors, so the list
@@ -298,47 +289,41 @@ fn theme_row(ui: &mut egui::Ui, selected: bool, spec: &themes::ThemeSpec) -> egu
 // ---------------------------------------------------------------- Layout
 
 fn draw_layout(app: &mut GuiApp, ui: &mut egui::Ui) {
-    group(ui, Icon::LayoutHorizontal, "Treemap position", |ui| {
-        ui.radio_value(
-            &mut app.view.orientation,
-            PaneOrientation::Horizontal,
-            "Horizontal — treemap below the lists",
-        );
-        ui.radio_value(
-            &mut app.view.orientation,
-            PaneOrientation::Vertical,
-            "Vertical — treemap to the right",
-        );
-    });
-    ui.label(
-        RichText::new(
-            "Every splitter can be dragged to zero, so a pane can be collapsed \
-             without turning it off.",
-        )
-        .color(palette().secondary_text),
+    group(
+        ui,
+        Icon::LayoutHorizontal,
+        tr("page.layout.position"),
+        |ui| {
+            ui.radio_value(
+                &mut app.view.orientation,
+                PaneOrientation::Horizontal,
+                tr("page.layout.horizontal"),
+            );
+            ui.radio_value(
+                &mut app.view.orientation,
+                PaneOrientation::Vertical,
+                tr("page.layout.vertical"),
+            );
+        },
     );
+    ui.label(RichText::new(tr("page.layout.splitter_hint")).color(palette().secondary_text));
     ui.add_space(SPACE_SM);
-    see_also(ui, app, "To turn panes off outright, see", ModalPage::Views);
+    see_also(ui, app, tr("page.layout.off_hint"), ModalPage::Views);
 }
 
 // ----------------------------------------------------------------- Views
 
 fn draw_views(app: &mut GuiApp, ui: &mut egui::Ui) {
     group(ui, Icon::Tree, "Panes", |ui| {
-        ui.checkbox(&mut app.view.extension_pane, "Extension list");
-        ui.checkbox(&mut app.view.treemap, "Treemap");
+        ui.checkbox(&mut app.view.extension_pane, tr("label.extension_list"));
+        ui.checkbox(&mut app.view.treemap, tr("label.treemap"));
     });
-    group(ui, Icon::Settings, "Window chrome", |ui| {
-        ui.checkbox(&mut app.view.toolbar, "Toolbar");
-        ui.checkbox(&mut app.view.status_bar, "Status bar");
+    group(ui, Icon::Settings, tr("page.views.chrome"), |ui| {
+        ui.checkbox(&mut app.view.toolbar, tr("label.toolbar"));
+        ui.checkbox(&mut app.view.status_bar, tr("label.status_bar"));
     });
-    see_also(
-        ui,
-        app,
-        "For where these panes sit relative to each other, see",
-        ModalPage::Layout,
-    );
-    see_also(ui, app, "For what each pane does, see", ModalPage::Guide);
+    see_also(ui, app, tr("page.views.layout_hint"), ModalPage::Layout);
+    see_also(ui, app, tr("page.views.guide_hint"), ModalPage::Guide);
 }
 
 // ------------------------------------------------------------- Locations
@@ -354,7 +339,7 @@ fn draw_views(app: &mut GuiApp, ui: &mut egui::Ui) {
 fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
     let scanned = app.scanned_roots();
-    group(ui, Icon::Folder, "Currently scanned", |ui| {
+    group(ui, Icon::Folder, tr("page.locations.current"), |ui| {
         for root in &scanned {
             ui.label(crate::util::display_path(root));
         }
@@ -362,20 +347,20 @@ fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.add_space(SPACE_MD);
 
     let volumes = crate::platform::volumes();
-    group(ui, Icon::Tree, "Drives", |ui| {
+    group(ui, Icon::Tree, tr("page.locations.drives"), |ui| {
         if volumes.is_empty() {
-            ui.label(
-                RichText::new("No local drives were found to offer.").color(palette.secondary_text),
-            );
+            ui.label(RichText::new(tr("page.locations.none")).color(palette.secondary_text));
             return;
         }
         for volume in &volumes {
             let mut ticked = app.tools.selected_locations.contains(&volume.path);
             let used = match (volume.total, volume.free) {
-                (Some(total), Some(free)) => format!(
-                    "{} of {} used",
-                    human_bytes(total.saturating_sub(free)),
-                    human_bytes(total)
+                (Some(total), Some(free)) => tr_with(
+                    "page.locations.used",
+                    &[
+                        ("used", &human_bytes(total.saturating_sub(free))),
+                        ("total", &human_bytes(total)),
+                    ],
                 ),
                 _ => String::new(),
             };
@@ -394,7 +379,7 @@ fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
         }
         ui.add_space(SPACE_SM);
         ui.horizontal(|ui| {
-            if ui.button("Select all").clicked() {
+            if ui.button(tr("page.locations.select_all")).clicked() {
                 app.tools.selected_locations = volumes.iter().map(|v| v.path.clone()).collect();
             }
             if ui.button("Clear").clicked() {
@@ -407,9 +392,9 @@ fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
     group(ui, Icon::FolderOpen, "Scan", |ui| {
         let count = app.tools.selected_locations.len();
         let label = match count {
-            0 => "Scan selected drives".to_string(),
-            1 => "Scan 1 drive".to_string(),
-            n => format!("Scan {n} drives together"),
+            0 => tr("page.locations.scan_selected").to_string(),
+            1 => tr("page.locations.scan_one").to_string(),
+            n => tr_with("page.locations.scan_many", &[("count", &n.to_string())]),
         };
         ui.horizontal(|ui| {
             let scan = ui.add_enabled(count > 0 && !app.is_busy(), egui::Button::new(label));
@@ -421,7 +406,10 @@ fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
                 app.close_modal();
             }
             if ui
-                .add_enabled(!app.is_busy(), egui::Button::new("Choose folder…"))
+                .add_enabled(
+                    !app.is_busy(),
+                    egui::Button::new(tr("page.locations.choose_folder")),
+                )
                 .clicked()
             {
                 super::actions::choose_folder(app);
@@ -429,13 +417,7 @@ fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
             }
         });
         ui.add_space(SPACE_XS);
-        ui.label(
-            RichText::new(
-                "Several drives scan into one tree, each as a top-level entry. \
-                 Free space is reported per drive, never added together.",
-            )
-            .color(palette.secondary_text),
-        );
+        ui.label(RichText::new(tr("page.locations.multi_root")).color(palette.secondary_text));
     });
 }
 
@@ -458,19 +440,22 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
             ui,
             Tone::Warning,
             Icon::Warning,
-            "These are Windows utilities. Nothing on this page can run on this system.",
+            tr("page.maintenance.unsupported"),
         );
         ui.add_space(SPACE_MD);
     }
 
     let mut requested = None;
-    for (heading, launchers) in [("Open a Windows tool", true), ("Run an operation", false)] {
+    for (heading, launchers) in [
+        (tr("page.maintenance.open_tool"), true),
+        (tr("page.maintenance.run_operation"), false),
+    ] {
         ui.label(RichText::new(heading).strong());
         ui.label(
             RichText::new(if launchers {
-                "Opens the real utility, which keeps its own confirmation and undo."
+                tr("page.maintenance.open_blurb")
             } else {
-                "Runs here and reports back. Anything destructive asks first."
+                tr("page.maintenance.run_blurb")
             })
             .color(palette.secondary_text),
         );
@@ -492,7 +477,7 @@ fn draw_maintenance(app: &mut GuiApp, ui: &mut egui::Ui) {
     if !app.tools.log.is_empty() {
         separator(ui);
         ui.add_space(SPACE_MD);
-        ui.label(RichText::new("Results").strong());
+        ui.label(RichText::new(tr("page.maintenance.results")).strong());
         ui.add_space(SPACE_SM);
         for entry in app.tools.log.iter().rev() {
             result_row(ui, entry);
@@ -544,16 +529,16 @@ fn tool_row(
                         // column — and the button after it — sat at a
                         // different x on every row.
                         ui.set_min_width(text_column);
-                        ui.label(RichText::new(tool.name).strong());
-                        ui.label(RichText::new(tool.description).color(palette.secondary_text));
+                        ui.label(RichText::new(tool.name()).strong());
+                        ui.label(RichText::new(tool.description()).color(palette.secondary_text));
                         if tool.irreversible || tool.needs_admin {
                             ui.add_space(SPACE_XS);
                             ui.horizontal(|ui| {
                                 if tool.irreversible {
-                                    chip(ui, palette.danger, "Cannot be undone");
+                                    chip(ui, palette.danger, tr("page.maintenance.irreversible"));
                                 }
                                 if tool.needs_admin {
-                                    chip(ui, palette.warning, "Needs administrator");
+                                    chip(ui, palette.warning, tr("page.maintenance.needs_admin"));
                                 }
                             });
                         }
@@ -566,19 +551,22 @@ fn tool_row(
                         ui.set_min_width(ACTION_COLUMN);
                         if running {
                             ui.spinner();
-                            ui.label(RichText::new("Running…").color(palette.secondary_text));
+                            ui.label(
+                                RichText::new(tr("page.maintenance.running"))
+                                    .color(palette.secondary_text),
+                            );
                             return;
                         }
                         let label = if tool.destructive {
-                            "Review…"
+                            tr("page.maintenance.review")
                         } else {
-                            "Launch"
+                            tr("page.maintenance.launch")
                         };
                         let enabled = supported && !app.is_busy();
                         let button = ui.add_enabled(enabled, egui::Button::new(label));
                         clicked = button.clicked();
                         if !supported {
-                            button.on_disabled_hover_text("This tool exists only on Windows.");
+                            button.on_disabled_hover_text(tr("page.maintenance.windows_only"));
                         } else if app.is_busy() {
                             button.on_disabled_hover_text(crate::i18n::tr("status.busy"));
                         }
@@ -613,13 +601,13 @@ fn tool_row(
 }
 
 /// A small pill carrying one fact about a row.
-fn chip(ui: &mut egui::Ui, tone: Color32, text: &str) {
+fn chip(ui: &mut egui::Ui, tone: Color32, text: impl AsRef<str>) {
     Frame::NONE
         .fill(blend(palette().raised, tone, 0.18))
         .corner_radius(egui::CornerRadius::same(5))
         .inner_margin(Margin::symmetric(px(SPACE_SM), px(SPACE_XS)))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).small().color(tone));
+            ui.label(RichText::new(text.as_ref()).small().color(tone));
         });
 }
 
@@ -672,25 +660,19 @@ fn result_row(ui: &mut egui::Ui, entry: &crate::gui::app::ToolOutcome) {
 
 fn draw_guide(ui: &mut egui::Ui) {
     let palette = palette();
-    group(ui, Icon::Tree, "All Files", |ui| {
-        ui.label("The expandable, size-sorted directory tree. Selecting an item frames the same item in the treemap.");
+    group(ui, Icon::Tree, tr("view.all_files"), |ui| {
+        ui.label(tr("page.guide.all_files"));
     });
-    group(ui, Icon::Extensions, "Extensions", |ui| {
-        ui.label("Groups files by exact extension, with color, bytes, percentage, and count. Selecting a row highlights the matching treemap files.");
+    group(ui, Icon::Extensions, tr("page.guide.extensions"), |ui| {
+        ui.label(tr("page.guide.extensions.body"));
     });
-    group(ui, Icon::App, "Treemap", |ui| {
-        ui.label("Every file is an area proportional to its size. Directory areas nest, tiles take their extension's color, and clicking one selects the matching path in the tree.");
+    group(ui, Icon::App, tr("label.treemap"), |ui| {
+        ui.label(tr("page.guide.treemap.body"));
     });
-    group(ui, Icon::Largest, "The other file views", |ui| {
-        ui.label("Largest Files is a flat top-200 by size. Duplicate Files groups byte-identical files by hash. Search Results accepts glob patterns — * for any run of characters, ? for one, [a-z] for a character class and {jpg,png} for alternatives — and regular expressions when the query starts with re:.");
+    group(ui, Icon::Largest, tr("page.guide.other_views"), |ui| {
+        ui.label(tr("page.guide.other_views.body"));
     });
-    ui.label(
-        RichText::new(
-            "This mirrors WinDirStat's three coupled views: whatever is selected in one \
-             is selected in all of them.",
-        )
-        .color(palette.secondary_text),
-    );
+    ui.label(RichText::new(tr("page.guide.footnote")).color(palette.secondary_text));
 }
 
 fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
@@ -701,16 +683,19 @@ fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.label(RichText::new("RustDirStat").heading().strong());
             ui.label(
-                RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                    .color(palette.secondary_text),
+                RichText::new(tr_with(
+                    "page.about.version",
+                    &[("version", env!("CARGO_PKG_VERSION"))],
+                ))
+                .color(palette.secondary_text),
             );
         });
     });
     ui.add_space(SPACE_MD);
-    group(ui, Icon::Info, "What this is", |ui| {
-        ui.label("A WinDirStat clone in Rust, with a terminal front end and this desktop one over a single scanning core.");
+    group(ui, Icon::Info, tr("page.about.what"), |ui| {
+        ui.label(tr("page.about.what.body"));
     });
-    group(ui, Icon::Folder, "Current scan", |ui| {
+    group(ui, Icon::Folder, tr("page.about.current_scan"), |ui| {
         let node = app.zoom_node();
         egui::Grid::new("about_scan_grid")
             .num_columns(2)
@@ -719,15 +704,15 @@ fn draw_about(app: &mut GuiApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new("Root").color(palette.secondary_text));
                 ui.label(crate::util::display_path(&app.tree.root_path));
                 ui.end_row();
-                ui.label(RichText::new("Files").color(palette.secondary_text));
+                ui.label(RichText::new(tr("page.about.files")).color(palette.secondary_text));
                 ui.label(thousands(node.file_count));
                 ui.end_row();
-                ui.label(RichText::new("Folders").color(palette.secondary_text));
+                ui.label(RichText::new(tr("page.about.folders")).color(palette.secondary_text));
                 ui.label(thousands(node.dir_count));
                 ui.end_row();
             });
     });
-    see_also(ui, app, "For what each view does, see", ModalPage::Guide);
+    see_also(ui, app, tr("page.about.guide_hint"), ModalPage::Guide);
 }
 
 // -------------------------------------------------------------- Cleanups
@@ -748,19 +733,15 @@ fn draw_cleanups(app: &mut GuiApp, ui: &mut egui::Ui) {
         empty_state(
             ui,
             Icon::Tools,
-            "No cleanups configured",
-            "A cleanup is a command of your own, run against whatever is selected. \
-             They live in the config file; nothing is set up by default.",
+            tr("page.cleanups.none"),
+            tr("page.cleanups.none.body"),
         );
         ui.add_space(SPACE_MD);
     }
 
-    group(ui, Icon::Tools, "Your commands", |ui| {
+    group(ui, Icon::Tools, tr("page.cleanups.yours"), |ui| {
         if cleanups.is_empty() {
-            ui.label(
-                RichText::new("Nothing to show until the config file has some.")
-                    .color(palette.secondary_text),
-            );
+            ui.label(RichText::new(tr("page.cleanups.empty")).color(palette.secondary_text));
             return;
         }
         for (index, cleanup) in cleanups.iter().enumerate() {
@@ -779,32 +760,15 @@ fn draw_cleanups(app: &mut GuiApp, ui: &mut egui::Ui) {
         }
         if selected.is_none() {
             ui.add_space(SPACE_SM);
-            ui.label(
-                RichText::new("Select an item first — a cleanup always acts on one thing.")
-                    .color(palette.secondary_text),
-            );
+            ui.label(RichText::new(tr("page.cleanups.select_first")).color(palette.secondary_text));
         }
     });
 
     ui.add_space(SPACE_MD);
-    group(ui, Icon::Info, "How they work", |ui| {
-        ui.label(
-            RichText::new(
-                "Each cleanup names a program and its arguments as a list. \
-                 %p is the full path, %n the name, %d the containing folder, \
-                 and %% a literal per cent.",
-            )
-            .color(palette.secondary_text),
-        );
+    group(ui, Icon::Info, tr("page.cleanups.how"), |ui| {
+        ui.label(RichText::new(tr("page.cleanups.how.body1")).color(palette.secondary_text));
         ui.add_space(SPACE_XS);
-        ui.label(
-            RichText::new(
-                "No shell is involved: arguments are passed as they are, so a file \
-                 name containing spaces, quotes or semicolons is data rather than \
-                 syntax. Cleanups ask before running unless their entry says otherwise.",
-            )
-            .color(palette.secondary_text),
-        );
+        ui.label(RichText::new(tr("page.cleanups.how.body2")).color(palette.secondary_text));
     });
 }
 
@@ -845,9 +809,9 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
             ui.add_space(SPACE_XS);
             ui.label(
                 RichText::new(if permanent {
-                    "Delete permanently?"
+                    tr("confirm.delete.permanent.title")
                 } else {
-                    "Move to the Recycle Bin?"
+                    tr("confirm.delete.trash.title")
                 })
                 .heading()
                 .strong(),
@@ -857,46 +821,43 @@ fn draw_delete_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
         ui.label(RichText::new(&name).strong());
         ui.add_space(SPACE_SM);
         if permanent {
-            callout(ui, Tone::Danger, Icon::Warning, "This cannot be undone.");
+            callout(ui, Tone::Danger, Icon::Warning, tr("confirm.cannot_undo"));
         } else {
-            ui.label(
-                RichText::new("The item can be restored from the Recycle Bin.")
-                    .color(palette.secondary_text),
-            );
+            ui.label(RichText::new(tr("confirm.delete.restorable")).color(palette.secondary_text));
         }
         if is_dir {
             ui.add_space(SPACE_SM);
-            ui.label(
-                RichText::new("Empty keeps the folder and removes only its contents.")
-                    .color(palette.secondary_text),
-            );
+            ui.label(RichText::new(tr("confirm.delete.empty_hint")).color(palette.secondary_text));
         }
         ui.add_space(SPACE_LG);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr("confirm.cancel")).clicked() {
                 cancel = true;
             }
             let delete = if permanent {
-                danger_button(ui, "Delete permanently")
+                danger_button(ui, tr("confirm.delete_permanently"))
             } else {
-                accent_button(ui, "Move to Recycle Bin")
+                accent_button(ui, tr("confirm.move_to_bin"))
             };
             if delete.clicked() {
                 confirm = true;
             }
-            if is_dir && ui.button("Empty folder").clicked() {
+            if is_dir && ui.button(tr("confirm.empty_folder")).clicked() {
                 empty = true;
             }
         });
     });
     if confirm {
         if let Err(e) = app.confirm_delete() {
-            app.status = Some(format!("Delete failed: {e}"));
+            app.status = Some(tr_with(
+                "status.delete_failed",
+                &[("error", &e.to_string())],
+            ));
         }
     }
     if empty {
         if let Err(e) = app.confirm_empty() {
-            app.status = Some(format!("Empty failed: {e}"));
+            app.status = Some(tr_with("status.empty_failed", &[("error", &e.to_string())]));
         }
     }
     if cancel {
@@ -923,20 +884,21 @@ fn draw_cleanup_confirm(app: &mut GuiApp, ctx: &egui::Context, opening: f32) {
         ui.horizontal(|ui| {
             paint_inline_icon(ui, Icon::Tools, 20.0, palette.accent);
             ui.add_space(SPACE_XS);
-            ui.label(RichText::new(format!("Run {name}?")).heading().strong());
+            ui.label(
+                RichText::new(tr_with("confirm.tool.question", &[("name", &name)]))
+                    .heading()
+                    .strong(),
+            );
         });
         ui.add_space(SPACE_SM);
-        ui.label(
-            RichText::new("This runs a program you configured, with your privileges.")
-                .color(palette.secondary_text),
-        );
+        ui.label(RichText::new(tr("confirm.tool.blurb")).color(palette.secondary_text));
         ui.add_space(SPACE_SM);
         // Monospaced and selectable-looking: this is the text the user is
         // being asked about, not a description of it.
         ui.label(RichText::new(&preview).monospace());
         ui.add_space(SPACE_LG);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr("confirm.cancel")).clicked() {
                 cancel = true;
             }
             if accent_button(ui, "Run").clicked() {
@@ -978,33 +940,28 @@ fn draw_tool_confirm(app: &mut GuiApp, ctx: &egui::Context, index: usize, openin
             };
             paint_inline_icon(ui, icon, 20.0, tone);
             ui.add_space(SPACE_XS);
-            ui.label(RichText::new(tool.name).heading().strong());
+            ui.label(RichText::new(tool.name()).heading().strong());
         });
         ui.add_space(SPACE_MD);
         // The tool's own words, not a generic warning. The generic one
         // was simultaneously stronger than the truth for routine cleanup
         // and weaker than it for deleting every shadow copy.
-        ui.label(tool.description);
+        ui.label(tool.description());
         ui.add_space(SPACE_MD);
         if tool.irreversible {
-            callout(ui, Tone::Danger, Icon::Warning, "This cannot be undone.");
+            callout(ui, Tone::Danger, Icon::Warning, tr("confirm.cannot_undo"));
             ui.add_space(SPACE_SM);
         }
         if tool.needs_admin {
-            callout(
-                ui,
-                Tone::Warning,
-                Icon::Info,
-                "Needs an elevated session. Without one it will fail immediately.",
-            );
+            callout(ui, Tone::Warning, Icon::Info, tr("confirm.tool.admin"));
         }
         ui.add_space(SPACE_LG);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr("confirm.cancel")).clicked() {
                 cancel = true;
             }
             let run = if tool.irreversible {
-                danger_button(ui, "Run anyway")
+                danger_button(ui, tr("confirm.tool.run_anyway"))
             } else {
                 accent_button(ui, "Run")
             };

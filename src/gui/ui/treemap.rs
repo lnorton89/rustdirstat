@@ -16,6 +16,7 @@ use crate::color;
 use crate::gui::app::{extension_label, GuiApp};
 use crate::gui::icons::Icon;
 use crate::gui::treemap_layout::Tile;
+use crate::i18n::tr;
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, TextStyle};
 
 #[cfg(test)]
@@ -25,7 +26,7 @@ use super::widgets::*;
 
 pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        section_title(ui, Icon::App, "Treemap");
+        section_title(ui, Icon::App, &tr("label.treemap"));
         // The full path lives in the toolbar; repeating it here said
         // nothing and pushed the heading off the edge of a narrow pane.
         // What is worth saying is when the map is *not* showing the whole
@@ -41,9 +42,9 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     RichText::new(if app.use_physical {
-                        "Physical size"
+                        tr("menu.treemap.physical")
                     } else {
-                        "Logical size"
+                        tr("menu.treemap.logical")
                     })
                     .small()
                     .color(palette().secondary_text),

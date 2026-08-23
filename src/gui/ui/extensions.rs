@@ -12,6 +12,7 @@
 
 use crate::gui::app::{ExtensionColumn, ExtensionSortMode, GuiApp};
 use crate::gui::icons::Icon;
+use crate::i18n::tr;
 use crate::util::{human_bytes, thousands};
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, Vec2};
 use egui_extras::{Column, TableBuilder};
@@ -81,15 +82,17 @@ pub(super) fn extension_column_spec(column: ExtensionColumn) -> Column {
         .resizable(true)
 }
 
-pub(super) fn extension_column_label(column: ExtensionColumn) -> &'static str {
-    match column {
-        ExtensionColumn::Extension => "Extension",
-        ExtensionColumn::Color => "Color",
-        ExtensionColumn::Description => "Description",
-        ExtensionColumn::Bytes => "Bytes",
-        ExtensionColumn::PercentBytes => "% Bytes",
-        ExtensionColumn::Files => "Files",
-    }
+/// What a column heading says, in the active language. See
+/// `directory_column_label` for why this is owned.
+pub(super) fn extension_column_label(column: ExtensionColumn) -> String {
+    crate::i18n::tr(match column {
+        ExtensionColumn::Extension => "column.extension",
+        ExtensionColumn::Color => "column.color",
+        ExtensionColumn::Description => "column.description",
+        ExtensionColumn::Bytes => "column.bytes",
+        ExtensionColumn::PercentBytes => "column.percent_bytes",
+        ExtensionColumn::Files => "column.files",
+    })
 }
 
 pub(super) fn extension_sort_icon(
@@ -236,7 +239,7 @@ pub(super) fn draw_extension_header(
 ) {
     let label = extension_column_label(column);
     let direction = extension_sort_icon(app.extension_sort, column);
-    let response = sortable_header(ui, label, direction, claims_width);
+    let response = sortable_header(ui, &label, direction, claims_width);
     response.dnd_set_drag_payload(column);
     if response.dnd_hover_payload::<ExtensionColumn>().is_some() {
         ui.painter().rect_stroke(
@@ -251,7 +254,7 @@ pub(super) fn draw_extension_header(
         .map(|source| (*source, column));
     #[cfg(test)]
     {
-        probe(&TEST_EXTENSION_HEADER_RECTS).push((label, response.rect));
+        probe(&TEST_EXTENSION_HEADER_RECTS).push((label.clone(), response.rect));
         probe(&TEST_EXTENSION_HEADER_ICONS).push((label, direction));
     }
     let sort = response
@@ -267,7 +270,7 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     // refuses to be dragged any further — the panel was pinned at 245px
     // by its own heading.
     ui.horizontal_wrapped(|ui| {
-        section_title(ui, Icon::Extensions, "Extensions");
+        section_title(ui, Icon::Extensions, &tr("page.guide.extensions"));
         if ui.available_width() > 90.0 {
             ui.label(
                 RichText::new(format!("{} types", app.extensions.len()))
@@ -279,7 +282,10 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
             let highlighted =
                 app.highlighted_extension.is_some() || app.highlighted_category.is_some();
             if ui
-                .add_enabled(highlighted, egui::Button::new("Clear highlight").small())
+                .add_enabled(
+                    highlighted,
+                    egui::Button::new(tr("action.clear_highlight")).small(),
+                )
                 .clicked()
             {
                 app.highlighted_extension = None;
@@ -300,7 +306,7 @@ pub(super) fn draw_extension_list(app: &mut GuiApp, ui: &mut egui::Ui) {
     // whole panel and the divider cannot be dragged past it. The table
     // is what people keep a narrow pane open for anyway.
     if ui.available_width() >= CATEGORIES_MIN_WIDTH {
-        egui::CollapsingHeader::new(RichText::new("File categories").strong())
+        egui::CollapsingHeader::new(RichText::new(tr("label.categories")).strong())
             .id_salt("file_categories")
             .default_open(true)
             .show(ui, |ui| super::categories::draw_categories(app, ui));
