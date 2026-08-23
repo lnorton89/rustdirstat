@@ -162,3 +162,27 @@ jobs:
             echo "::error::the .deb description is scraping README markup"
             exit 1
           fi
+          # winit and wgpu dlopen their libraries, so no packaging tool
+          # can derive them and both dependency lists are written by
+          # hand. Hand-written lists go stale, and the failure is silent
+          # — the package installs and the window does not open. This
+          # reads the sonames back out of the binary that was just built
+          # and requires each one to be accounted for. The rpm list is
+          # written in sonames, so Cargo.toml can be checked directly.
+          #
+          # libc/libm/libgcc_s are excluded: those are linked, not
+          # opened, so cargo-deb derives them into Depends already.
+          gui="target/${TARGET}/release/rustdirstat-gui"
+          missing=""
+          for so in $(strings -a "$gui" \
+                        | grep -oE 'lib[A-Za-z0-9_+-]+\.so\.[0-9]+' | sort -u); do
+            case "$so" in libc.so.*|libm.so.*|libgcc_s.so.*) continue ;; esac
+            grep -qF "\"$so(" Cargo.toml || missing="$missing $so"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::rustdirstat-gui opens libraries no package declares:$missing"
+            echo "::error::Add them to [package.metadata.generate-rpm.recommends] and"
+            echo "::error::the deb 'recommends' line in Cargo.toml (Debian package names there)."
+            exit 1
+          fi
+          echo "every soname the GUI opens is declared"
