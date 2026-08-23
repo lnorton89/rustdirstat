@@ -243,7 +243,6 @@
 "properties.empty.body" = "Выберите элемент в списке файлов или на карте — и его сведения появятся здесь."
 
 "settings.language" = "Язык"
-"settings.language.only_english" = "Установлен только английский. Перевод — это копия указанного ниже каталога, названная по коду своего языка."
 "settings.language.folder" = "Переводы находятся в {path}"
 "settings.language.write_template" = "Записать образец каталога"
 "settings.language.write_template_hint" = "Кладёт копию английского каталога в эту папку под именем en.toml. Переименуйте её по своему языку — de.toml, fr.toml — и переведите правую часть каждой строки."

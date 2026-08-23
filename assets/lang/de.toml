@@ -254,7 +254,6 @@
 
 # ------------------------------------------------------------ Einstellungen
 "settings.language" = "Sprache"
-"settings.language.only_english" = "Es ist nur Englisch installiert. Eine Übersetzung ist eine Kopie des unten genannten Katalogs, benannt nach ihrem Sprachkürzel."
 "settings.language.folder" = "Übersetzungen liegen in {path}"
 "settings.language.write_template" = "Vorlage schreiben"
 "settings.language.write_template_hint" = "Legt eine Kopie des englischen Katalogs als en.toml in diesem Ordner ab. Benennen Sie sie nach Ihrer Sprache — de.toml, fr.toml — und übersetzen Sie die rechte Seite jeder Zeile."

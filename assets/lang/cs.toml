@@ -242,7 +242,6 @@
 "properties.empty.body" = "Vyberte položku v seznamu souborů nebo na mapě a její podrobnosti se objeví zde."
 
 "settings.language" = "Jazyk"
-"settings.language.only_english" = "Nainstalována je jen angličtina. Překlad je kopie níže uvedeného katalogu, pojmenovaná podle kódu svého jazyka."
 "settings.language.folder" = "Překlady jsou v {path}"
 "settings.language.write_template" = "Zapsat výchozí katalog"
 "settings.language.write_template_hint" = "Umístí do té složky kopii anglického katalogu pod názvem en.toml. Přejmenujte ji podle svého jazyka — de.toml, fr.toml — a přeložte pravou stranu každého řádku."

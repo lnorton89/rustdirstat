@@ -243,7 +243,6 @@
 "properties.empty.body" = "Scegli un elemento nell'elenco dei file o nella mappa, e qui compariranno i suoi dettagli."
 
 "settings.language" = "Lingua"
-"settings.language.only_english" = "È installato solo l'inglese. Una traduzione è una copia del catalogo indicato sotto, con il nome del suo codice di lingua."
 "settings.language.folder" = "Le traduzioni si trovano in {path}"
 "settings.language.write_template" = "Scrivi un catalogo iniziale"
 "settings.language.write_template_hint" = "Mette una copia del catalogo inglese in quella cartella, con il nome en.toml. Rinominala secondo la tua lingua — de.toml, fr.toml — e traduci la parte destra di ogni riga."

@@ -92,22 +92,18 @@ const THEME_LIST_HEIGHT: f32 = 330.0;
 
 /// The language picker.
 ///
-/// English is compiled in; everything else is a file the user dropped
-/// into `lang/` beside the config, which is why the list is read from
-/// disk rather than from a table in the binary — a translation is content
-/// and content that needs a compiler is a translation nobody writes.
+/// The list is [`i18n::available`], which is the twelve catalogues
+/// compiled into the binary plus whatever `.toml` files the user has
+/// dropped into `lang/` beside the config. Both sources are offered the
+/// same way on purpose: a translation is content, and content that needs
+/// a compiler to add is a translation nobody writes — so a file appearing
+/// in that folder is all it takes to extend this list.
 fn draw_language(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
     let available = crate::i18n::available();
     let current = crate::i18n::language();
     let mut wrote: Option<String> = None;
     group(ui, Icon::Info, crate::i18n::tr("settings.language"), |ui| {
-        if available.len() == 1 {
-            ui.label(
-                RichText::new(crate::i18n::tr("settings.language.only_english"))
-                    .color(palette.secondary_text),
-            );
-        }
         ui.horizontal_wrapped(|ui| {
             for tag in &available {
                 if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {

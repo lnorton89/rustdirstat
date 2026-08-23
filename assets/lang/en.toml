@@ -128,7 +128,6 @@
 
 # ------------------------------------------------------------- settings
 "settings.language" = "Language"
-"settings.language.only_english" = "Only English is installed. A translation is a copy of the catalogue below, named for its language tag."
 "settings.language.folder" = "Translations live in {path}"
 "settings.language.write_template" = "Write a starter catalogue"
 "settings.language.write_template_hint" = "Puts a copy of the English catalogue in that folder as en.toml. Rename it for your language — de.toml, fr.toml — and translate the right-hand side of each line."

@@ -243,7 +243,6 @@
 "properties.empty.body" = "Choisissez un élément dans la liste ou dans la carte, et ses détails apparaîtront ici."
 
 "settings.language" = "Langue"
-"settings.language.only_english" = "Seul l'anglais est installé. Une traduction est une copie du catalogue ci-dessous, nommée d'après son code de langue."
 "settings.language.folder" = "Les traductions se trouvent dans {path}"
 "settings.language.write_template" = "Écrire un catalogue de départ"
 "settings.language.write_template_hint" = "Dépose une copie du catalogue anglais dans ce dossier, sous le nom en.toml. Renommez-la selon votre langue — de.toml, fr.toml — et traduisez la partie droite de chaque ligne."

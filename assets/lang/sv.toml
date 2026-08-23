@@ -243,7 +243,6 @@
 "properties.empty.body" = "Välj ett objekt i fillistan eller i trädkartan, så visas dess detaljer här."
 
 "settings.language" = "Språk"
-"settings.language.only_english" = "Endast engelska är installerat. En översättning är en kopia av katalogen nedan, namngiven efter sin språkkod."
 "settings.language.folder" = "Översättningar ligger i {path}"
 "settings.language.write_template" = "Skriv en startkatalog"
 "settings.language.write_template_hint" = "Lägger en kopia av den engelska katalogen i den mappen, med namnet en.toml. Byt namn på den efter ditt språk — de.toml, fr.toml — och översätt högersidan av varje rad."

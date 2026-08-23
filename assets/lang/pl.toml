@@ -243,7 +243,6 @@
 "properties.empty.body" = "Wybierz element na liście plików lub na mapie, a jego szczegóły pojawią się tutaj."
 
 "settings.language" = "Język"
-"settings.language.only_english" = "Zainstalowany jest tylko angielski. Tłumaczenie to kopia katalogu wskazanego poniżej, nazwana kodem swojego języka."
 "settings.language.folder" = "Tłumaczenia znajdują się w {path}"
 "settings.language.write_template" = "Zapisz katalog wyjściowy"
 "settings.language.write_template_hint" = "Umieszcza w tym folderze kopię katalogu angielskiego pod nazwą en.toml. Zmień jej nazwę na swój język — de.toml, fr.toml — i przetłumacz prawą stronę każdego wiersza."

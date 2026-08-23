@@ -243,7 +243,6 @@
 "properties.empty.body" = "Kies een item in de bestandslijst of in de treemap, dan verschijnen de details hier."
 
 "settings.language" = "Taal"
-"settings.language.only_english" = "Alleen Engels is geïnstalleerd. Een vertaling is een kopie van de hieronder genoemde catalogus, met de naam van de taalcode."
 "settings.language.folder" = "Vertalingen staan in {path}"
 "settings.language.write_template" = "Startcatalogus schrijven"
 "settings.language.write_template_hint" = "Zet een kopie van de Engelse catalogus in die map, onder de naam en.toml. Hernoem hem naar uw taal — de.toml, fr.toml — en vertaal de rechterkant van elke regel."

@@ -242,7 +242,6 @@
 "properties.empty.body" = "Dosya listesinden veya ağaç haritasından bir öğe seçin; ayrıntıları burada görünür."
 
 "settings.language" = "Dil"
-"settings.language.only_english" = "Yalnızca İngilizce yüklü. Bir çeviri, aşağıdaki kataloğun dil koduyla adlandırılmış bir kopyasıdır."
 "settings.language.folder" = "Çeviriler {path} içinde bulunur"
 "settings.language.write_template" = "Başlangıç kataloğu yaz"
 "settings.language.write_template_hint" = "İngilizce kataloğun bir kopyasını o klasöre en.toml adıyla koyar. Dilinize göre yeniden adlandırın — de.toml, fr.toml — ve her satırın sağ tarafını çevirin."

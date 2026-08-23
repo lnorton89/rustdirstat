@@ -95,9 +95,22 @@ A `.deb` and an `.rpm` are attached to each release, both holding the two
 binaries and built from the same bytes as the archive:
 
 ```sh
-sudo dpkg -i rustdirstat-v0.3.0-amd64.deb        # Debian, Ubuntu
-sudo rpm -i rustdirstat-v0.3.0-x86_64.rpm        # Fedora, openSUSE, RHEL
+sudo apt install ./rustdirstat-v0.3.0-amd64.deb   # Debian, Ubuntu
+sudo dnf install ./rustdirstat-v0.3.0-x86_64.rpm  # Fedora, openSUSE, RHEL
 ```
+
+Note the `./` — without it both tools read the argument as a name to look
+up in the configured repositories rather than a file on disk.
+
+`apt`/`dnf` rather than `dpkg -i`/`rpm -i` because neither of the latter
+resolves anything: they unpack the archive and leave any missing library
+to be discovered when something fails to start. That matters more here
+than it usually would. `winit` and `wgpu` open Wayland, EGL, X11 and
+xkbcommon by name at runtime instead of linking them, so they are invisible
+to the tooling that derives a package's dependencies and are listed by
+hand — as `Recommends`, which `apt` installs by default and `dpkg` ignores
+entirely. On a headless machine where only the terminal UI is wanted,
+`--no-install-recommends` skips them.
 
 ### Signing
 
@@ -280,27 +293,41 @@ is in [`docs/CLEANUPS_THREAT_MODEL.md`](docs/CLEANUPS_THREAT_MODEL.md).
 
 ## Language
 
-The window reads its text from a message catalogue. English ships
-compiled in; anything else is a file you drop into `lang/` beside the
-config, named for its language tag:
+Both front ends read their text from a message catalogue. Twelve
+languages ship compiled into the binary, so they need no files and no
+setup — English, plus Czech, Dutch, French, German, Italian, Polish,
+Portuguese (Brazil), Russian, Spanish, Swedish and Turkish. Pick one
+under *Appearance*; the choice is remembered, and the terminal UI
+applies it too.
+
+All twelve are complete: a test fails the build if any shipped
+catalogue is missing a key the English one defines, or has dropped a
+`{placeholder}` from a string that was given one, and another checks
+that every string the code asks for exists and that every key the
+catalogue defines is actually asked for. A thirteenth language is a
+file rather than a patch — drop one into `lang/` beside the config,
+named for its language tag:
 
 ```
-<config>/rustdirstat/lang/de.toml
+<config>/rustdirstat/lang/eo.toml
 ```
 
-A translation is a copy of [`assets/lang/en.toml`](assets/lang/en.toml)
-with the right-hand sides replaced. **Partial translations are useful**:
-any key a catalogue does not define falls back to English, so ten
-translated lines are ten translated lines rather than a broken UI. Pick
-the language under *Appearance*; the choice is remembered.
+Start from [`assets/lang/en.toml`](assets/lang/en.toml) — the *Write
+template* button under *Appearance* puts a copy there for you — and
+replace the right-hand sides. A file in that folder also *overrides* a
+shipped catalogue of the same name, so a translation can be corrected
+locally without waiting for a release.
 
-`assets/lang/de.toml` is a deliberately partial German catalogue — enough
-to see the mechanism working end to end, and a starting point for anyone
-who wants to finish it.
+**Partial translations are useful**: any key a catalogue does not define
+falls back to English, so ten translated lines are ten translated lines
+rather than a broken UI.
 
-Coverage today is the menus, the view names, the status bar, the settings
-pages and the Properties inspector. The rest of the app is still English
-literals; `docs/ROADMAP.md` names the modules that remain.
+The bundled font is the limit on what can be shown. egui ships
+Ubuntu-Light, which covers Latin and Cyrillic — enough for all twelve
+languages here — but only part of Greek and nothing of Arabic or CJK.
+`tests/font_coverage.rs` fails the build for a catalogue using
+characters the font cannot draw, so a translation into one of those
+scripts needs a font shipped alongside it, not just a file.
 
 ## Preferences
 
