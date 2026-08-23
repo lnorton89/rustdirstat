@@ -118,6 +118,21 @@ window, and rustdirstat, a terminal UI for use over SSH.
 # licence without quoting it is the one file in the package that fails
 # to do its job. `0` skips no leading lines: LICENSE is the bare text.
 license-file = ["LICENSE", "0"]
+# cargo-deb derives `Depends` from the ELF headers, which for this
+# package comes out as just libc6 — and that is wrong, because winit and
+# wgpu `dlopen` everything they need instead of linking it. `ldd` on
+# rustdirstat-gui lists only libc, libm and libgcc_s; the Wayland, EGL,
+# X11 and xkbcommon sonames are string constants opened at runtime. So
+# nothing automatic can see them, and without this a GUI installed from
+# the .deb fails at startup with a dlopen error rather than a dependency
+# one.
+#
+# `recommends`, not `depends`, because one package ships both front
+# ends. apt installs recommends by default, so a desktop user gets a
+# working GUI without thinking about it, while someone putting the TUI
+# on a headless box can still say --no-install-recommends and not drag
+# in X. Every name here was checked against the Ubuntu archive.
+recommends = "libwayland-client0, libwayland-egl1, libegl1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxkbcommon0, libxkbcommon-x11-0, libdbus-1-3, libvulkan1"
 assets = [
     ["target/release/rustdirstat", "usr/bin/", "755"],
     ["target/release/rustdirstat-gui", "usr/bin/", "755"],

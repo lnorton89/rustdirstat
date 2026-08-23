@@ -459,6 +459,13 @@ jobs:
           arch=('x86_64')
           url="https://github.com/${REPO}"
           license=('MIT')
+          # winit and wgpu dlopen these rather than linking them, so
+          # neither ldd nor namcap can derive them — but the GUI will not
+          # open a window without them. Arch has no Recommends tier, so
+          # they are hard depends: the alternative is a package whose
+          # desktop front end fails on a clean install.
+          depends=('libx11' 'libxcursor' 'libxi' 'libxkbcommon'
+                   'wayland' 'libglvnd' 'dbus' 'vulkan-icd-loader')
           provides=('rustdirstat')
           conflicts=('rustdirstat')
           source=("${base}/${linux}")
