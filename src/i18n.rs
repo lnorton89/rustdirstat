@@ -143,6 +143,262 @@ pub fn available() -> Vec<String> {
     tags
 }
 
+/// The tags this build has a translation for, English included.
+///
+/// [`available`] is what the picker offers and includes whatever the user
+/// has dropped into [`catalog_dir`]; this is only what the binary itself
+/// carries, which is what a test can assert against without the machine
+/// it runs on being able to change the answer.
+pub fn shipped_tags() -> Vec<&'static str> {
+    let mut tags = vec!["en"];
+    tags.extend(SHIPPED.iter().map(|(tag, _)| *tag));
+    tags
+}
+
+/// What a language is called: in itself, and in English.
+///
+/// Two names rather than one because each answers a different question.
+/// The endonym is what a reader looking for their own language scans for
+/// — someone after Czech is looking for `Čeština`, and will not find it
+/// under `cs` — and the English name is the one shared reference that
+/// lets a reader who does *not* know the script tell two unfamiliar rows
+/// apart. Neither is translated into the active language: doing that
+/// properly means every language naming every other, which is a hundred
+/// and forty-four strings that would have to be right in twelve
+/// catalogues.
+pub struct LanguageName {
+    /// The language's name in itself: `Deutsch`, `Русский`.
+    pub endonym: &'static str,
+    /// Its name in English: `German`, `Russian`.
+    pub english: &'static str,
+}
+
+/// What to call `tag`, or `None` for a tag this table has never heard of.
+///
+/// Exact match first so `pt-BR` can name itself, then the base language,
+/// so a `de-AT` catalogue is still labelled German rather than falling
+/// back to its own tag. A miss is ordinary rather than exceptional — the
+/// picker shows the tag itself, which is exactly what it showed for every
+/// language before this table existed.
+pub fn language_name(tag: &str) -> Option<&'static LanguageName> {
+    if let Some((_, name)) = NAMES.iter().find(|(known, _)| *known == tag) {
+        return Some(name);
+    }
+    let base = tag.split(['-', '_']).next()?;
+    NAMES
+        .iter()
+        .find(|(known, _)| *known == base)
+        .map(|(_, name)| name)
+}
+
+/// Every language this build can name, by tag, ordered by tag.
+///
+/// Longer than [`SHIPPED`] on purpose: a user's own catalogue is a
+/// first-class entry in the picker, and a `da.toml` someone writes should
+/// come up as `Dansk` on the day they write it rather than on the day the
+/// translation is merged. The list stops where the bundled font does —
+/// every endonym here draws in Ubuntu-Light, which is the same constraint
+/// that decides which translations may ship at all, and
+/// `every_endonym_draws_in_the_bundled_font` holds it to that.
+const NAMES: &[(&str, LanguageName)] = &[
+    (
+        "cs",
+        LanguageName {
+            endonym: "Čeština",
+            english: "Czech",
+        },
+    ),
+    (
+        "da",
+        LanguageName {
+            endonym: "Dansk",
+            english: "Danish",
+        },
+    ),
+    (
+        "de",
+        LanguageName {
+            endonym: "Deutsch",
+            english: "German",
+        },
+    ),
+    (
+        "el",
+        LanguageName {
+            endonym: "Ελληνικά",
+            english: "Greek",
+        },
+    ),
+    (
+        "en",
+        LanguageName {
+            endonym: "English",
+            english: "English",
+        },
+    ),
+    (
+        "es",
+        LanguageName {
+            endonym: "Español",
+            english: "Spanish",
+        },
+    ),
+    (
+        "et",
+        LanguageName {
+            endonym: "Eesti",
+            english: "Estonian",
+        },
+    ),
+    (
+        "fi",
+        LanguageName {
+            endonym: "Suomi",
+            english: "Finnish",
+        },
+    ),
+    (
+        "fr",
+        LanguageName {
+            endonym: "Français",
+            english: "French",
+        },
+    ),
+    (
+        "hr",
+        LanguageName {
+            endonym: "Hrvatski",
+            english: "Croatian",
+        },
+    ),
+    (
+        "hu",
+        LanguageName {
+            endonym: "Magyar",
+            english: "Hungarian",
+        },
+    ),
+    (
+        "is",
+        LanguageName {
+            endonym: "Íslenska",
+            english: "Icelandic",
+        },
+    ),
+    (
+        "it",
+        LanguageName {
+            endonym: "Italiano",
+            english: "Italian",
+        },
+    ),
+    (
+        "lt",
+        LanguageName {
+            endonym: "Lietuvių",
+            english: "Lithuanian",
+        },
+    ),
+    (
+        "lv",
+        LanguageName {
+            endonym: "Latviešu",
+            english: "Latvian",
+        },
+    ),
+    (
+        "nb",
+        LanguageName {
+            endonym: "Norsk bokmål",
+            english: "Norwegian",
+        },
+    ),
+    (
+        "nl",
+        LanguageName {
+            endonym: "Nederlands",
+            english: "Dutch",
+        },
+    ),
+    (
+        "pl",
+        LanguageName {
+            endonym: "Polski",
+            english: "Polish",
+        },
+    ),
+    (
+        "pt",
+        LanguageName {
+            endonym: "Português",
+            english: "Portuguese",
+        },
+    ),
+    (
+        "pt-BR",
+        LanguageName {
+            endonym: "Português do Brasil",
+            english: "Brazilian Portuguese",
+        },
+    ),
+    (
+        "ro",
+        LanguageName {
+            endonym: "Română",
+            english: "Romanian",
+        },
+    ),
+    (
+        "ru",
+        LanguageName {
+            endonym: "Русский",
+            english: "Russian",
+        },
+    ),
+    (
+        "sk",
+        LanguageName {
+            endonym: "Slovenčina",
+            english: "Slovak",
+        },
+    ),
+    (
+        "sl",
+        LanguageName {
+            endonym: "Slovenščina",
+            english: "Slovenian",
+        },
+    ),
+    (
+        "sr",
+        LanguageName {
+            endonym: "Српски",
+            english: "Serbian",
+        },
+    ),
+    (
+        "sv",
+        LanguageName {
+            endonym: "Svenska",
+            english: "Swedish",
+        },
+    ),
+    (
+        "tr",
+        LanguageName {
+            endonym: "Türkçe",
+            english: "Turkish",
+        },
+    ),
+    (
+        "uk",
+        LanguageName {
+            endonym: "Українська",
+            english: "Ukrainian",
+        },
+    ),
+];
+
 /// Where user-supplied catalogues live: `lang/` beside the config file.
 pub fn catalog_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|dir| dir.join("rustdirstat").join("lang"))
@@ -690,6 +946,76 @@ mod catalogue_tests {
                 unknown.is_empty(),
                 "{name} defines keys the app never asks for: {unknown:?}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_shipped_language_has_a_name() -> anyhow::Result<()> {
+        // A shipped translation with no entry in NAMES shows up in the
+        // picker as its bare tag beside eleven languages that read as
+        // words, which is the state this whole table exists to end.
+        for tag in shipped_tags() {
+            let Some(name) = language_name(tag) else {
+                anyhow::bail!("{tag} ships as a translation but NAMES cannot name it");
+            };
+            assert!(
+                !name.endonym.is_empty() && !name.english.is_empty(),
+                "{tag} has an empty name"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_name_table_is_ordered_and_holds_each_tag_once() -> anyhow::Result<()> {
+        for pair in NAMES.windows(2) {
+            let [(before, _), (after, _)] = pair else {
+                continue;
+            };
+            assert!(
+                before < after,
+                "NAMES is out of order (or repeats): {before} before {after}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_regional_tag_is_named_by_its_base_language() -> anyhow::Result<()> {
+        let Some(brazil) = language_name("pt-BR") else {
+            anyhow::bail!("pt-BR is in the table and should have been found");
+        };
+        assert_eq!(brazil.english, "Brazilian Portuguese");
+        let Some(austria) = language_name("de-AT") else {
+            anyhow::bail!("a regional German tag should fall back to German");
+        };
+        assert_eq!(austria.endonym, "Deutsch");
+        assert!(
+            language_name("qqq").is_none(),
+            "an unknown tag has no name and the picker shows the tag"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_endonym_draws_in_the_bundled_font() -> anyhow::Result<()> {
+        // The same constraint that decides which translations may ship:
+        // the window bundles egui's own faces, so a name in a script they
+        // do not cover renders as a row of empty boxes — and an empty box
+        // where a language's own name should be is worse than the tag it
+        // replaced.
+        let context = eframe::egui::Context::default();
+        let mut output = context.run_ui(eframe::egui::RawInput::default(), |_ui| {});
+        output.textures_delta.clear();
+        let font = eframe::egui::FontId::default();
+        for (tag, name) in NAMES {
+            for text in [name.endonym, name.english] {
+                assert!(
+                    context.fonts_mut(|fonts| fonts.has_glyphs(&font, text)),
+                    "{tag}: the bundled font cannot draw {text:?}"
+                );
+            }
         }
         Ok(())
     }

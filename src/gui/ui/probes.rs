@@ -50,6 +50,12 @@ pub(super) static TEST_MENU_BAR_ROUNDING: std::sync::Mutex<Vec<(String, u8)>> =
 pub(super) static TEST_CLEANUP_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Where each language tile in the picker landed, by tag, so a test can
+/// click the language it means rather than a coordinate someone guessed.
+#[cfg(test)]
+pub(super) static TEST_LANGUAGE_TILE_RECTS: std::sync::Mutex<Vec<(String, egui::Rect)>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// Where the Locations page's scan button landed, so a test can press
 /// the real control rather than calling the method behind it.
 #[cfg(test)]

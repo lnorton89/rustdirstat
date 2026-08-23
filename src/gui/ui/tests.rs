@@ -2232,6 +2232,101 @@ fn a_long_page_scrolls_instead_of_growing_past_the_card() -> anyhow::Result<()> 
     Ok(())
 }
 
+#[test]
+fn the_language_picker_fits_its_card_and_offers_every_language() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let size = egui::vec2(900.0, 620.0);
+    app.open_modal(super::modal::ModalPage::Appearance);
+    settle_modal(&ctx, &mut app, size);
+    probe(&TEST_MODAL_CARD_RECTS).clear();
+    probe(&TEST_LANGUAGE_TILE_RECTS).clear();
+    render_modal_at(&ctx, &mut app, Vec::new(), size);
+
+    let card = *probe(&TEST_MODAL_CARD_RECTS)
+        .last()
+        .context("the card should have painted")?;
+    let tiles = probe(&TEST_LANGUAGE_TILE_RECTS).clone();
+    let offered = crate::i18n::available();
+    assert_eq!(
+        tiles.len(),
+        offered.len(),
+        "the picker drew {} tiles for {} languages",
+        tiles.len(),
+        offered.len()
+    );
+    for tag in &offered {
+        assert!(
+            tiles.iter().any(|(drawn, _)| drawn == tag),
+            "{tag} is offered but was never drawn"
+        );
+    }
+
+    // A tile past the card's edge is a tile nobody can click, and the grid
+    // works out its own column count — so this is the check that the sum
+    // actually comes back to the width it was given.
+    let (first_tag, first) = tiles.first().context("at least one language tile")?;
+    for (tag, rect) in &tiles {
+        assert!(
+            rect.right() <= card.right(),
+            "the {tag} tile runs past the right edge of the card"
+        );
+        assert!(
+            (rect.width() - first.width()).abs() <= 1.0,
+            "the {tag} tile is {:.0}px wide against {first_tag}'s {:.0}px",
+            rect.width(),
+            first.width()
+        );
+    }
+    // Nothing may overlap its neighbour: two tiles on one line that share
+    // pixels are one control swallowing another's clicks.
+    for (index, (tag, rect)) in tiles.iter().enumerate() {
+        for (other_tag, other) in tiles.iter().skip(index + 1) {
+            assert!(
+                !rect.intersects(*other),
+                "the {tag} and {other_tag} tiles overlap: {rect:?} and {other:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn clicking_a_language_tile_switches_the_language() -> anyhow::Result<()> {
+    let _test_guard = TEST_UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let ctx = egui::Context::default();
+    let mut app = app_with_one_file();
+    let size = egui::vec2(900.0, 620.0);
+    let before = crate::i18n::language();
+    crate::i18n::set_language("en");
+
+    app.open_modal(super::modal::ModalPage::Appearance);
+    settle_modal(&ctx, &mut app, size);
+    probe(&TEST_LANGUAGE_TILE_RECTS).clear();
+    render_modal_at(&ctx, &mut app, Vec::new(), size);
+    let german = probe(&TEST_LANGUAGE_TILE_RECTS)
+        .iter()
+        .find(|(tag, _)| tag == "de")
+        .map(|(_, rect)| *rect);
+    let Some(german) = german else {
+        anyhow::bail!("the picker drew no tile for the German catalogue");
+    };
+
+    render_modal_at(&ctx, &mut app, pointer_button(german.center(), true), size);
+    render_modal_at(&ctx, &mut app, pointer_button(german.center(), false), size);
+
+    let switched = crate::i18n::language();
+    // Restored before the assertion: a failure here must not leave every
+    // later test in this process reading a German catalogue.
+    crate::i18n::set_language(&before);
+    assert_eq!(
+        switched, "de",
+        "clicking the German tile should have selected German"
+    );
+    Ok(())
+}
+
 // ------------------------------------------------- hover and motion
 
 #[test]

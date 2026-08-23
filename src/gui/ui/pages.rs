@@ -3,8 +3,8 @@
 // Description:  The contents of each modal page, and the two destructive-
 //               action confirmations that layer above them.
 //
-// Dependencies: eframe::egui; crate::gui::app::GuiApp, super::{modal, themes,
-//               widgets}
+// Dependencies: eframe::egui; crate::gui::{app::GuiApp, flags}, super::{modal,
+//               themes, widgets}
 // ============================================================================
 
 //! The contents of each modal page, and the two confirmations that
@@ -21,6 +21,7 @@
 //! bottom, and lets the card's scroll area worry about whether it fits.
 
 use crate::gui::app::{GuiApp, PaneOrientation};
+use crate::gui::flags;
 use crate::gui::icons::Icon;
 use crate::i18n::{tr, tr_with};
 use crate::util::{human_bytes, thousands};
@@ -98,56 +99,243 @@ const THEME_LIST_HEIGHT: f32 = 330.0;
 /// same way on purpose: a translation is content, and content that needs
 /// a compiler to add is a translation nobody writes — so a file appearing
 /// in that folder is all it takes to extend this list.
+///
+/// It used to be a row of bare tags, and a tag is the one label a reader
+/// cannot use: someone looking for their own language is looking for the
+/// word they call it by. Each entry leads with a flag, to be found by eye
+/// before it is read, and names itself in its own language with the
+/// English name beneath — the tag stays, small, because it is also the
+/// name of the file in the folder named below.
 fn draw_language(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
     let available = crate::i18n::available();
     let current = crate::i18n::language();
     let mut wrote: Option<String> = None;
-    group(ui, Icon::Info, crate::i18n::tr("settings.language"), |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for tag in &available {
-                if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
-                    crate::i18n::set_language(tag);
-                }
+    group(
+        ui,
+        Icon::Globe,
+        crate::i18n::tr("settings.language"),
+        |ui| {
+            // Its own scroll, bounded, for the reason the theme catalog
+            // below has one: a dozen languages laid out two to a line is
+            // three hundred pixels of page, and everything under it — the
+            // whole theme picker — starts below the fold. The number of
+            // catalogues is also the user's to decide, so an unbounded
+            // grid is a page whose length someone else controls.
+            egui::ScrollArea::vertical()
+                .id_salt("language_list")
+                .max_height(LANGUAGE_LIST_HEIGHT)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    // The grid re-fits the card rather than wrapping a fixed
+                    // tile width: the card is a proportion of the window, so a
+                    // fixed column count would strand empty space on a wide
+                    // screen and overflow the pane on a narrow one.
+                    let width = ui.available_width();
+                    let columns =
+                        ((width + SPACE_SM) / (LANGUAGE_TILE_MIN_WIDTH + SPACE_SM)).floor();
+                    let columns = (columns as usize).max(1);
+                    let tile = ((width - SPACE_SM * (columns - 1) as f32) / columns as f32).floor();
+                    for row in available.chunks(columns) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = SPACE_SM;
+                            for tag in row {
+                                if language_tile(ui, &current == tag, tag, tile).clicked()
+                                    && &current != tag
+                                {
+                                    crate::i18n::set_language(tag);
+                                }
+                            }
+                        });
+                        ui.add_space(SPACE_SM);
+                    }
+                });
+            ui.add_space(SPACE_XS);
+            ui.label(
+                RichText::new(crate::i18n::tr_with(
+                    "settings.language.folder",
+                    &[(
+                        "path",
+                        &crate::i18n::catalog_dir()
+                            .map(|dir| crate::util::display_path(&dir))
+                            .unwrap_or_default(),
+                    )],
+                ))
+                .color(palette.secondary_text),
+            );
+            ui.add_space(SPACE_SM);
+            // The catalogue is compiled into the binary and ships in no
+            // package, so without this an installed build has no way to
+            // obtain the file the sentence above tells you to copy.
+            if ui
+                .button(crate::i18n::tr("settings.language.write_template"))
+                .on_hover_text(crate::i18n::tr("settings.language.write_template_hint"))
+                .clicked()
+            {
+                wrote = Some(match crate::i18n::write_starter_catalogue() {
+                    Ok(path) => crate::i18n::tr_with(
+                        "settings.language.written",
+                        &[("path", &crate::util::display_path(&path))],
+                    ),
+                    Err(error) => crate::i18n::tr_with(
+                        "settings.language.write_failed",
+                        &[("error", &error.to_string())],
+                    ),
+                });
             }
-        });
-        ui.add_space(SPACE_XS);
-        ui.label(
-            RichText::new(crate::i18n::tr_with(
-                "settings.language.folder",
-                &[(
-                    "path",
-                    &crate::i18n::catalog_dir()
-                        .map(|dir| crate::util::display_path(&dir))
-                        .unwrap_or_default(),
-                )],
-            ))
-            .color(palette.secondary_text),
-        );
-        ui.add_space(SPACE_SM);
-        // The catalogue is compiled into the binary and ships in no
-        // package, so without this an installed build has no way to
-        // obtain the file the sentence above tells you to copy.
-        if ui
-            .button(crate::i18n::tr("settings.language.write_template"))
-            .on_hover_text(crate::i18n::tr("settings.language.write_template_hint"))
-            .clicked()
-        {
-            wrote = Some(match crate::i18n::write_starter_catalogue() {
-                Ok(path) => crate::i18n::tr_with(
-                    "settings.language.written",
-                    &[("path", &crate::util::display_path(&path))],
-                ),
-                Err(error) => crate::i18n::tr_with(
-                    "settings.language.write_failed",
-                    &[("error", &error.to_string())],
-                ),
-            });
-        }
-    });
+        },
+    );
     if let Some(message) = wrote {
         app.status = Some(message);
     }
+}
+
+/// Visible height of the language grid before it scrolls on its own —
+/// three rows of tiles, whatever the card's width makes a row.
+const LANGUAGE_LIST_HEIGHT: f32 = 160.0;
+
+/// Height of one entry in the language picker: two lines of text, and a
+/// flag with enough room around it to be told from the one below.
+const LANGUAGE_TILE_HEIGHT: f32 = 44.0;
+
+/// The narrowest a language entry may be laid out at before the grid
+/// drops a column. Wide enough for `Português do Brasil`, which is the
+/// longest name the table holds.
+const LANGUAGE_TILE_MIN_WIDTH: f32 = 196.0;
+
+/// How tall a flag is drawn in the picker. Its width follows from
+/// [`flags::ASPECT`], so every flag is the same rectangle whatever it
+/// holds — which is what makes a column of them scannable.
+const FLAG_HEIGHT: f32 = 15.0;
+
+/// How far each of a tile's two lines sits from its centre. One number
+/// for both, so the pair is centred as a block.
+const LANGUAGE_LINE_OFFSET: f32 = 9.0;
+
+/// One language in the picker: its flag, its own name for itself, and
+/// the English name and tag under that.
+///
+/// Laid out by hand into an exactly-allocated rect rather than composed
+/// from labels, for the reason every other tiled control here is: a
+/// `Frame` measures itself against the line it is on and *then* allocates
+/// what it measured, so a row of them overflows the pane instead of
+/// wrapping. `width` is the column the caller worked out from the space
+/// it has, and the tile never asks for more than that.
+fn language_tile(ui: &mut egui::Ui, selected: bool, tag: &str, width: f32) -> egui::Response {
+    let palette = palette();
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, LANGUAGE_TILE_HEIGHT), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let fill = if selected {
+            palette.accent_muted
+        } else {
+            hover_fill(ui, &response, Color32::TRANSPARENT, palette.hover)
+        };
+        let stroke = if selected || response.has_focus() {
+            Stroke::new(1.0_f32, palette.accent)
+        } else {
+            Stroke::new(1.0_f32, palette.border)
+        };
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(7),
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+
+        let flag_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + SPACE_MD, rect.center().y - FLAG_HEIGHT * 0.5),
+            Vec2::new(FLAG_HEIGHT * flags::ASPECT, FLAG_HEIGHT),
+        );
+        match flags::flag(tag) {
+            Some(flag) => flag.paint(ui.painter(), flag_rect, palette.border),
+            // A tag with no flag is an ordinary case, not a broken one —
+            // somebody's own catalogue, or a language whose flag could not
+            // be told from another at this size. It takes the same
+            // rectangle either way, so the names stay in one column.
+            None => Icon::Globe.paint(
+                ui.painter(),
+                egui::Rect::from_center_size(flag_rect.center(), Vec2::splat(FLAG_HEIGHT)),
+                palette.secondary_text,
+            ),
+        }
+
+        let (title, subtitle) = match crate::i18n::language_name(tag) {
+            // `English` written under `English` is a line that says
+            // nothing, so there the tag stands on its own.
+            Some(name) if name.english == name.endonym => {
+                (name.endonym.to_string(), tag.to_string())
+            }
+            Some(name) => (
+                name.endonym.to_string(),
+                format!("{} · {tag}", name.english),
+            ),
+            // Nothing in the table: the tag is all there is to show, and
+            // it is exactly what this picker showed for every language
+            // before there was a table.
+            None => (tag.to_string(), String::new()),
+        };
+        let color = if selected {
+            palette.on_accent
+        } else {
+            palette.primary_text
+        };
+        let left = flag_rect.right() + SPACE_SM;
+        // A selected tile ends in a checkmark, so the text stops short of
+        // where that will be — on every tile, selected or not, or the name
+        // would shift sideways as the selection moved.
+        let room = (rect.right() - SPACE_MD - FLAG_HEIGHT - SPACE_SM - left).max(0.0);
+        // Truncated by egui rather than by `truncate_for_width`, which
+        // measures in the small text style — these two lines are set in
+        // two different styles, and a cut measured in the wrong one is no
+        // cut at all.
+        let line = |ui: &egui::Ui, text: &str, style: egui::TextStyle| {
+            egui::WidgetText::from(text.to_string()).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                room,
+                style,
+            )
+        };
+        let title = line(ui, &title, egui::TextStyle::Body);
+        let title_y = if subtitle.is_empty() {
+            rect.center().y
+        } else {
+            rect.center().y - LANGUAGE_LINE_OFFSET
+        };
+        ui.painter().galley(
+            egui::pos2(left, title_y - title.size().y * 0.5),
+            title,
+            color,
+        );
+        if !subtitle.is_empty() {
+            let subtitle = line(ui, &subtitle, egui::TextStyle::Small);
+            let y = rect.center().y + LANGUAGE_LINE_OFFSET - subtitle.size().y * 0.5;
+            ui.painter().galley(
+                egui::pos2(left, y),
+                subtitle,
+                if selected {
+                    palette.on_accent
+                } else {
+                    palette.secondary_text
+                },
+            );
+        }
+        if selected {
+            Icon::Check.paint(
+                ui.painter(),
+                egui::Rect::from_center_size(
+                    egui::pos2(rect.right() - SPACE_MD - FLAG_HEIGHT * 0.5, rect.center().y),
+                    Vec2::splat(FLAG_HEIGHT),
+                ),
+                color,
+            );
+        }
+    }
+    #[cfg(test)]
+    probe(&TEST_LANGUAGE_TILE_RECTS).push((tag.to_string(), rect));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {

@@ -108,6 +108,9 @@ pub(super) enum Icon {
     Warning,
     /// A theme swatch, for the appearance picker.
     Palette,
+    /// A language with no flag of its own — a user's own catalogue, or one
+    /// whose flag would be indistinguishable from another at this size.
+    Globe,
     // One per file category, so a row can be recognised by shape before
     // its label is read — the same reason a phone's storage breakdown
     // uses them.
@@ -141,7 +144,7 @@ impl Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub(super) const ALL: [Self; 37] = [
+    pub(super) const ALL: [Self; 38] = [
         Self::App,
         Self::Folder,
         Self::FolderOpen,
@@ -173,6 +176,7 @@ impl Icon {
         Self::Close,
         Self::Warning,
         Self::Palette,
+        Self::Globe,
         Self::Archive,
         Self::Image,
         Self::Video,
@@ -427,6 +431,22 @@ impl Icon {
             Self::Source => {
                 line(&[(5.6, 4.4), (2.0, 8.0), (5.6, 11.6)]);
                 line(&[(10.4, 4.4), (14.0, 8.0), (10.4, 11.6)]);
+            }
+            Self::Globe => {
+                painter.circle_stroke(p(8.0, 8.0), rect.width() * 0.40, s);
+                line(&[(1.6, 8.0), (14.4, 8.0)]);
+                // The meridian is an ellipse rather than a second circle:
+                // a globe drawn with two circles reads as a target.
+                for side in [1.0_f32, -1.0] {
+                    let meridian: Vec<(f32, f32)> = (0..=12)
+                        .map(|step| {
+                            let t = std::f32::consts::PI * step as f32 / 12.0
+                                - std::f32::consts::FRAC_PI_2;
+                            (8.0 + side * t.cos() * 3.4, 8.0 + t.sin() * 6.4)
+                        })
+                        .collect();
+                    line(&meridian);
+                }
             }
         }
     }

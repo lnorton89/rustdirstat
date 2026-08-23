@@ -88,6 +88,7 @@ gui/
     extensions.rs    extension aggregation and the flat file views
     treemap.rs       zoom state and treemap cache keys
     tools.rs         delete, empty, and Windows maintenance operations
+  flags.rs           the language picker's flags, as painted geometry
   icons.rs           vector icon set, painted not fonted
   treemap_layout.rs  Node subtree -> positioned pixel tiles
   ui/

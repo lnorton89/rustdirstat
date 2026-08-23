@@ -14,6 +14,7 @@
 //! this front end has instead.
 
 mod app;
+mod flags;
 mod icons;
 mod shell_icons;
 mod treemap_layout;

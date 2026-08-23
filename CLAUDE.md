@@ -228,14 +228,30 @@ fails is a failing build. The only literals left are lighting effects
 that are not theme colors at all — the treemap cushion highlight, and
 alpha-only scrims.
 
-**The brand mark is the exception to the palette rule, and the only
-one.** `src/brand.rs` holds the mark's geometry and its five colours as
-literals, because a logo that restyles itself under a dark theme is not
-a logo. `gui::icons::paint_brand` paints it and `app_icon` rasterises
-it, both from that one table, and `assets/brand/` is the same call at
-larger sizes — regenerate those with `cargo run --example brand_assets`
-rather than editing the PNGs. Nothing else in drawing code gets to hold
-a literal on this argument.
+**Two things are exempt from the palette rule, and they are exempt for
+one reason: neither is interface.** `src/brand.rs` holds the mark's
+geometry and its five colours as literals, because a logo that restyles
+itself under a dark theme is not a logo. `gui::icons::paint_brand` paints
+it and `app_icon` rasterises it, both from that one table, and
+`assets/brand/` is the same call at larger sizes — regenerate those with
+`cargo run --example brand_assets` rather than editing the PNGs. The
+second is `src/gui/flags.rs`, the flags in the language picker: a
+national flag re-tinted to match a theme is not that flag either. Its
+colours are a table of families — stripes, a Nordic cross, a wedge — so
+adding a language is usually one line rather than a new drawing, and
+everything *around* a flag (the border it is ruled with, the tile it sits
+in) is still palette work. Nothing else in drawing code gets to hold a
+literal on this argument, and a third exception needs the same case:
+the thing being drawn is not the program's interface but somebody else's
+identity.
+
+Two consequences of that module worth knowing before touching it. The
+flags are painted rather than typed because egui's bundled faces carry no
+regional-indicator emoji, so `🇩🇪` renders as two empty boxes — the same
+constraint that decides which *translations* may ship at all. And the
+table is deliberately not exhaustive: an arms-less Slovak flag is
+Russia's and an arms-less Croatian one is the Netherlands', so those fall
+through to a globe rather than pointing the eye at the wrong row.
 
 **Constants live with what they govern, and there is no `constants.rs`.**
 Three tiers, in order of preference — reach for the narrowest that works:
