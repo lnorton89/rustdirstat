@@ -91,6 +91,33 @@ libc = "0.2"
 [package.metadata.deb]
 section = "utils"
 priority = "optional"
+# Debian policy makes `Maintainer` mandatory, and cargo-deb only derives
+# one from `package.authors` — which this crate does not set, because
+# Cargo no longer populates it and it is not wanted in the crates.io
+# metadata. Without this line `dpkg-deb` itself warns "missing
+# 'Maintainer' field" on the package the release publishes, and lintian
+# rejects it outright. Stating it here keeps it out of `[package]`.
+maintainer = "Lawrence Norton <lnorton89@gmail.com>"
+# Cargo auto-detects README.md as `package.readme`, and cargo-deb turns
+# that into the extended description when none is given — which made the
+# control file 527 lines of raw markdown: `<p align="center">` tags,
+# shields.io badge URLs, and an <img> of the banner, all of it dumped by
+# `apt show rustdirstat`. A description is prose for someone deciding
+# whether to install, so it is written here rather than scraped.
+extended-description = """
+Scans a directory tree and shows where the space went: a treemap where every
+file is a rectangle sized by the space it occupies and coloured by type,
+alongside a sortable tree, a per-extension breakdown, and a duplicate finder
+that tells hard links apart from real copies.
+Two front ends sit over one scanning core - rustdirstat-gui, a native desktop
+window, and rustdirstat, a terminal UI for use over SSH.
+"""
+# Without this, the generated copyright file states `License: MIT` and
+# then stops — no copyright line, no permission notice. MIT requires the
+# notice accompany the distribution, so a copyright file that names the
+# licence without quoting it is the one file in the package that fails
+# to do its job. `0` skips no leading lines: LICENSE is the bare text.
+license-file = ["LICENSE", "0"]
 assets = [
     ["target/release/rustdirstat", "usr/bin/", "755"],
     ["target/release/rustdirstat-gui", "usr/bin/", "755"],

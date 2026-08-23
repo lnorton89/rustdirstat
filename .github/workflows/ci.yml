@@ -117,8 +117,19 @@ jobs:
       # cfg(unix), so it compiles to nothing on Windows. Building the
       # binaries in release is what catches anything that only shows up
       # with LTO and optimizations on.
+      # On Linux this mirrors the release workflow's `--target` build, so
+      # the packaging dry run below can be handed the same command line
+      # the release uses. Elsewhere the plain build is what release.yml
+      # effectively does anyway and there is nothing to package.
       - name: Build release binaries
-        run: cargo build --release --bins
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cargo build --release --bins --target x86_64-unknown-linux-gnu
+          else
+            cargo build --release --bins
+          fi
 
       # Packaging is the part of a release that nothing else exercises,
       # and a broken packaging step is only discovered while cutting the
@@ -126,12 +137,28 @@ jobs:
       # binaries above — the same versions the release workflow pins —
       # and thrown away; nothing is uploaded. Linux only, because that is
       # where both formats are built for real.
+      #
+      # `--target` is passed because release.yml passes it, and it is what
+      # re-maps every `target/release/...` asset path in Cargo.toml to
+      # `target/<triple>/release/...`. A dry run that omits it resolves
+      # those paths a different way than the release does, which is the
+      # one thing this step exists to rule out.
       - name: Package (dry run)
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
+          TARGET=x86_64-unknown-linux-gnu
           cargo install cargo-deb --version 3.7.0 --locked
           cargo install cargo-generate-rpm --version 0.16.1 --locked
-          cargo deb --no-build --no-strip --output /tmp/ci-check.deb
-          cargo generate-rpm --output /tmp/ci-check.rpm
+          cargo deb --no-build --no-strip --target "$TARGET" --output /tmp/ci-check.deb
+          cargo generate-rpm --target "$TARGET" --output /tmp/ci-check.rpm
           ls -l /tmp/ci-check.deb /tmp/ci-check.rpm
+          # The control file is generated, so its mandatory fields are
+          # only ever wrong at release time unless something asserts
+          # them. A missing Maintainer shipped once already.
+          dpkg-deb -f /tmp/ci-check.deb Maintainer | grep -q . \
+            || { echo "::error::the .deb has no Maintainer field"; exit 1; }
+          if dpkg-deb -f /tmp/ci-check.deb Description | grep -q '<img\|shields\.io'; then
+            echo "::error::the .deb description is scraping README markup"
+            exit 1
+          fi
