@@ -49,15 +49,125 @@ pub(in crate::gui) struct ToolsState {
     /// spinner instead of the page closing out from under it.
     pub running: Option<usize>,
     pub log: Vec<ToolOutcome>,
+    /// What the Locations page has ticked, which is not what is being
+    /// scanned until the button is pressed. Kept on the app rather than
+    /// in the page because the page is redrawn from scratch every frame
+    /// and has nowhere of its own to remember a selection.
+    pub selected_locations: Vec<std::path::PathBuf>,
+    /// A user-defined cleanup waiting on its confirmation, already
+    /// resolved against the selection.
+    ///
+    /// The *resolved* command rather than the cleanup's index, because
+    /// the confirmation shows exactly what will run — a template plus a
+    /// selection is not something a person can check, and the selection
+    /// could change between the question and the answer.
+    pub pending_cleanup: Option<PendingCleanup>,
+}
+
+/// A cleanup that has been resolved and is waiting to be confirmed.
+pub(in crate::gui) struct PendingCleanup {
+    pub name: String,
+    pub command: crate::cleanups::Command,
+    pub capture_output: bool,
 }
 
 impl GuiApp {
-    pub(in crate::gui) fn find_duplicates(&mut self) {
+    /// Resolves a cleanup against the current selection and either asks
+    /// or runs it.
+    ///
+    /// The path is resolved *exactly* — `path_for`, never the forgiving
+    /// lookup — for the reason the delete path does the same: a stale
+    /// selection must refuse rather than act on the nearest surviving
+    /// ancestor, and this one runs a program the app knows nothing about.
+    pub(in crate::gui) fn request_cleanup(&mut self, index: usize) {
+        let Some(cleanup) = self.cleanups.get(index).cloned() else {
+            return;
+        };
+        let Some(target) = self
+            .selected_path
+            .as_deref()
+            .and_then(|path| self.tree.path_for(path))
+        else {
+            self.status = Some(crate::cleanups::CleanupError::NoTarget.to_string());
+            return;
+        };
+        let command = match crate::cleanups::resolve(&cleanup, &target) {
+            Ok(command) => command,
+            Err(error) => {
+                self.status = Some(format!("{}: {error}", cleanup.name));
+                return;
+            }
+        };
+        let pending = PendingCleanup {
+            name: cleanup.name.clone(),
+            command,
+            capture_output: cleanup.capture_output,
+        };
+        if cleanup.confirm {
+            self.tools.pending_cleanup = Some(pending);
+        } else {
+            self.start_cleanup(pending);
+        }
+    }
+
+    pub(in crate::gui) fn confirm_cleanup(&mut self) {
+        if let Some(pending) = self.tools.pending_cleanup.take() {
+            self.start_cleanup(pending);
+        }
+    }
+
+    /// Runs a resolved cleanup on a worker thread.
+    ///
+    /// The same channel the Windows maintenance tools use, so a cleanup
+    /// that takes a minute leaves the window interactive and lands in the
+    /// same log.
+    fn start_cleanup(&mut self, pending: PendingCleanup) {
         if self.is_busy() {
-            self.status = Some("Another background operation is already running".to_string());
+            self.status = Some(crate::i18n::tr("status.busy"));
             return;
         }
-        self.status = Some("Finding duplicate files…".to_string());
+        let (tx, rx) = mpsc::channel();
+        let name = pending.name.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::cleanups::run(
+                &pending.command,
+                pending.capture_output,
+            ));
+        });
+        self.tools.rx = Some(rx);
+        self.tools.active_name = Some(name.clone());
+        self.status = Some(crate::i18n::tr_with(
+            "status.running_tool",
+            &[("tool", &name)],
+        ));
+    }
+
+    /// The volume a Windows maintenance tool should act on.
+    ///
+    /// `tree.root_path` was the obvious answer and is wrong as soon as a
+    /// scan has several roots: it is a label there, and `wintools`
+    /// derives a volume from a path's first component, so the tools were
+    /// being handed the first word of a UI string. These are the app's
+    /// most destructive surface; a fabricated volume argument is not
+    /// something to pass to `cleanmgr` or `vssadmin` and hope it errors.
+    ///
+    /// So a multi-root scan resolves the volume from the *selection* —
+    /// the one thing that says which root the user means — and the
+    /// caller refuses when there is none.
+    fn tool_volume(&self) -> Option<std::path::PathBuf> {
+        if !self.tree.is_multi_root() {
+            return Some(self.tree.root_path.clone());
+        }
+        let selected = self.selected_path.as_deref()?;
+        self.tree.root_for(selected).map(|root| root.path)
+    }
+
+    pub(in crate::gui) fn find_duplicates(&mut self) {
+        if self.is_busy() {
+            self.status = Some(crate::i18n::tr("status.busy"));
+            return;
+        }
+        self.status = Some(crate::i18n::tr("duplicates.running.title"));
         self.file_view = FileView::DuplicateFiles;
         let tree = Arc::clone(&self.tree);
         let (tx, rx) = mpsc::channel();
@@ -90,14 +200,18 @@ impl GuiApp {
 
     fn start_windows_tool(&mut self, index: usize) {
         if self.is_busy() {
-            self.status = Some("Another background operation is already running".to_string());
+            self.status = Some(crate::i18n::tr("status.busy"));
             return;
         }
         let Some(tool) = crate::wintools::TOOLS.get(index) else {
             return;
         };
-        let root = self.tree.root_path.clone();
-        let name = tool.name.to_string();
+        let Some(root) = self.tool_volume() else {
+            self.status = Some(crate::i18n::tr("status.no_single_volume"));
+            self.tools.pending = None;
+            return;
+        };
+        let name = tool.name();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(crate::wintools::run(index, &root));
@@ -105,7 +219,10 @@ impl GuiApp {
         self.tools.active_name = Some(name.clone());
         self.tools.running = Some(index);
         self.tools.rx = Some(rx);
-        self.status = Some(format!("Running {name}…"));
+        self.status = Some(crate::i18n::tr_with(
+            "status.running_tool",
+            &[("tool", &name)],
+        ));
         // The page stays open. A DISM run takes minutes, and closing the
         // window that started it left a one-line status bar as the only
         // sign anything was happening.
@@ -118,13 +235,13 @@ impl GuiApp {
         // The first row represents scan context, not a cleanup target.
         // Never let selecting it queue deletion of a whole drive/root.
         if index_path.is_empty() {
-            self.status = Some("The scan root cannot be deleted from this view".to_string());
+            self.status = Some(crate::i18n::tr("status.cannot_delete_root"));
             return;
         }
         // Exact: a delete queued against a path that no longer resolves
         // must not silently describe whatever now sits at those indices.
         let Some(node) = self.tree.node_for(&index_path) else {
-            self.status = Some("That item is no longer there".to_string());
+            self.status = Some(crate::i18n::tr("status.item_gone"));
             return;
         };
         self.pending_delete = Some(PendingDelete {
@@ -145,23 +262,23 @@ impl GuiApp {
         // thing is not an error worth being clever about recovering
         // from.
         let Some(node) = self.tree.node_for(&pending.index_path) else {
-            self.status = Some(format!(
-                "{} is no longer where it was; nothing was deleted",
-                pending.name.to_string_lossy()
+            self.status = Some(crate::i18n::tr_with(
+                "status.moved_nothing_deleted",
+                &[("name", &pending.name.to_string_lossy())],
             ));
             return Ok(());
         };
         if node.name != pending.name || node.is_dir != pending.is_dir {
-            self.status = Some(format!(
-                "{} moved since it was selected; nothing was deleted",
-                pending.name.to_string_lossy()
+            self.status = Some(crate::i18n::tr_with(
+                "status.changed_nothing_deleted",
+                &[("name", &pending.name.to_string_lossy())],
             ));
             return Ok(());
         }
         let Some(path) = self.tree.path_for(&pending.index_path) else {
-            self.status = Some(format!(
-                "{} is no longer where it was; nothing was deleted",
-                pending.name.to_string_lossy()
+            self.status = Some(crate::i18n::tr_with(
+                "status.moved_nothing_deleted",
+                &[("name", &pending.name.to_string_lossy())],
             ));
             return Ok(());
         };
@@ -172,16 +289,20 @@ impl GuiApp {
                 std::fs::remove_file(&path)?;
             }
         } else {
-            trash::delete(&path).map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+            trash::delete(&path).map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    crate::i18n::tr_with("status.trash_failed", &[("error", &e.to_string())])
+                )
+            })?;
         }
-        self.status = Some(format!(
-            "{}: {}",
+        self.status = Some(crate::i18n::tr_with(
             if pending.permanent {
-                "Permanently deleted"
+                "status.deleted_permanently"
             } else {
-                "Moved to Recycle Bin"
+                "status.moved_to_bin"
             },
-            path.display()
+            &[("path", &crate::util::display_path(&path))],
         ));
         self.selected_path = None;
         self.refresh_scan()
@@ -195,9 +316,9 @@ impl GuiApp {
             return Ok(());
         }
         let Some(path) = self.tree.path_for(&pending.index_path) else {
-            self.status = Some(format!(
-                "{} is no longer where it was; nothing was emptied",
-                pending.name.to_string_lossy()
+            self.status = Some(crate::i18n::tr_with(
+                "status.moved_nothing_emptied",
+                &[("name", &pending.name.to_string_lossy())],
             ));
             return Ok(());
         };
@@ -208,10 +329,19 @@ impl GuiApp {
         // actually went to the trash.
         match crate::util::empty_directory_to_trash(&path)? {
             crate::util::EmptyOutcome::Incomplete { unreadable } => {
-                self.status = Some(format!(
-                    "Nothing was emptied: {unreadable} entr{} could not be read ({})",
-                    if unreadable == 1 { "y" } else { "ies" },
-                    path.display()
+                // Two whole sentences rather than one with a spliced
+                // plural: "entr" + "y"/"ies" is an English-only trick,
+                // and a translation has to be free to say it its own way.
+                self.status = Some(crate::i18n::tr_with(
+                    if unreadable == 1 {
+                        "status.empty.incomplete_one"
+                    } else {
+                        "status.empty.incomplete_many"
+                    },
+                    &[
+                        ("count", &unreadable.to_string()),
+                        ("path", &crate::util::display_path(&path)),
+                    ],
                 ));
             }
             crate::util::EmptyOutcome::Partial {
@@ -220,21 +350,30 @@ impl GuiApp {
                 first_error,
             } => {
                 let failed = total - done;
-                self.status = Some(match first_error {
-                    Some(error) => format!(
-                        "Emptied {done} of {total} items in {}; {failed} could not be \
-                         moved to trash ({error})",
-                        path.display()
-                    ),
-                    None => format!(
-                        "Emptied {done} of {total} items in {}; {failed} could not be \
-                         moved to trash",
-                        path.display()
-                    ),
-                });
+                let mut fields = vec![
+                    ("done", done.to_string()),
+                    ("total", total.to_string()),
+                    ("failed", failed.to_string()),
+                    ("path", crate::util::display_path(&path)),
+                ];
+                let key = match first_error {
+                    Some(error) => {
+                        fields.push(("error", error));
+                        "status.empty.partial_with_error"
+                    }
+                    None => "status.empty.partial",
+                };
+                let fields: Vec<(&str, &str)> = fields
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                self.status = Some(crate::i18n::tr_with(key, &fields));
             }
             crate::util::EmptyOutcome::Emptied { .. } => {
-                self.status = Some(format!("Emptied: {}", path.display()));
+                self.status = Some(crate::i18n::tr_with(
+                    "status.emptied",
+                    &[("path", &crate::util::display_path(&path))],
+                ));
             }
         }
         self.refresh_scan()

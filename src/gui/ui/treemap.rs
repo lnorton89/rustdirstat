@@ -13,9 +13,10 @@
 //! gives nested directories their rounded look.
 
 use crate::color;
-use crate::gui::app::{extension_label, GuiApp};
+use crate::gui::app::GuiApp;
 use crate::gui::icons::Icon;
 use crate::gui::treemap_layout::Tile;
+use crate::i18n::tr;
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, TextStyle};
 
 #[cfg(test)]
@@ -25,7 +26,7 @@ use super::widgets::*;
 
 pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        section_title(ui, Icon::App, "Treemap");
+        section_title(ui, Icon::App, &tr("label.treemap"));
         // The full path lives in the toolbar; repeating it here said
         // nothing and pushed the heading off the edge of a narrow pane.
         // What is worth saying is when the map is *not* showing the whole
@@ -41,9 +42,9 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     RichText::new(if app.use_physical {
-                        "Physical size"
+                        tr("menu.treemap.physical")
                     } else {
-                        "Logical size"
+                        tr("menu.treemap.logical")
                     })
                     .small()
                     .color(palette().secondary_text),
@@ -95,6 +96,20 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
         // looks like it is over.
         let pointer = response.hover_pos();
         let mut hovered_rect = None;
+        // Every tile's fill and grid line goes into one mesh rather than
+        // one `Shape` each. egui tessellates per shape, so at the tile
+        // budget that was tens of thousands of shapes a frame — the cost
+        // that put a full-drive treemap over the frame budget on any
+        // window bigger than a laptop's.
+        //
+        // Order is preserved: a mesh's triangles are drawn in the order
+        // they are pushed, so interleaving fill-then-grid per tile inside
+        // one mesh paints exactly what interleaving two shapes per tile
+        // did. The slot is reserved *here* so the batch sits underneath
+        // the labels, the hover outline and the selection frame, all of
+        // which are still emitted as their own shapes below.
+        let batch_idx = painter.add(egui::Shape::Noop);
+        let mut batch = egui::Mesh::default();
         for tile in tiles {
             if tile.w < 1.0 || tile.h < 1.0 {
                 continue;
@@ -110,12 +125,15 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
             } else if tile.is_dir {
                 to_color32(color::directory_color())
             } else {
-                extension_color(&extension_label(&tile.name))
+                // Precomputed at layout time: this runs for every tile
+                // on every frame, and deriving it here allocated three
+                // times per tile. See `treemap_layout::Tile::extension`.
+                extension_color_for_hue(tile.hue)
             };
             let mut base = scale(raw, 1.0 - (tile.depth as f32 * 0.05).min(0.35));
             if tile.is_node() {
                 if let Some(ext) = &app.highlighted_extension {
-                    if tile.is_dir || extension_label(&tile.name) != *ext {
+                    if tile.is_dir || tile.extension != *ext {
                         base = blend(base, palette().dim, 0.78);
                     }
                 } else if let Some(category) = app.highlighted_category {
@@ -124,13 +142,13 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                     }
                 }
             }
-            paint_cushion_rect(&painter, rect, base);
+            push_cushion(&mut batch, rect, base);
             // Only outline tiles with room for an outline. A 1px border on
             // each side of a 3px tile leaves one pixel of colour, so
             // gridding the dense regions turned them into black mush and
             // cost a stroke per tile to do it.
             if app.view.grid && rect.width() >= MIN_GRID_PX && rect.height() >= MIN_GRID_PX {
-                painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, palette().treemap_grid));
+                push_rect_stroke(&mut batch, rect, 1.0, palette().treemap_grid);
             }
             if app.selected_path.as_ref() == Some(&tile.index_path) {
                 selected_rect = treemap_selection_rect(rect);
@@ -159,6 +177,9 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                 clicked = Some(tile.index_path.clone());
             }
         }
+        if !batch.is_empty() {
+            painter.set(batch_idx, egui::Shape::mesh(batch));
+        }
         // Over the tiles but under the selection frame, so hovering the
         // selected tile does not paint over the marker that says so.
         //
@@ -171,6 +192,7 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                     rect.shrink(0.5),
                     0.0,
                     Stroke::new(1.5_f32, palette().treemap_hover),
+                    egui::StrokeKind::Middle,
                 );
             }
         }
@@ -191,8 +213,14 @@ pub(super) fn draw_treemap(app: &mut GuiApp, ui: &mut egui::Ui) {
                 rect,
                 0.0,
                 Stroke::new(TREEMAP_SELECTION_WIDTH + 2.0, backing),
+                egui::StrokeKind::Middle,
             );
-            painter.rect_stroke(rect, 0.0, Stroke::new(TREEMAP_SELECTION_WIDTH, marker));
+            painter.rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(TREEMAP_SELECTION_WIDTH, marker),
+                egui::StrokeKind::Middle,
+            );
         }
     }
     if let Some(text) = hover_text {
@@ -243,31 +271,13 @@ pub(super) fn cushion_color(base: Color32, x: f32, y: f32) -> Color32 {
     }
 }
 
+/// [`push_cushion`] as a standalone mesh, for the test that pins the
+/// gradient. The paint path appends into one shared mesh instead, so
+/// this is the only caller that wants a mesh of its own.
+#[cfg(test)]
 pub(super) fn cushion_mesh(rect: egui::Rect, base: Color32) -> egui::Mesh {
-    const GRID: usize = 5;
     let mut mesh = egui::Mesh::default();
-    mesh.reserve_vertices(GRID * GRID);
-    mesh.reserve_triangles((GRID - 1) * (GRID - 1) * 2);
-    for row in 0..GRID {
-        let y = row as f32 / (GRID - 1) as f32;
-        for column in 0..GRID {
-            let x = column as f32 / (GRID - 1) as f32;
-            mesh.colored_vertex(
-                egui::pos2(egui::lerp(rect.x_range(), x), egui::lerp(rect.y_range(), y)),
-                cushion_color(base, x, y),
-            );
-        }
-    }
-    for row in 0..GRID - 1 {
-        for column in 0..GRID - 1 {
-            let top_left = (row * GRID + column) as u32;
-            let top_right = top_left + 1;
-            let bottom_left = top_left + GRID as u32;
-            let bottom_right = bottom_left + 1;
-            mesh.add_triangle(top_left, top_right, bottom_right);
-            mesh.add_triangle(top_left, bottom_right, bottom_left);
-        }
-    }
+    push_cushion(&mut mesh, rect, base);
     mesh
 }
 
@@ -287,10 +297,90 @@ const MIN_GRID_PX: f32 = 5.0;
 /// against either the tile's top edge or its children.
 pub(super) const LABEL_TEXT_PADDING: f32 = 2.0;
 
-pub(super) fn paint_cushion_rect(painter: &egui::Painter, rect: egui::Rect, base: Color32) {
+/// One axis-aligned quad, appended to `mesh`.
+fn push_quad(mesh: &mut egui::Mesh, rect: egui::Rect, color: Color32) {
+    let base = mesh.vertices.len() as u32;
+    for point in [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+    ] {
+        mesh.colored_vertex(point, color);
+    }
+    mesh.add_triangle(base, base + 1, base + 2);
+    mesh.add_triangle(base, base + 2, base + 3);
+}
+
+/// The cushion gradient, appended to a shared mesh rather than emitted
+/// of emitted as its own shape. Same rule, same output: below
+/// [`MIN_CUSHION_PX`] the shading is not resolvable, so the tile is one
+/// flat quad rather than twenty-five vertices.
+fn push_cushion(mesh: &mut egui::Mesh, rect: egui::Rect, base: Color32) {
     if rect.width() < MIN_CUSHION_PX || rect.height() < MIN_CUSHION_PX {
-        painter.rect_filled(rect, 0.0, cushion_color(base, 0.5, 0.5));
+        push_quad(mesh, rect, cushion_color(base, 0.5, 0.5));
         return;
     }
-    painter.add(egui::Shape::mesh(cushion_mesh(rect, base)));
+    let start = mesh.vertices.len() as u32;
+    const GRID: usize = 5;
+    for row in 0..GRID {
+        let y = row as f32 / (GRID - 1) as f32;
+        for column in 0..GRID {
+            let x = column as f32 / (GRID - 1) as f32;
+            mesh.colored_vertex(
+                egui::pos2(egui::lerp(rect.x_range(), x), egui::lerp(rect.y_range(), y)),
+                cushion_color(base, x, y),
+            );
+        }
+    }
+    for row in 0..GRID - 1 {
+        for column in 0..GRID - 1 {
+            let top_left = start + (row * GRID + column) as u32;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + GRID as u32;
+            let bottom_right = bottom_left + 1;
+            mesh.add_triangle(top_left, top_right, bottom_right);
+            mesh.add_triangle(top_left, bottom_right, bottom_left);
+        }
+    }
+}
+
+/// A rectangle outline as four quads, matching `StrokeKind::Middle` —
+/// the stroke straddles the edge, half inside and half out.
+fn push_rect_stroke(mesh: &mut egui::Mesh, rect: egui::Rect, width: f32, color: Color32) {
+    let half = width / 2.0;
+    let outer = rect.expand(half);
+    let inner = rect.shrink(half);
+    // Top and bottom span the full outer width; the sides fill the gap
+    // between them, so no pixel is written twice (which would show
+    // through a translucent grid colour at the corners).
+    push_quad(
+        mesh,
+        egui::Rect::from_min_max(outer.left_top(), egui::pos2(outer.right(), inner.top())),
+        color,
+    );
+    push_quad(
+        mesh,
+        egui::Rect::from_min_max(
+            egui::pos2(outer.left(), inner.bottom()),
+            outer.right_bottom(),
+        ),
+        color,
+    );
+    push_quad(
+        mesh,
+        egui::Rect::from_min_max(
+            egui::pos2(outer.left(), inner.top()),
+            egui::pos2(inner.left(), inner.bottom()),
+        ),
+        color,
+    );
+    push_quad(
+        mesh,
+        egui::Rect::from_min_max(
+            egui::pos2(inner.right(), inner.top()),
+            egui::pos2(outer.right(), inner.bottom()),
+        ),
+        color,
+    );
 }

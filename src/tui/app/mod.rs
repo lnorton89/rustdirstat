@@ -64,6 +64,10 @@ pub(in crate::tui) enum Action {
     StartMove,
     ToggleProperties,
     ToggleWinTools,
+    ToggleCleanups,
+    SelectCleanup(usize),
+    ConfirmCleanup,
+    CancelCleanup,
     SelectWinTool(usize),
     ConfirmWinTool,
     CancelWinTool,
@@ -136,6 +140,32 @@ pub(in crate::tui) struct WinToolsState {
     /// Set while a destructive tool waits on a yes/no confirmation,
     /// before `wintools::run` is actually called.
     pub pending: Option<usize>,
+}
+
+/// The user's own commands, and the one waiting on a confirmation.
+///
+/// Mirrors [`WinToolsState`] deliberately: the two are the same shape of
+/// thing — a list you open, pick from, and are asked about — and the
+/// terminal has one way of doing that.
+#[derive(Default)]
+pub(in crate::tui) struct CleanupState {
+    pub visible: bool,
+    pub selected: usize,
+    /// What the config held when the popup was opened.
+    pub list: Vec<crate::cleanups::Cleanup>,
+    /// The *resolved* command awaiting a yes/no, not the index of the
+    /// cleanup that produced it. What the prompt shows has to be what
+    /// will run: a template plus a selection is not something a person
+    /// can check, and the selection could move between question and
+    /// answer. See `docs/CLEANUPS_THREAT_MODEL.md`.
+    pub pending: Option<PendingCleanup>,
+}
+
+/// A resolved cleanup waiting on its yes/no.
+pub(in crate::tui) struct PendingCleanup {
+    pub name: String,
+    pub command: crate::cleanups::Command,
+    pub capture_output: bool,
 }
 
 /// The recursive name search: the query being typed, and the results.
@@ -221,6 +251,7 @@ pub(in crate::tui) struct App {
     pub move_to: MoveState,
     pub show_properties: bool,
     pub wintools: WinToolsState,
+    pub cleanups: CleanupState,
 }
 
 const TREEMAP_SPLIT_MIN: u16 = 20;
@@ -261,6 +292,7 @@ impl App {
             move_to: MoveState::default(),
             show_properties: false,
             wintools: WinToolsState::default(),
+            cleanups: CleanupState::default(),
         };
         app.refresh_ext_stats();
         app
@@ -292,6 +324,11 @@ impl App {
     /// filters, search state, highlighted category) — those are session
     /// state, not preferences, and restoring them on an unrelated future
     /// scan would be surprising rather than helpful.
+    ///
+    /// Partial by design, and saved through
+    /// [`crate::config::save_merged`] for that reason: the fields left
+    /// `None` here belong to the window or to the user's own text, and
+    /// writing this out directly would delete them.
     pub(in crate::tui) fn to_config(&self) -> Config {
         Config {
             sort: Some(self.sort),
@@ -338,6 +375,10 @@ impl App {
                 | Action::StartMove
                 | Action::ToggleProperties
                 | Action::ToggleWinTools
+                | Action::ToggleCleanups
+                | Action::SelectCleanup(_)
+                | Action::ConfirmCleanup
+                | Action::CancelCleanup
                 | Action::SelectWinTool(_)
                 | Action::ConfirmWinTool
                 | Action::CancelWinTool
@@ -427,7 +468,10 @@ impl App {
                         target.parent().map(|p| p.to_path_buf()).unwrap_or(target)
                     };
                     if let Err(e) = crate::util::open_in_file_manager(&target) {
-                        self.message = Some(format!("Failed to open file manager: {e}"));
+                        self.message = Some(crate::i18n::tr_with(
+                            "status.reveal_failed",
+                            &[("error", &e.to_string())],
+                        ));
                     }
                 }
             }
@@ -437,7 +481,10 @@ impl App {
                     let mut target = self.current_path();
                     target.push(&node.name);
                     if let Err(e) = crate::util::open_path(&target) {
-                        self.message = Some(format!("Failed to open: {e}"));
+                        self.message = Some(crate::i18n::tr_with(
+                            "status.open_failed",
+                            &[("error", &e.to_string())],
+                        ));
                     }
                 }
             }
@@ -446,10 +493,22 @@ impl App {
                 if let Some((_, node)) = self.display_children().get(self.selected) {
                     let mut target = self.current_path();
                     target.push(&node.name);
-                    let text = target.display().to_string();
+                    // As a person would type it: this is going into
+                    // another program's address bar or command line, and
+                    // the canonical `\\?\C:\...` form is refused by most
+                    // of them. See `util::display_path`.
+                    let text = crate::util::display_path(&target);
                     match crate::util::copy_to_clipboard(&text) {
-                        Ok(()) => self.message = Some(format!("Copied path: {text}")),
-                        Err(e) => self.message = Some(format!("Failed to copy path: {e}")),
+                        Ok(()) => {
+                            self.message =
+                                Some(crate::i18n::tr_with("status.copied", &[("path", &text)]))
+                        }
+                        Err(e) => {
+                            self.message = Some(crate::i18n::tr_with(
+                                "status.copy_failed",
+                                &[("error", &e.to_string())],
+                            ))
+                        }
                     }
                 }
             }
@@ -468,6 +527,20 @@ impl App {
                 self.wintools.visible = !self.wintools.visible;
                 self.wintools.selected = 0;
             }
+            Action::ToggleCleanups => {
+                // Re-read on open, the way the window does: cleanups live
+                // in a text file that may have changed while the app was
+                // running, and reading it per frame would be file I/O on
+                // a draw path.
+                if !self.cleanups.visible {
+                    self.cleanups.list = crate::config::load().cleanups;
+                }
+                self.cleanups.visible = !self.cleanups.visible;
+                self.cleanups.selected = 0;
+            }
+            Action::SelectCleanup(idx) => self.request_cleanup(idx),
+            Action::ConfirmCleanup => self.confirm_cleanup(),
+            Action::CancelCleanup => self.cleanups.pending = None,
             Action::SelectWinTool(idx) => {
                 if let Some(tool) = crate::wintools::TOOLS.get(idx) {
                     if tool.destructive {
@@ -606,7 +679,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::operations::STALE_TARGET;
+    use super::operations::stale_target;
     use super::*;
     use std::path::PathBuf;
 
@@ -738,7 +811,7 @@ mod tests {
         );
         assert_eq!(
             app.message.as_deref(),
-            Some(STALE_TARGET),
+            Some(stale_target().as_str()),
             "the user should be told the target is gone rather than something else being deleted"
         );
         assert_eq!(
@@ -746,6 +819,65 @@ mod tests {
             0,
             "nothing should have been removed from the tree"
         );
+        Ok(())
+    }
+
+    /// A delete the filesystem refuses is reported, not fatal.
+    ///
+    /// The three filesystem calls in `confirm_delete` used to be the
+    /// only `?` on a filesystem operation in the terminal, and the error
+    /// travelled out through `dispatch` and the event loop and ended the
+    /// process. So a delete refused for any of the ordinary reasons —
+    /// no permission, the file open in something else, a read-only
+    /// volume, or simply gone since the scan — closed the app rather
+    /// than saying why, on the one keystroke where an explanation
+    /// matters most.
+    ///
+    /// The race is the easiest of those to stage: the tree still holds
+    /// the entry, the disk no longer does.
+    #[test]
+    fn a_delete_the_filesystem_refuses_is_reported_rather_than_fatal() -> Result<()> {
+        let dir = crate::util::scratch_dir("tui", "refused_delete");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let doomed = dir.join("doomed.txt");
+        std::fs::write(&doomed, b"bytes")?;
+
+        let tree = crate::scanner::scan_to_completion(&dir)?;
+        let mut app = App::new(tree);
+        assert_eq!(
+            app.tree.root.children.len(),
+            1,
+            "the scan should have found the one file"
+        );
+        app.selected = 0;
+        app.pending_delete = Some(PendingDelete {
+            orig_idx: 0,
+            name: std::ffi::OsString::from("doomed.txt"),
+            permanent: true,
+            is_dir: false,
+        });
+
+        // Something else gets there first.
+        std::fs::remove_file(&doomed)?;
+
+        // The whole point: this returns rather than propagating.
+        app.dispatch(Action::ConfirmDelete)?;
+
+        assert!(
+            app.message
+                .as_deref()
+                .is_some_and(|m| m.starts_with("Could not delete")),
+            "the failure should reach the status line, got {:?}",
+            app.message
+        );
+        assert_eq!(
+            app.tree.root.children.len(),
+            1,
+            "and nothing should be subtracted from a tree the disk still agrees with \
+             about this entry never having been removed by us"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

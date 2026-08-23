@@ -5,9 +5,7 @@
 # event, not a release-day surprise.
 #
 # Dependabot is the other half of this: .github/dependabot.yml opens the
-# version-update PRs, and the `deny` job runs against each one. Note that
-# the egui stack is ignored above patch there for the same reason the four
-# advisories below have no fix — see the comment on those.
+# version-update PRs, and the `deny` job runs against each one.
 
 [advisories]
 # Nightly advisory DB is fine for a utility; the lockfile is checked
@@ -15,26 +13,21 @@
 # silently-ignored footnote.
 yanked = "warn"
 
-# Four advisories with no practical fix, all in the egui 0.29 stack this
-# crate holds at deliberately (see CLAUDE.md):
+# One advisory left, and it is an unmaintained-crate notice rather than a
+# vulnerability:
 #
 # - RUSTSEC-2026-0192: ttf-parser is unmaintained, no successor release
 #   (upstream points at skrifa); drawn in by ab_glyph for font shaping.
 #   Input is the OS's own fonts, not untrusted data.
-# - RUSTSEC-2024-0436: paste is unmaintained, no fix; a trivial macro
-#   crate in accesskit_winit and metal.
-# - RUSTSEC-2026-0194/0195: quick-xml vulnerabilities in the Linux
-#   accessibility stack (zbus_xml via atspi). The fixed quick-xml is a
-#   breaking release, so clearing them means bumping the accesskit stack
-#   — the egui upgrade this repo is deliberately not doing yet.
 #
-# Revisit all four when egui 0.29 is left behind.
-ignore = [
-    "RUSTSEC-2026-0192",
-    "RUSTSEC-2024-0436",
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-]
+# The other three ignores this file used to carry were all consequences
+# of holding the egui stack at 0.29, and the 0.36 upgrade cleared them:
+# RUSTSEC-2024-0436 (paste, unmaintained) is no longer in the graph, and
+# RUSTSEC-2026-0194/0195 (quick-xml, reached through zbus_xml via atspi)
+# went with the accesskit bump that came along with egui. That is what
+# the upgrade was for — do not re-add an ignore without saying why the
+# advisory cannot be fixed instead.
+ignore = ["RUSTSEC-2026-0192"]
 
 [licenses]
 # MIT-led, but the GUI's font and platform stack brings in a few more
@@ -55,7 +48,7 @@ allow = [
     "BSL-1.0",
     "MPL-2.0",
     "OFL-1.1",
-    "LicenseRef-UFL-1.0",
+    "Ubuntu-font-1.0",
 ]
 
 [bans]

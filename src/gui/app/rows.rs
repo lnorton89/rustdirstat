@@ -88,6 +88,9 @@ impl TreeRow {
 #[derive(PartialEq)]
 pub(in crate::gui) struct RowKey {
     tree: usize,
+    /// A tree that grows in place keeps its address, so the address
+    /// alone cannot say whether these rows are still the right ones.
+    generation: u64,
     sort: SortMode,
     physical: bool,
     expanded: u64,
@@ -204,6 +207,69 @@ impl GuiApp {
             .map(|p| self.tree.deepest_valid_node(p))
     }
 
+    /// What the filesystem says about the selected item, asked once per
+    /// selection rather than once per frame.
+    ///
+    /// An inspector can afford a syscall the scan cannot: it looks at one
+    /// item, and only when that item changes. Cached against the path it
+    /// describes so a still window does no I/O at all — the same rule the
+    /// row and tile caches follow, for the same reason.
+    pub(in crate::gui) fn selected_item_facts(&self) -> crate::platform::ItemFacts {
+        let Some(path) = self.selected_fs_path() else {
+            return crate::platform::ItemFacts::default();
+        };
+        let mut cache = self.item_facts.borrow_mut();
+        if cache
+            .as_ref()
+            .map(|(seen, _)| seen != &path)
+            .unwrap_or(true)
+        {
+            *cache = Some((path.clone(), crate::platform::item_facts(&path)));
+        }
+        cache
+            .as_ref()
+            .map(|(_, facts)| facts.clone())
+            .unwrap_or_default()
+    }
+
+    /// What share of its parent, the scan, and the volume the selection
+    /// is.
+    ///
+    /// The grid shows the first two; the third is the one an inspector
+    /// can add, and it is the one that answers "is this worth deleting".
+    pub(in crate::gui) fn selection_shares(&self) -> Vec<(&'static str, f64)> {
+        let Some(path) = self.selected_path.as_deref() else {
+            return Vec::new();
+        };
+        let Some(node) = self.tree.node_for(path) else {
+            return Vec::new();
+        };
+        let size = node.effective_size(self.use_physical) as f64;
+        let mut shares = Vec::new();
+        if let Some(parent) = path
+            .split_last()
+            .and_then(|(_, rest)| self.tree.node_for(rest))
+        {
+            let whole = parent.effective_size(self.use_physical) as f64;
+            if whole > 0.0 {
+                shares.push(("properties.share.folder", size / whole * 100.0));
+            }
+        }
+        let scanned = self.tree.root.effective_size(self.use_physical) as f64;
+        if scanned > 0.0 {
+            shares.push(("properties.share.scan", size / scanned * 100.0));
+        }
+        if let Some(total) = self
+            .tree
+            .root_for(path)
+            .and_then(|root| root.volume_total)
+            .filter(|total| *total > 0)
+        {
+            shares.push(("properties.share.volume", size / total as f64 * 100.0));
+        }
+        shares
+    }
+
     pub(in crate::gui) fn selected_fs_path(&self) -> Option<PathBuf> {
         self.selected_path
             .as_deref()
@@ -247,9 +313,19 @@ impl GuiApp {
 
     /// Rebuilds [`Self::visible_rows`] if the tree, sort order, size mode,
     /// or expanded set has changed since the last frame.
+    /// How many rows the last refresh produced.
+    ///
+    /// For tests that need to see the row cache actually rebuild; the
+    /// window itself reads `visible_rows` directly.
+    #[cfg(test)]
+    pub(in crate::gui) fn visible_row_count(&self) -> usize {
+        self.visible_rows.len()
+    }
+
     pub(in crate::gui) fn refresh_visible_rows(&mut self) {
         let key = RowKey {
             tree: Arc::as_ptr(&self.tree) as usize,
+            generation: self.tree_generation,
             sort: self.sort,
             physical: self.use_physical,
             expanded: expanded_fingerprint(&self.expanded),
@@ -264,6 +340,9 @@ impl GuiApp {
             return;
         }
 
+        #[cfg(test)]
+        crate::gui::ui::probes::TEST_ROW_REBUILDS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.visible_rows = self.build_visible_rows();
         self.visible_rows_key = Some(key);
     }

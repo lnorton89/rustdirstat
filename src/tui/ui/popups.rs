@@ -19,9 +19,9 @@ use super::*;
 pub(super) fn draw_search_prompt(f: &mut Frame, app: &mut App) {
     text_prompt(
         f,
-        " Search this subtree (Esc to cancel) ".to_string(),
+        format!(" {} ", tr("tui.prompt.search")),
         &app.search.query,
-        "Enter to search, Esc to cancel. * and ? are wildcards; prefix with re: for a regex.",
+        &tr("tui.prompt.search.hint"),
     );
 }
 
@@ -33,9 +33,9 @@ pub(super) fn draw_move_prompt(f: &mut Frame, app: &mut App) {
         .unwrap_or_default();
     text_prompt(
         f,
-        format!(" Move '{name}' to (Esc to cancel) "),
+        format!(" {} ", tr_with("tui.prompt.move", &[("name", &name)])),
         &app.move_to.destination,
-        "Enter a destination folder (or full path) and press Enter. Esc to cancel.",
+        &tr("tui.prompt.move.hint"),
     );
 }
 
@@ -44,7 +44,7 @@ pub(super) fn draw_properties_popup(f: &mut Frame, app: &mut App) {
     let inner = open_popup(
         f,
         area,
-        popup_block(" Properties (press any key to close) "),
+        popup_block(format!(" {} ", tr("tui.popup.properties"))),
     );
 
     let Some((_, node)) = app
@@ -52,41 +52,51 @@ pub(super) fn draw_properties_popup(f: &mut Frame, app: &mut App) {
         .get(app.selected)
         .map(|(i, n)| (*i, *n))
     else {
-        f.render_widget(Paragraph::new("Nothing selected."), inner);
+        f.render_widget(Paragraph::new(tr("properties.empty.title")), inner);
         return;
     };
 
     let mut full_path = app.current_path();
     full_path.push(&node.name);
-    let kind = if node.is_dir {
-        "Directory"
+    let kind = tr(if node.is_dir {
+        "properties.type.folder"
     } else if node.is_symlink {
-        "Symlink"
+        "properties.type.link"
     } else {
-        "File"
+        "properties.type.file"
+    });
+    // A directory has no category of its own; a file always lands in
+    // one, so the fallback is only reached for a node the scan filed
+    // nowhere.
+    let category = match node.category {
+        Some(category) => category.label(),
+        None if node.is_dir => "-".to_string(),
+        None => tr("category.other"),
     };
-    let category =
-        node.category
-            .map(|c| c.label())
-            .unwrap_or(if node.is_dir { "-" } else { "Other" });
 
-    let mut rows: Vec<(&str, String)> = vec![
-        ("Path", full_path.display().to_string()),
-        ("Type", kind.to_string()),
-        ("Category", category.to_string()),
-        ("Size (logical)", human_bytes(node.size)),
-        ("Size (physical)", human_bytes(node.physical_size)),
-        ("Modified", format_modified(node.modified)),
+    let mut rows: Vec<(String, String)> = vec![
+        (tr("properties.path"), crate::util::display_path(&full_path)),
+        (tr("properties.type"), kind),
+        (tr("tui.properties.category"), category),
+        (tr("tui.properties.logical"), human_bytes(node.size)),
+        (
+            tr("tui.properties.physical"),
+            human_bytes(node.physical_size),
+        ),
+        (tr("properties.modified"), format_modified(node.modified)),
     ];
     if node.is_dir {
-        rows.push(("Files", thousands(node.file_count)));
-        rows.push(("Subdirectories", thousands(node.dir_count)));
+        rows.push((tr("properties.files"), thousands(node.file_count)));
+        rows.push((tr("properties.subfolders"), thousands(node.dir_count)));
     }
     if node.unreadable_count > 0 {
-        rows.push(("Unreadable entries", thousands(node.unreadable_count)));
+        rows.push((
+            tr("tui.properties.unreadable"),
+            thousands(node.unreadable_count),
+        ));
     }
     if node.error {
-        rows.push(("Access", "denied".to_string()));
+        rows.push((tr("tui.properties.access"), tr("tui.properties.denied")));
     }
 
     let lines: Vec<Line> = rows
@@ -119,7 +129,7 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
     let inner = open_popup(
         f,
         area,
-        popup_block(" Windows system tools (Esc/T to close) "),
+        popup_block(format!(" {} ", tr("tui.popup.wintools"))),
     );
 
     // Pushed before the per-tool zones below (not after) — click zones
@@ -156,7 +166,7 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
         };
         let marker = if selected { "> " } else { "  " };
         lines.push(Line::from(Span::styled(
-            format!("{marker}{}", tool.name),
+            format!("{marker}{}", tool.name()),
             name_style,
         )));
         if row < inner.height {
@@ -170,7 +180,8 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
         }
         row += 1;
         if selected {
-            for desc_line in wrap_text(&format!("    {}", tool.description), inner.width as usize) {
+            for desc_line in wrap_text(&format!("    {}", tool.description()), inner.width as usize)
+            {
                 lines.push(Line::from(Span::styled(
                     desc_line,
                     Style::default().fg(theme::MUTED),
@@ -182,11 +193,156 @@ pub(super) fn draw_wintools_popup(f: &mut Frame, app: &mut App) {
     if !available {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "These tools call native Windows utilities and aren't available on this platform.",
+            tr("tui.wintools.unavailable"),
             Style::default().fg(theme::MUTED),
         )));
     }
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The user's own commands, and what each one runs.
+///
+/// The list shows the *template* — the command before substitution —
+/// because that is what identifies a cleanup. The confirmation below
+/// shows the resolved argv instead, which is what identifies the thing
+/// about to happen. See `docs/CLEANUPS_THREAT_MODEL.md`.
+pub(super) fn draw_cleanups_popup(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(70, 60, f.area());
+    let inner = open_popup(
+        f,
+        area,
+        popup_block(format!(" {} ", tr("tui.popup.cleanups"))),
+    );
+
+    // Pushed before the per-entry zones, for the reason spelled out in
+    // `draw_wintools_popup`: zones are searched last-pushed-first.
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::ToggleCleanups,
+    });
+
+    if app.cleanups.list.is_empty() {
+        let lines = vec![
+            Line::from(Span::styled(
+                tr("tui.cleanups.empty"),
+                Style::default().fg(Color::Reset),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                tr("tui.cleanups.empty.body"),
+                Style::default().fg(theme::MUTED),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                tr("tui.cleanups.placeholders"),
+                Style::default().fg(theme::MUTED),
+            )),
+        ];
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        return;
+    }
+
+    // Zones built in the same pass as the lines, tracking the real row
+    // each entry lands on — see `draw_wintools_popup`, which this is the
+    // twin of.
+    let mut lines: Vec<Line> = Vec::new();
+    let mut row = 0u16;
+    for (index, cleanup) in app.cleanups.list.iter().enumerate() {
+        let selected = index == app.cleanups.selected;
+        let marker = if selected { "> " } else { "  " };
+        let style = if selected {
+            theme::selection()
+        } else {
+            Style::default().fg(Color::Reset)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker}{}", cleanup.name),
+            style,
+        )));
+        if row < inner.height {
+            app.click_zones.push(ClickZone {
+                x: inner.x,
+                y: inner.y + row,
+                w: inner.width,
+                h: 1,
+                action: Action::SelectCleanup(index),
+            });
+        }
+        row += 1;
+        if selected {
+            let template = cleanup
+                .args
+                .iter()
+                .fold(cleanup.program.clone(), |mut acc, arg| {
+                    acc.push(' ');
+                    acc.push_str(arg);
+                    acc
+                });
+            for line in wrap_text(&format!("    {template}"), inner.width as usize) {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme::MUTED),
+                )));
+                row += 1;
+            }
+        }
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// "This is the command, exactly as it will run."
+///
+/// Reads the resolved argv off the pending cleanup rather than
+/// re-resolving the selected one: the selection can move between the
+/// question and the answer, and what is confirmed has to be what runs.
+pub(super) fn draw_cleanup_confirm_popup(f: &mut Frame, app: &mut App) {
+    let Some(pending) = &app.cleanups.pending else {
+        return;
+    };
+    let (name, preview) = (pending.name.clone(), pending.command.preview());
+    let area = centered_rect(64, 30, f.area());
+    let inner = open_popup(
+        f,
+        area,
+        danger_block(format!(" {} ", tr("tui.popup.confirm"))),
+    );
+
+    // Wrapped by hand at the width `Paragraph` will use, so the button
+    // row's y can be counted rather than guessed — same reason as
+    // `draw_wintool_confirm_popup`.
+    let inner_w = inner.width as usize;
+    let question_lines = wrap_text(
+        &tr_with("tui.cleanups.question", &[("name", &name)]),
+        inner_w,
+    );
+    let mut desc_lines = wrap_text(&tr("tui.cleanups.consequence"), inner_w);
+    desc_lines.push(String::new());
+    desc_lines.extend(wrap_text(&preview, inner_w));
+
+    let mut text = confirm_body(&question_lines, &desc_lines);
+    text.push(Line::from(""));
+    app.click_zones.push(ClickZone {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        action: Action::CancelCleanup,
+    });
+    let row_y = inner.y + text.len() as u16;
+    let buttons = [
+        ConfirmButton {
+            label: " [ Y ]es ",
+            style: theme::filled_button(theme::DANGER),
+            action: Action::ConfirmCleanup,
+        },
+        cancel_button(Action::CancelCleanup),
+    ];
+    let row = button_row(app, &buttons, inner.x, row_y);
+    text.push(row);
+    f.render_widget(Paragraph::new(text), inner);
 }
 
 pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usize) {
@@ -194,7 +350,11 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
         return;
     };
     let area = centered_rect(60, 24, f.area());
-    let inner = open_popup(f, area, danger_block(" Confirm "));
+    let inner = open_popup(
+        f,
+        area,
+        danger_block(format!(" {} ", tr("tui.popup.confirm"))),
+    );
 
     // The button row can't be a hardcoded line offset — either the
     // question or (especially) the description can wrap onto more than
@@ -204,8 +364,11 @@ pub(super) fn draw_wintool_confirm_popup(f: &mut Frame, app: &mut App, idx: usiz
     // Pre-wrapping by hand, the same width `Paragraph` will use, means
     // the row math and the rendered text can never disagree.
     let inner_w = inner.width as usize;
-    let question_lines = wrap_text(&format!("Run '{}'?", tool.name), inner_w);
-    let desc_lines = wrap_text(tool.description, inner_w);
+    let question_lines = wrap_text(
+        &tr_with("tui.wintools.question", &[("name", &tool.name())]),
+        inner_w,
+    );
+    let desc_lines = wrap_text(&tool.description(), inner_w);
 
     let mut text = confirm_body(&question_lines, &desc_lines);
     text.push(Line::from(""));
@@ -304,11 +467,14 @@ pub(super) fn draw_confirm_popup(
     is_dir: bool,
 ) {
     let area = centered_rect(60, 24, f.area());
-    let title = if permanent {
-        " Permanently Delete "
-    } else {
-        " Move to Trash "
-    };
+    let title = format!(
+        " {} ",
+        tr(if permanent {
+            "tui.delete.title.permanent"
+        } else {
+            "tui.delete.title.trash"
+        })
+    );
     let inner = open_popup(f, area, danger_block(title));
 
     // As in draw_wintool_confirm_popup: the button row can't be a fixed
@@ -317,18 +483,15 @@ pub(super) fn draw_confirm_popup(
     // the deleted item's name is — pre-wrapping by hand keeps the click
     // zones honest about where the buttons actually render.
     let inner_w = inner.width as usize;
-    let question_lines = wrap_text(&format!("Delete '{name}'?"), inner_w);
-    let desc_text = if permanent {
-        "This bypasses the Recycle Bin/Trash and cannot be undone."
+    let question_lines = wrap_text(&tr_with("tui.delete.question", &[("name", name)]), inner_w);
+    let desc_text = tr(if permanent {
+        "tui.delete.permanent"
     } else {
-        "This can be undone from your OS Recycle Bin/Trash."
-    };
-    let desc_lines = wrap_text(desc_text, inner_w);
+        "tui.delete.undoable"
+    });
+    let desc_lines = wrap_text(&desc_text, inner_w);
     let empty_lines: Vec<String> = if is_dir {
-        wrap_text(
-            "Or empty it — delete its contents, keep the folder.",
-            inner_w,
-        )
+        wrap_text(&tr("tui.delete.or_empty"), inner_w)
     } else {
         Vec::new()
     };
@@ -372,46 +535,42 @@ pub(super) fn draw_confirm_popup(
 
 pub(super) fn draw_help_popup(f: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 80, f.area());
-    let inner = open_popup(
-        f,
-        area,
-        popup_block(" rustdirstat — help (press any key to close) "),
-    );
+    let inner = open_popup(f, area, popup_block(format!(" {} ", tr("tui.help.title"))));
 
-    let rows: [(&str, &str); 30] = [
-        ("↑/↓, k/j", "Move selection"),
-        ("→/l/Enter", "Open the selected directory"),
-        ("←/h/Backspace", "Go up a directory"),
-        ("s", "Cycle sort order (size, name, modified)"),
-        ("m", "Show/hide file counts and modified dates"),
-        ("p", "Toggle logical vs. physical (on-disk) size"),
-        ("t", "Toggle the treemap panel"),
-        ("[ / ]", "Resize the treemap panel (or drag its left edge)"),
-        ("f", "Toggle the \"biggest files\" flat view"),
-        ("/", "Search/filter the current directory by name"),
-        ("S", "Search this entire subtree (glob or re: regex)"),
-        ("u", "Find duplicate files (by content hash) across the whole scan"),
-        ("1-9", "Highlight a file-type category in the treemap"),
-        ("0", "Clear the highlight"),
-        ("o", "Open the selected item (its default app, or the folder)"),
-        ("O", "Reveal the selected item in the OS file manager"),
-        ("y", "Copy the selected item's full path to the clipboard"),
-        ("M", "Move the selected item to another folder"),
-        ("i", "Show properties for the selected item"),
-        ("T", "Windows system tools (Disk Cleanup, DISM, shadow copies, ...)"),
-        ("r", "Rescan from the root (keeps your current location)"),
-        ("e", "Export a text report of the current view to a file"),
-        ("E", "Export a full CSV of the current view's subtree to a file"),
-        ("d", "Delete the selected item (moves to Recycle Bin/Trash)"),
-        ("D", "Delete PERMANENTLY (bypasses Recycle Bin/Trash)"),
-        (
-            "d, then e",
-            "In the delete popup, empty a folder instead (keep it, delete contents)",
-        ),
-        ("?", "Toggle this help"),
-        ("q, Esc", "Quit"),
-        ("", ""),
-        ("Mouse", "Every action above also works by clicking — treemap tiles, list rows, title bars, the header, and the footer buttons are all clickable."),
+    // Keys on the left are never translated — they are the keys — and
+    // the catalogue holds only what each one does.
+    let rows: [(&str, String); 31] = [
+        ("↑/↓, k/j", tr("tui.help.move")),
+        ("→/l/Enter", tr("tui.help.open_dir")),
+        ("←/h/Backspace", tr("tui.help.up_dir")),
+        ("s", tr("tui.help.sort")),
+        ("m", tr("tui.help.details")),
+        ("p", tr("tui.help.physical")),
+        ("t", tr("tui.help.treemap")),
+        ("[ / ]", tr("tui.help.resize")),
+        ("f", tr("tui.help.top_files")),
+        ("/", tr("tui.help.filter")),
+        ("S", tr("tui.help.search")),
+        ("u", tr("tui.help.duplicates")),
+        ("1-9", tr("tui.help.highlight")),
+        ("0", tr("tui.help.clear_highlight")),
+        ("o", tr("tui.help.open")),
+        ("O", tr("tui.help.reveal")),
+        ("y", tr("tui.help.copy_path")),
+        ("M", tr("tui.help.move_to")),
+        ("i", tr("tui.help.properties")),
+        ("T", tr("tui.help.wintools")),
+        ("C", tr("tui.help.cleanups")),
+        ("r", tr("tui.help.rescan")),
+        ("e", tr("tui.help.report")),
+        ("E", tr("tui.help.csv")),
+        ("d", tr("tui.help.delete")),
+        ("D", tr("tui.help.delete_permanent")),
+        ("d, then e", tr("tui.help.empty")),
+        ("?", tr("tui.help.toggle_help")),
+        ("q, Esc", tr("tui.help.quit")),
+        ("", String::new()),
+        ("Mouse", tr("tui.help.mouse")),
     ];
     let lines: Vec<Line> = rows
         .iter()
@@ -426,7 +585,7 @@ pub(super) fn draw_help_popup(f: &mut Frame, app: &mut App) {
                             .fg(theme::ACCENT)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(*desc),
+                    Span::raw(desc.clone()),
                 ])
             }
         })
@@ -653,6 +812,115 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn cleanup(name: &str, program: &str, args: &[&str]) -> crate::cleanups::Cleanup {
+        crate::cleanups::Cleanup {
+            name: name.to_string(),
+            program: program.to_string(),
+            args: args.iter().map(|a| (*a).to_string()).collect(),
+            confirm: true,
+            capture_output: true,
+        }
+    }
+
+    /// Picking a cleanup from the list is a click on the row it is drawn
+    /// on, not on the row above or below it.
+    ///
+    /// The entries wrap: a selected one carries its command underneath,
+    /// on a variable number of rows. Deriving the zones from a second
+    /// pass over the list — one row per entry — drifts the moment any
+    /// entry occupies more than one, which the selected one always does.
+    #[test]
+    fn every_cleanup_row_is_clickable_where_it_is_drawn() {
+        let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+        app.cleanups.visible = true;
+        app.cleanups.list = vec![
+            cleanup("Empty the recycle bin", "cleanmgr", &["/sagerun:1"]),
+            cleanup("Open a shell here", "cmd", &["/c", "start", "%d"]),
+            cleanup("Compress it", "compact", &["/c", "%p"]),
+        ];
+        app.cleanups.selected = 0;
+        let screen = render(&mut app, 100, 30);
+
+        for (index, entry) in app.cleanups.list.clone().iter().enumerate() {
+            let row = screen
+                .iter()
+                .position(|line| line.contains(&entry.name))
+                .map(|y| y as u16);
+            assert!(row.is_some(), "{:?} should be drawn", entry.name);
+            let y = row.unwrap_or_default();
+            let x = screen
+                .get(y as usize)
+                .and_then(|line| line.find(&entry.name))
+                .unwrap_or_default() as u16;
+
+            let action = format!("SelectCleanup({index})");
+            let zone = app
+                .click_zones
+                .iter()
+                .find(|zone| format!("{:?}", zone.action) == action);
+            assert!(zone.is_some(), "there should be a zone for {action}");
+            assert!(
+                zone.is_some_and(|zone| zone.contains(x, y)),
+                "{:?} is drawn at ({x},{y}) but its {action} zone does not cover it",
+                entry.name
+            );
+        }
+    }
+
+    /// The confirmation shows the command that will actually run, with
+    /// its placeholders already substituted.
+    ///
+    /// A prompt that showed the template would be asking about something
+    /// nobody can check: `%p` is the whole question. And the buttons
+    /// under it have to be clickable where they land, which the resolved
+    /// command's length moves.
+    #[test]
+    fn a_cleanup_confirmation_shows_the_resolved_command_and_clickable_buttons(
+    ) -> anyhow::Result<()> {
+        let mut app = App::new(Tree::placeholder(PathBuf::from("root")));
+        let target = PathBuf::from("root").join("big.iso");
+        let command =
+            crate::cleanups::resolve(&cleanup("Compress it", "compact", &["/c", "%p"]), &target)?;
+        let preview = command.preview();
+        app.cleanups.pending = Some(crate::tui::app::PendingCleanup {
+            name: "Compress it".to_string(),
+            command,
+            capture_output: true,
+        });
+        let screen = render(&mut app, 100, 30);
+
+        assert!(
+            screen.iter().any(|line| line.contains("big.iso")),
+            "the confirmation should name the resolved target, not %p: {preview}"
+        );
+        assert!(
+            !screen.iter().any(|line| line.contains("%p")),
+            "an unsubstituted placeholder means the prompt is showing the template"
+        );
+
+        for (label, action_name) in [("Y ]es", "ConfirmCleanup"), ("N ]o", "CancelCleanup")] {
+            let mut found = None;
+            for (y, row) in screen.iter().enumerate() {
+                if let Some(x) = row.find(label) {
+                    found = Some((x as u16, y as u16));
+                    break;
+                }
+            }
+            assert!(found.is_some(), "the {label:?} button should be drawn");
+            let (x, y) = found.unwrap_or_default();
+            let zone = app
+                .click_zones
+                .iter()
+                .rev()
+                .find(|zone| format!("{:?}", zone.action) == action_name);
+            assert!(
+                zone.is_some_and(|zone| zone.contains(x, y)),
+                "{label:?} is drawn at ({x},{y}) but its {action_name} zone does not cover it"
+            );
+        }
+        Ok(())
     }
 
     /// The "Empty" button exists only for directories.

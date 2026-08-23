@@ -14,14 +14,23 @@
 //! be its equivalent cannot drift apart.
 
 use crate::gui::app::{FileView, GuiApp};
+use crate::i18n::tr_with;
 use eframe::egui::{self};
 
 use super::modal::{dismiss_top, modal_is_open};
 
 pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
-    let editing_text = ctx.wants_keyboard_input();
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && modal_is_open(app) {
+    let editing_text = ctx.egui_wants_keyboard_input();
+    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if escape && modal_is_open(app) {
         dismiss_top(app);
+        return;
+    }
+    // Esc with nothing open stops a scan. It is the key every other
+    // "stop what you are doing" in this app answers to, and a scan of a
+    // whole volume is the one thing here long enough to want stopping.
+    if escape && !editing_text && app.scan_is_running() {
+        app.cancel_scan();
         return;
     }
     // A modal is modal for the keyboard too. Without this, pressing Del
@@ -127,26 +136,35 @@ pub(super) fn handle_shortcuts(app: &mut GuiApp, ctx: &egui::Context) {
 }
 
 pub(super) fn choose_folder(app: &mut GuiApp) {
-    if let Some(path) = rfd::FileDialog::new()
-        .set_directory(&app.tree.root_path)
-        .pick_folder()
-    {
+    // Opened where the scan is, which with several roots is the first of
+    // them: the tree's own `root_path` is the label `Selected locations`
+    // and names no directory for the dialog to start in.
+    let start = app
+        .tree
+        .roots
+        .first()
+        .map(|root| root.path.clone())
+        .unwrap_or_else(|| app.tree.root_path.clone());
+    if let Some(path) = rfd::FileDialog::new().set_directory(&start).pick_folder() {
         if let Err(e) = app.open_folder(&path) {
-            app.status = Some(format!("Scan failed: {e}"));
+            app.status = Some(tr_with("status.scan_failed", &[("error", &e.to_string())]));
         }
     }
 }
 
 pub(super) fn refresh(app: &mut GuiApp) {
     if let Err(e) = app.refresh_scan() {
-        app.status = Some(format!("Refresh failed: {e}"));
+        app.status = Some(tr_with(
+            "status.refresh_failed",
+            &[("error", &e.to_string())],
+        ));
     }
 }
 
 pub(super) fn open_selected(app: &mut GuiApp) {
     if let Some(path) = app.selected_fs_path() {
         if let Err(e) = crate::util::open_path(&path) {
-            app.status = Some(format!("Open failed: {e}"));
+            app.status = Some(tr_with("status.open_failed", &[("error", &e.to_string())]));
         }
     }
 }
@@ -159,17 +177,26 @@ pub(super) fn reveal_selected(app: &mut GuiApp) {
             path.parent().unwrap_or(&path).to_path_buf()
         };
         if let Err(e) = crate::util::open_in_file_manager(&target) {
-            app.status = Some(format!("Explorer failed: {e}"));
+            app.status = Some(tr_with(
+                "status.reveal_failed",
+                &[("error", &e.to_string())],
+            ));
         }
     }
 }
 
 pub(super) fn copy_path(app: &mut GuiApp) {
     if let Some(path) = app.selected_fs_path() {
-        let text = path.display().to_string();
+        // The spelling a person would type, not the canonical one: what
+        // lands on the clipboard is going into someone else's address
+        // bar or command line, and `\\?\C:\...` is refused by most of
+        // them. See `util::display_path`.
+        let text = crate::util::display_path(&path);
         match crate::util::copy_to_clipboard(&text) {
-            Ok(()) => app.status = Some(format!("Copied: {text}")),
-            Err(e) => app.status = Some(format!("Copy failed: {e}")),
+            Ok(()) => app.status = Some(tr_with("status.copied", &[("path", &text)])),
+            Err(e) => {
+                app.status = Some(tr_with("status.copy_failed", &[("error", &e.to_string())]))
+            }
         }
     }
 }
@@ -180,9 +207,25 @@ pub(super) fn export_csv(app: &mut GuiApp) {
         .set_file_name("rustdirstat.csv")
         .save_file()
     {
-        match crate::csv_export::write_csv_to_file(&app.tree.root_path, &app.tree.root, &path) {
-            Ok(()) => app.status = Some(format!("Exported: {}", path.display())),
-            Err(e) => app.status = Some(format!("Export failed: {e}")),
+        // `write_tree_csv`, not `write_csv_to_file`: with more than one
+        // root the tree's `root_path` is the label `Selected locations`,
+        // so every row came out as `Selected locations\Users\report.docx`
+        // — a path that exists nowhere, in the file whose only purpose is
+        // to be read by something else. It writes each root against its
+        // own path, and a single-root tree exactly as before.
+        match crate::csv_export::write_tree_csv(&app.tree, &path) {
+            Ok(()) => {
+                app.status = Some(tr_with(
+                    "status.exported",
+                    &[("path", &crate::util::display_path(&path))],
+                ))
+            }
+            Err(e) => {
+                app.status = Some(tr_with(
+                    "status.export_failed",
+                    &[("error", &e.to_string())],
+                ))
+            }
         }
     }
 }

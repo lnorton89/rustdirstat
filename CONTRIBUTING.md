@@ -125,17 +125,17 @@ Two things about that config are deliberate, and worth knowing before you
 move a version by hand:
 
 - **Only patch bumps are grouped.** Dependabot classifies an update by its
-  literal version segments, so egui `0.29 -> 0.30` reaches it as a *minor* —
+  literal version segments, so egui `0.36 -> 0.37` reaches it as a *minor* —
   while under cargo that is exactly the breaking one, and most of this
   tree is still `0.x`. Anything above patch therefore arrives as its own
   PR by design. If you are batching upgrades by hand, batch them the same
   way.
-- **The egui stack does not move.** `eframe`, `egui`, and `egui_extras`
-  are ignored above patch, because leaving 0.29 behind is a project with
-  its own branch rather than a dependency bump — CLAUDE.md has the
-  specifics, and `deny.toml` carries the four advisories that stay ignored
-  until it happens. Don't raise those three in a PR that is about
-  something else.
+- **The egui stack moves again, one release at a time.** `eframe`,
+  `egui`, and `egui_extras` were ignored above patch while the tree was
+  held at 0.29; 0.3.0 moved them to 0.36 and lifted the ignore. Take the
+  minor PRs as they come — the reason the last migration cost three
+  redesigned subsystems is that six of them were skipped. CLAUDE.md
+  records what that one changed.
 
 `rust-toolchain.toml`, `flake.lock`, and the `dtolnay/rust-toolchain`
 action pin are all outside what Dependabot can see. Those move by hand, in
@@ -186,7 +186,17 @@ Cutting a release, in this order:
 4. Merge (a merge commit, never a squash — the changelog pins the
    individual commit hashes), then tag the merge commit, annotated to
    match the existing tags: `git tag -a v0.3.0 -m "rustdirstat v0.3.0"`,
-   and push the tag. The tag push triggers the release workflow.
+   and push the tag. The tag push triggers the release workflow, whose
+   first job re-checks the tag against `Cargo.toml` and stops before
+   creating the draft if they disagree. Step 1 is checked twice on
+   purpose: the changelog generator only sees the version when it is
+   run, so a bump that is skipped, mistyped, or made after the section
+   was written would otherwise reach the tag unnoticed — and every
+   asset *filename* comes from the tag while the version *inside* the
+   `.deb`, the `.rpm` and the binaries comes from the crate. Those
+   disagreeing is the one release defect that looks fine from the
+   outside: apt reads the internal version, sees the release already
+   installed, and declines the upgrade.
 
 The point of writing the section first is that the tag then names a tree
 whose changelog is already finished. `v0.2.1` was cut the other way

@@ -15,14 +15,16 @@
 //! that exists — which for a delete would mean acting on the parent.
 
 use super::*;
+use crate::i18n::{tr, tr_with};
 
 /// Shown when a queued deletion names something the tree no longer has.
 ///
 /// The usual way to get one is a rescan between queuing the delete and
 /// confirming it: index paths are only meaningful against the tree they
 /// came from.
-pub(in crate::tui) const STALE_TARGET: &str =
-    "That item is no longer in the scan — rescan and try again";
+pub(in crate::tui) fn stale_target() -> String {
+    crate::i18n::tr("status.stale_target")
+}
 
 pub(in crate::tui) enum RemovedExt {
     File(Option<Category>),
@@ -176,16 +178,36 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let filename = format!("rustdirstat-report-{secs}.txt");
+        // At the top of a multi-root scan there is no single path to
+        // head the report with — `current_path` would give the label
+        // standing in for the roots — so the whole tree is written, one
+        // section per root, each against its own path.
+        let at_top = self.path_indices.is_empty() && self.tree.is_multi_root();
         let path = self.current_path();
-        match crate::report::write_report_to_file(
-            &path,
-            self.current_node(),
-            50,
-            4,
-            std::path::Path::new(&filename),
-        ) {
-            Ok(()) => self.message = Some(format!("Report written to {filename}")),
-            Err(e) => self.message = Some(format!("Failed to write report: {e}")),
+        let written = if at_top {
+            crate::report::write_tree_report_to_file(
+                &self.tree,
+                50,
+                4,
+                std::path::Path::new(&filename),
+            )
+        } else {
+            crate::report::write_report_to_file(
+                &path,
+                self.current_node(),
+                50,
+                4,
+                std::path::Path::new(&filename),
+            )
+        };
+        match written {
+            Ok(()) => self.message = Some(tr_with("status.report_written", &[("path", &filename)])),
+            Err(e) => {
+                self.message = Some(tr_with(
+                    "status.report_failed",
+                    &[("error", &e.to_string())],
+                ))
+            }
         }
     }
 
@@ -195,14 +217,96 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let filename = format!("rustdirstat-export-{secs}.csv");
+        // Same reasoning as the report above: at the top of a
+        // multi-root scan every row would be built from a label rather
+        // than a path, which is worthless to whatever consumes the CSV.
+        let at_top = self.path_indices.is_empty() && self.tree.is_multi_root();
         let path = self.current_path();
-        match crate::csv_export::write_csv_to_file(
-            &path,
-            self.current_node(),
-            std::path::Path::new(&filename),
-        ) {
-            Ok(()) => self.message = Some(format!("CSV written to {filename}")),
-            Err(e) => self.message = Some(format!("Failed to write CSV: {e}")),
+        let written = if at_top {
+            crate::csv_export::write_tree_csv(&self.tree, std::path::Path::new(&filename))
+        } else {
+            crate::csv_export::write_csv_to_file(
+                &path,
+                self.current_node(),
+                std::path::Path::new(&filename),
+            )
+        };
+        match written {
+            Ok(()) => self.message = Some(tr_with("status.csv_written", &[("path", &filename)])),
+            Err(e) => {
+                self.message = Some(tr_with("status.csv_failed", &[("error", &e.to_string())]))
+            }
+        }
+    }
+
+    /// Resolves a cleanup against the highlighted entry and either asks
+    /// or runs it.
+    ///
+    /// The path resolves *exactly* — `path_for`, never the forgiving
+    /// lookup — for the same reason the delete path does: a stale
+    /// position must refuse rather than act on the nearest surviving
+    /// ancestor, and this one runs a program the app knows nothing about.
+    pub(in crate::tui) fn request_cleanup(&mut self, idx: usize) {
+        let Some(cleanup) = self.cleanups.list.get(idx).cloned() else {
+            return;
+        };
+        // The highlighted entry, resolved the way every other operation
+        // here resolves one: the current directory's index path plus the
+        // child's own index, looked up exactly.
+        let Some(orig_idx) = self
+            .display_children()
+            .get(self.selected)
+            .map(|(idx, _)| *idx)
+        else {
+            self.message = Some(crate::cleanups::CleanupError::NoTarget.to_string());
+            return;
+        };
+        let mut full_index_path = self.path_indices.clone();
+        full_index_path.push(orig_idx);
+        let Some(target) = self.tree.path_for(&full_index_path) else {
+            self.message = Some(crate::cleanups::CleanupError::NoTarget.to_string());
+            return;
+        };
+        let command = match crate::cleanups::resolve(&cleanup, &target) {
+            Ok(command) => command,
+            Err(error) => {
+                self.message = Some(format!("{}: {error}", cleanup.name));
+                return;
+            }
+        };
+        let pending = crate::tui::app::PendingCleanup {
+            name: cleanup.name.clone(),
+            command,
+            capture_output: cleanup.capture_output,
+        };
+        if cleanup.confirm {
+            self.cleanups.pending = Some(pending);
+        } else {
+            self.start_cleanup(pending);
+        }
+    }
+
+    pub(in crate::tui) fn confirm_cleanup(&mut self) {
+        if let Some(pending) = self.cleanups.pending.take() {
+            self.start_cleanup(pending);
+        }
+    }
+
+    /// Runs a resolved cleanup, and reports what happened.
+    ///
+    /// Synchronous, like the Windows tools beside it: the terminal has
+    /// one status line and no way to show a spinner beside a list it is
+    /// not drawing, so a command that takes a while holds the frame —
+    /// which is at least honest about what is happening.
+    fn start_cleanup(&mut self, pending: crate::tui::app::PendingCleanup) {
+        self.cleanups.visible = false;
+        match crate::cleanups::run(&pending.command, pending.capture_output) {
+            Ok(output) if output.detail.is_empty() => self.message = Some(output.summary),
+            Ok(output) => {
+                let detail = output.detail.replace(char::is_whitespace, " ");
+                self.message = Some(format!("{}: {}", output.summary, detail.trim()));
+            }
+            Err(error) => self.message = Some(format!("{}: {error}", pending.name)),
         }
     }
 
@@ -210,7 +314,20 @@ impl App {
         let Some(tool) = crate::wintools::TOOLS.get(idx) else {
             return;
         };
-        match crate::wintools::run(idx, &self.tree.root_path) {
+        // The volume comes from where the user is standing, not from
+        // `root_path`: with several roots scanned that is a label, and
+        // `wintools` derives a volume from a path's first component — so
+        // the tools were being handed the first word of a UI string.
+        let volume = if self.tree.is_multi_root() {
+            let Some(path) = self.tree.root_for(&self.path_indices).map(|root| root.path) else {
+                self.message = Some(tr("status.no_single_volume_tui"));
+                return;
+            };
+            path
+        } else {
+            self.tree.root_path.clone()
+        };
+        match crate::wintools::run(idx, &volume) {
             // The TUI has one status line and no scrollback panel to put
             // a report in, so a tool's `detail` is folded onto the end of
             // its summary rather than dropped — truncated by the status
@@ -221,7 +338,7 @@ impl App {
                 let detail = output.detail.replace(char::is_whitespace, " ");
                 self.message = Some(format!("{}: {}", output.summary, detail.trim()));
             }
-            Err(e) => self.message = Some(format!("{}: {e}", tool.name)),
+            Err(e) => self.message = Some(format!("{}: {e}", tool.name())),
         }
         self.wintools.visible = false;
     }
@@ -262,10 +379,15 @@ impl App {
 
         match crate::util::move_path(&source, &dest) {
             Ok(()) => {
-                self.message = Some(format!("Moved to {}", dest.display()));
+                self.message = Some(tr_with(
+                    "status.moved_to",
+                    &[("path", &crate::util::display_path(&dest))],
+                ));
                 self.refresh_requested = true;
             }
-            Err(e) => self.message = Some(format!("Move failed: {e}")),
+            Err(e) => {
+                self.message = Some(tr_with("status.move_failed", &[("error", &e.to_string())]))
+            }
         }
     }
 
@@ -283,25 +405,45 @@ impl App {
         // does exist — which for a delete would mean confirming against
         // the *parent* directory and removing that instead.
         let Some(target) = self.tree.node_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
         let Some(path) = self.tree.path_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
 
         let is_dir = target.is_dir;
         let removed = Removed::deleting(target);
 
-        if pending.permanent {
+        // Reported, never propagated. These three were the only `?` on
+        // a filesystem call in this file, and the error they returned
+        // travelled out through `dispatch` and the event loop and ended
+        // the process — so a delete refused for the ordinary reasons
+        // (no permission, the file open in something else, a read-only
+        // volume) closed the app instead of saying so, on the one
+        // keystroke where the user is most owed an explanation. Every
+        // other operation here already writes to `message`.
+        let outcome = if pending.permanent {
             if is_dir {
-                std::fs::remove_dir_all(&path)?;
+                std::fs::remove_dir_all(&path)
             } else {
-                std::fs::remove_file(&path)?;
+                std::fs::remove_file(&path)
             }
         } else {
-            trash::delete(&path).map_err(|e| anyhow::anyhow!("failed to move to trash: {e}"))?;
+            trash::delete(&path).map_err(|e| std::io::Error::other(e.to_string()))
+        };
+        if let Err(error) = outcome {
+            // Nothing is subtracted from the tree: it still matches the
+            // disk, because nothing was removed from either.
+            self.message = Some(tr_with(
+                "status.delete_refused",
+                &[
+                    ("path", &crate::util::display_path(&path)),
+                    ("error", &error.to_string()),
+                ],
+            ));
+            return Ok(());
         }
 
         let parent = self.subtract_along_current_path(&removed);
@@ -310,12 +452,14 @@ impl App {
         }
 
         self.after_removal();
-        let verb = if pending.permanent {
-            "Permanently deleted"
-        } else {
-            "Moved to trash"
-        };
-        self.message = Some(format!("{verb}: {}", path.display()));
+        self.message = Some(tr_with(
+            if pending.permanent {
+                "status.deleted_permanently"
+            } else {
+                "status.moved_to_trash"
+            },
+            &[("path", &crate::util::display_path(&path))],
+        ));
         Ok(())
     }
 
@@ -338,11 +482,11 @@ impl App {
         // Same as `confirm_delete`: a stale path must not resolve to the
         // nearest surviving ancestor and empty *that*.
         let Some(target) = self.tree.node_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
         let Some(path) = self.tree.path_for(&full_index_path) else {
-            self.message = Some(STALE_TARGET.to_string());
+            self.message = Some(stale_target());
             return Ok(());
         };
 
@@ -357,9 +501,15 @@ impl App {
         // subtraction below is only correct for a *complete* emptying.
         match crate::util::empty_directory_to_trash(&path)? {
             crate::util::EmptyOutcome::Incomplete { unreadable } => {
-                self.message = Some(format!(
-                    "Nothing was emptied: {unreadable} entr{} could not be read",
-                    if unreadable == 1 { "y" } else { "ies" }
+                // Two whole sentences rather than a spliced "entr" +
+                // "y"/"ies": a plural is not a suffix in every language.
+                self.message = Some(tr_with(
+                    if unreadable == 1 {
+                        "status.empty.incomplete_one_tui"
+                    } else {
+                        "status.empty.incomplete_many_tui"
+                    },
+                    &[("count", &unreadable.to_string())],
                 ));
                 self.refresh_requested = true;
                 return Ok(());
@@ -370,17 +520,23 @@ impl App {
                 first_error,
             } => {
                 let failed = total - done;
-                self.message = Some(match first_error {
-                    Some(error) => format!(
-                        "Emptied {done} of {total} items; {failed} could not be moved \
-                         to trash ({error})"
-                    ),
-                    None => {
-                        format!(
-                            "Emptied {done} of {total} items; {failed} could not be moved to trash"
-                        )
+                let mut fields = vec![
+                    ("done", done.to_string()),
+                    ("total", total.to_string()),
+                    ("failed", failed.to_string()),
+                ];
+                let key = match first_error {
+                    Some(error) => {
+                        fields.push(("error", error));
+                        "status.empty.partial_with_error_tui"
                     }
-                });
+                    None => "status.empty.partial_tui",
+                };
+                let fields: Vec<(&str, &str)> = fields
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                self.message = Some(tr_with(key, &fields));
                 self.refresh_requested = true;
                 return Ok(());
             }
@@ -402,7 +558,10 @@ impl App {
         node.children.clear();
 
         self.after_removal();
-        self.message = Some(format!("Emptied: {}", path.display()));
+        self.message = Some(tr_with(
+            "status.emptied",
+            &[("path", &crate::util::display_path(&path))],
+        ));
         Ok(())
     }
 

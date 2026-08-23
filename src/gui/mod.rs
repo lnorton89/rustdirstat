@@ -14,6 +14,7 @@
 //! this front end has instead.
 
 mod app;
+mod flags;
 mod icons;
 mod shell_icons;
 mod treemap_layout;
@@ -22,11 +23,11 @@ mod ui;
 use anyhow::Result;
 use std::path::PathBuf;
 
-pub fn run(root: PathBuf) -> Result<()> {
+pub fn run(roots: Vec<PathBuf>) -> Result<()> {
     // Open the native shell immediately; the initial scan runs on the same
     // background path as later rescans so a large drive never looks like a
     // failed launch while the process is busy walking the filesystem.
-    let gui_app = app::GuiApp::loading(root);
+    let gui_app = app::GuiApp::loading(roots);
 
     let options = native_options();
 
@@ -35,7 +36,12 @@ pub fn run(root: PathBuf) -> Result<()> {
         options,
         Box::new(|_cc| Ok(Box::new(gui_app))),
     )
-    .map_err(|e| anyhow::anyhow!("GUI failed: {e}"))
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            crate::i18n::tr_with("status.gui_failed", &[("error", &e.to_string())])
+        )
+    })
 }
 
 fn native_options() -> eframe::NativeOptions {
