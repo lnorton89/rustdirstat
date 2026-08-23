@@ -154,6 +154,30 @@ assets = [
     { source = "LICENSE", dest = "/usr/share/doc/rustdirstat/LICENSE", mode = "644", doc = true },
 ]
 
+# The same dlopen problem the .deb has, answered the way RPM allows.
+# Depending on package *names* here would mean picking a distribution:
+# Fedora calls it libX11 and openSUSE calls it libX11-6. Sonames are
+# what every RPM distribution's packages already declare they provide,
+# so this resolves on both without naming either — and it is the same
+# form rpm's own automatic dependency generator emits for the libraries
+# that *are* linked.
+#
+# Weak dependencies (`recommends`) rather than hard ones, matching the
+# .deb: dnf installs them by default, and `--setopt=install_weak_deps=0`
+# still gets a terminal-only install on a headless machine.
+[package.metadata.generate-rpm.recommends]
+"libwayland-client.so.0()(64bit)" = "*"
+"libwayland-egl.so.1()(64bit)" = "*"
+"libEGL.so.1()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libX11-xcb.so.1()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+"libdbus-1.so.3()(64bit)" = "*"
+"libvulkan.so.1()(64bit)" = "*"
+
 # Only the brand-asset generator needs these: `cargo run --example
 # brand_assets` re-renders the PNGs in `assets/brand/` from `src/brand.rs`.
 # Both are already in the tree as eframe dependencies, so this pulls
