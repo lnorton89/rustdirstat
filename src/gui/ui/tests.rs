@@ -3743,12 +3743,15 @@ fn a_frame_at_the_tile_budget_fits_the_budget() {
 
     assert!(
         tiles > 30_000,
-        "the fixture drew only {tiles} tiles at {WIDTH}x{HEIGHT}; it is meant to          reach the {} tile budget, and measuring a frame that does not is          measuring nothing",
+        "the fixture drew only {tiles} tiles at {WIDTH}x{HEIGHT}; it is meant to reach \
+         the {} tile budget, and measuring a frame that does not reach it is measuring \
+         nothing",
         crate::gui::treemap_layout::MAX_TILES
     );
     assert!(
         median <= budget,
-        "the median frame took {median:?} against a {budget:?} budget,          drawing {tiles} tiles at {WIDTH}x{HEIGHT}"
+        "the median frame took {median:?} against a {budget:?} budget, drawing \
+         {tiles} tiles at {WIDTH}x{HEIGHT}"
     );
 }
 
