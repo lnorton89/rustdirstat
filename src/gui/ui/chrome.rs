@@ -557,13 +557,24 @@ pub(super) fn draw_status_bar(app: &mut GuiApp, ui: &mut egui::Ui) {
                     // — on a volume with no hard links this is zero, and
                     // a permanent "0 B in hard links" is noise.
                     if let Some(shared) = app.hard_link_bytes() {
+                        // In the same unit as the total beside it: the
+                        // sentence is "of that, this much is shared", and
+                        // a correction in on-disk bytes next to a logical
+                        // total is two units in one line.
                         ui.label(
-                            RichText::new(format!("· {} shared by hard links", size_label(shared, app.use_physical)))
-                                .color(palette().secondary_text),
+                            RichText::new(crate::i18n::tr_with(
+                                "status.hard_links",
+                                &[(
+                                    "size",
+                                    &size_label(
+                                        shared.effective(app.use_physical),
+                                        app.use_physical,
+                                    ),
+                                )],
+                            ))
+                            .color(palette().secondary_text),
                         )
-                        .on_hover_text(
-                            "Counted once per name, the way the rows above do. This is how                              much of the total is the same bytes reached through more than                              one of them.",
-                        );
+                        .on_hover_text(crate::i18n::tr("status.hard_links_hover"));
                     }
                 });
             });

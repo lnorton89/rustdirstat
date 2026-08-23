@@ -113,7 +113,10 @@ impl Scan {
 /// not a set.
 pub struct HardLinks {
     shards: Vec<std::sync::Mutex<std::collections::HashSet<crate::platform::FileId>>>,
-    duplicate_bytes: AtomicU64,
+    /// Both units, because the figure is shown beside a total that
+    /// follows the logical/physical toggle. See [`SharedBytes`].
+    duplicate_logical: AtomicU64,
+    duplicate_physical: AtomicU64,
 }
 
 /// How many independent locks the ledger keeps.
@@ -129,7 +132,8 @@ impl Default for HardLinks {
             shards: (0..HARD_LINK_SHARDS)
                 .map(|_| std::sync::Mutex::new(std::collections::HashSet::new()))
                 .collect(),
-            duplicate_bytes: AtomicU64::new(0),
+            duplicate_logical: AtomicU64::new(0),
+            duplicate_physical: AtomicU64::new(0),
         }
     }
 }
@@ -137,7 +141,7 @@ impl Default for HardLinks {
 impl HardLinks {
     /// Records one file, and adds its bytes to the running duplicate
     /// total if this identity has been seen before.
-    fn observe(&self, id: crate::platform::FileId, physical: u64) {
+    fn observe(&self, id: crate::platform::FileId, logical: u64, physical: u64) {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         id.hash(&mut hasher);
@@ -153,12 +157,17 @@ impl HardLinks {
             return;
         };
         if !seen.insert(id) {
-            self.duplicate_bytes.fetch_add(physical, Ordering::Relaxed);
+            self.duplicate_logical.fetch_add(logical, Ordering::Relaxed);
+            self.duplicate_physical
+                .fetch_add(physical, Ordering::Relaxed);
         }
     }
 
-    fn duplicate_bytes(&self) -> u64 {
-        self.duplicate_bytes.load(Ordering::Relaxed)
+    fn duplicate_bytes(&self) -> crate::model::SharedBytes {
+        crate::model::SharedBytes {
+            logical: self.duplicate_logical.load(Ordering::Relaxed),
+            physical: self.duplicate_physical.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -306,14 +315,18 @@ fn scan_many_inner(
     }
     let mut children = Vec::with_capacity(roots.len());
     let mut described = Vec::with_capacity(roots.len());
-    let mut shared: Option<u64> = None;
+    let mut shared: Option<crate::model::SharedBytes> = None;
     for root in roots {
         match scan_with_options(root, progress, options)? {
             Scan::Cancelled => return Ok(Scan::Cancelled),
             Scan::Completed(tree) => {
                 let tree = *tree;
                 if let Some(bytes) = tree.hard_link_bytes {
-                    shared = Some(shared.unwrap_or(0).saturating_add(bytes));
+                    let running = shared.unwrap_or_default();
+                    shared = Some(crate::model::SharedBytes {
+                        logical: running.logical.saturating_add(bytes.logical),
+                        physical: running.physical.saturating_add(bytes.physical),
+                    });
                 }
                 described.push(crate::model::Root {
                     path: tree.root_path,
@@ -1329,7 +1342,7 @@ fn leaf_node(entry: EntryInfo, name: OsString, links: Option<&HardLinks>) -> (No
     // sum is the same bytes twice.
     if let (Some(ledger), Some(id)) = (links, entry.file_id) {
         if !entry.is_symlink && worth_tracking(&entry) {
-            ledger.observe(id, entry.physical);
+            ledger.observe(id, entry.len, entry.physical);
         }
     }
     if entry.is_symlink {
@@ -1690,7 +1703,8 @@ mod tests {
         assert_eq!(chunk.size, logical, "the logical size is what was written");
         assert!(
             chunk.physical_size > logical,
-            "{} bytes on disk for a {logical}-byte file is the logical size again,              not an allocation",
+            "{} bytes on disk for a {logical}-byte file is the logical size again, \
+             not an allocation",
             chunk.physical_size
         );
         assert_eq!(
@@ -1967,12 +1981,25 @@ mod tests {
             anyhow::bail!("the scan was asked to measure and reported nothing");
         };
         assert!(
-            shared >= 8_192,
-            "the second name should account for the file's bytes again, got {shared}"
+            shared.logical >= 8_192,
+            "the second name should account for the file's bytes again, got {shared:?}"
         );
         assert!(
-            tree.root.physical_size >= shared,
-            "the reported overlap cannot exceed the total it is part of"
+            shared.physical >= 8_192,
+            "and the same again in on-disk bytes, got {shared:?}"
+        );
+        // Both units, and each bounded by the total it corrects. The
+        // figure is shown beside a total that follows the
+        // logical/physical toggle, so it has to exist in whichever unit
+        // that toggle is in — one number labelled by the other's unit is
+        // the bug this pair replaced.
+        assert!(
+            tree.root.size >= shared.logical,
+            "the reported overlap cannot exceed the logical total it is part of"
+        );
+        assert!(
+            tree.root.physical_size >= shared.physical,
+            "nor the on-disk total"
         );
         Ok(())
     }

@@ -69,11 +69,17 @@ pub(super) fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
     // Only at the top, where the figure describes the whole scan, and
     // only when there is something to say: a permanent "0 B shared" on a
     // volume without hard links is noise. See `scanner::HardLinks`.
-    let hard_link_extra = match app.tree.hard_link_bytes.filter(|bytes| *bytes > 0) {
+    //
+    // In the same unit as the size it corrects — the header follows the
+    // physical toggle, and so must this.
+    let hard_link_extra = match app.tree.hard_link_bytes.filter(|bytes| !bytes.is_zero()) {
         Some(shared) if app.path_indices.is_empty() => {
             format!(
                 "   ·   {}",
-                tr_with("tui.header.hard_links", &[("size", &human_bytes(shared))])
+                tr_with(
+                    "tui.header.hard_links",
+                    &[("size", &human_bytes(shared.effective(app.use_physical)))]
+                )
             )
         }
         _ => String::new(),

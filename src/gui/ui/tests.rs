@@ -1007,13 +1007,15 @@ fn theme_layers_are_distinct_and_copy_is_readable() {
         if p.mode.is_dark() {
             assert!(
                 step(p.raised, p.hover) >= MIN_STEP,
-                "{name}: a dark theme's hover must be lighter than the surface it lifts,                  but it is {:.2} L* away",
+                "{name}: a dark theme's hover must be lighter than the surface it lifts, \
+                 but it is {:.2} L* away",
                 step(p.raised, p.hover)
             );
         } else {
             assert!(
                 step(p.raised, p.hover) <= -MIN_STEP,
-                "{name}: a light theme's hover must be darker than the surface it lifts,                  but it is {:.2} L* away",
+                "{name}: a light theme's hover must be darker than the surface it lifts, \
+                 but it is {:.2} L* away",
                 step(p.raised, p.hover)
             );
         }

@@ -133,15 +133,15 @@ pub struct Tree {
     /// content when browsing the scan root, the way WinDirStat does.
     pub volume_free: Option<u64>,
     pub volume_total: Option<u64>,
-    /// How many of `root.physical_size`'s bytes were counted more than
-    /// once, because two names pointed at one file.
+    /// How many of the root's bytes were counted more than once, because
+    /// two names pointed at one file.
     ///
     /// `None` when the scan did not measure it — see
     /// `ScanOptions::count_hard_links`, which is on by default only where
     /// measuring is free. The totals themselves deliberately still count
     /// per pathname, matching what the rows show; this is the correction
     /// a front end can report beside them.
-    pub hard_link_bytes: Option<u64>,
+    pub hard_link_bytes: Option<SharedBytes>,
     /// The scanned roots, when there is more than one.
     ///
     /// Empty for the ordinary single-root scan, which keeps every index
@@ -154,6 +154,39 @@ pub struct Tree {
     /// belongs to `roots[i]` and an index path's first component selects
     /// which real path the rest of it is relative to.
     pub roots: Vec<Root>,
+}
+
+/// Bytes a scan counted twice, in both of the units a size can be shown
+/// in.
+///
+/// Both, because the figure is only ever displayed *beside* a total —
+/// "of that, this much is shared" — and a total that follows the
+/// logical/physical toggle while the correction beside it does not is two
+/// units in one sentence. It read as an on-disk figure labelled as a
+/// logical one, and it did not move when the toggle did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SharedBytes {
+    pub logical: u64,
+    pub physical: u64,
+}
+
+impl SharedBytes {
+    /// The figure matching the size mode the rest of the window is in,
+    /// named to match [`Node::effective_size`] because it answers the
+    /// same question about the same toggle.
+    pub fn effective(self, physical: bool) -> u64 {
+        if physical {
+            self.physical
+        } else {
+            self.logical
+        }
+    }
+
+    /// Whether there is anything to report. A volume with no hard links
+    /// measures zero, and a permanent "0 B shared" is noise.
+    pub fn is_zero(self) -> bool {
+        self.logical == 0 && self.physical == 0
+    }
 }
 
 /// One scanned root of a multi-root tree.

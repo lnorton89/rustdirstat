@@ -312,7 +312,8 @@ impl App {
         let volume = if self.tree.is_multi_root() {
             let Some(path) = self.tree.root_for(&self.path_indices).map(|root| root.path) else {
                 self.message = Some(
-                    "Open one of the scanned locations first: with several, there is no                      single volume for a maintenance tool"
+                    "Open one of the scanned locations first: with several, there is no \
+                     single volume for a maintenance tool"
                         .to_string(),
                 );
                 return;

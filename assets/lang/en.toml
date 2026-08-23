@@ -62,6 +62,9 @@
 "status.hard_links" = "· {size} shared by hard links"
 "status.hard_links_hover" = "Counted once per name, the way the rows above do. This is how much of the total is the same bytes reached through more than one of them."
 "status.scanning" = "Scanning · {files} files · {folders} folders · {size}"
+"status.scanning_folder" = "Scanning {folder}…"
+"status.hashing" = "Hashing duplicate candidates…"
+"status.running_tool" = "Running {tool}…"
 "status.scan_complete" = "Scan complete"
 "status.scan_cancelled" = "Scan cancelled"
 "status.scan_cancelling" = "Cancelling the scan…"
@@ -127,6 +130,10 @@
 "settings.language" = "Language"
 "settings.language.only_english" = "Only English is installed. A translation is a copy of the catalogue below, named for its language tag."
 "settings.language.folder" = "Translations live in {path}"
+"settings.language.write_template" = "Write a starter catalogue"
+"settings.language.write_template_hint" = "Puts a copy of the English catalogue in that folder as en.toml. Rename it for your language — de.toml, fr.toml — and translate the right-hand side of each line."
+"settings.language.written" = "Wrote {path}. Rename it for your language and translate the right-hand side."
+"settings.language.write_failed" = "Could not write the catalogue: {error}"
 "tooltip.show_view" = "Show {view}"
 
 # ----------------------------------------------------------- the terminal

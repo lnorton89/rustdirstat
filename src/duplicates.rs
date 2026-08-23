@@ -491,7 +491,8 @@ mod tests {
             assert_eq!(
                 group.files.len(),
                 5,
-                "a group was reported with {} of its files, which understates                  how many copies exist",
+                "a group was reported with {} of its files, which understates \
+                 how many copies exist",
                 group.files.len()
             );
         }

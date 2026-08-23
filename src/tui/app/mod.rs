@@ -860,7 +860,8 @@ mod tests {
         assert_eq!(
             app.tree.root.children.len(),
             1,
-            "and nothing should be subtracted from a tree the disk still agrees with              about this entry never having been removed by us"
+            "and nothing should be subtracted from a tree the disk still agrees with \
+             about this entry never having been removed by us"
         );
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())

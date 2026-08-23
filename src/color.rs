@@ -290,7 +290,8 @@ mod tests {
                     let hue = extension_hue(&ext);
                     assert!(
                         !(21.0..61.0).contains(&hue),
-                        ".{ext} hashes to hue {hue}, inside the band reserved                          around the directory color"
+                        ".{ext} hashes to hue {hue}, inside the band reserved \
+                         around the directory color"
                     );
                 }
             }

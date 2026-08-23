@@ -577,9 +577,26 @@ mod win {
                     // something to reason about; abandon the listing.
                     return None;
                 }
-                // SAFETY: the bounds check above proves the name lies
-                // inside the buffer, and `FileNameLength` is a byte
-                // count of UTF-16 code units.
+                // The name is *borrowed* out of the buffer rather than
+                // copied, and a `&[u16]` must be aligned — which is a
+                // stronger requirement than the record above, where
+                // `read_unaligned` made alignment irrelevant. So the one
+                // thing that would break it is checked rather than
+                // assumed, the same way `FileNameLength` is: `base` is
+                // 8-aligned (the buffer is `Vec<u64>`), so the slice is
+                // aligned exactly when `name_at` is even.
+                //
+                // In practice it always is — `NextEntryOffset` is a
+                // multiple of 8 and `FileName`'s offset is even — but
+                // "the kernel would not do that" is the assumption this
+                // whole function is written not to make.
+                if !name_at.is_multiple_of(2) {
+                    return None;
+                }
+                // SAFETY: the bounds check proves the name lies inside
+                // the buffer, the alignment check proves the pointer is
+                // aligned for `u16`, and `FileNameLength` is a byte count
+                // of UTF-16 code units.
                 let name = unsafe {
                     std::slice::from_raw_parts(base.add(name_at).cast::<u16>(), name_bytes / 2)
                 };
@@ -600,7 +617,16 @@ mod win {
                 if record.NextEntryOffset == 0 {
                     break;
                 }
-                offset += record.NextEntryOffset as usize;
+                // Every record starts on an 8-byte boundary, which is
+                // what keeps the name check above satisfiable at all. A
+                // chain that does not is a chain this code cannot follow
+                // — and following it anyway would mean reading the next
+                // "record" out of the middle of this one's name.
+                let step = record.NextEntryOffset as usize;
+                if !step.is_multiple_of(8) {
+                    return None;
+                }
+                offset += step;
                 if offset >= BUFFER_BYTES {
                     return None;
                 }

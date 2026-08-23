@@ -90,42 +90,71 @@ const THEME_LIST_HEIGHT: f32 = 330.0;
 /// into `lang/` beside the config, which is why the list is read from
 /// disk rather than from a table in the binary — a translation is content
 /// and content that needs a compiler is a translation nobody writes.
-fn draw_language(ui: &mut egui::Ui) {
+fn draw_language(app: &mut GuiApp, ui: &mut egui::Ui) {
     let palette = palette();
     let available = crate::i18n::available();
     let current = crate::i18n::language();
-    group(ui, Icon::Info, "Language", |ui| {
-        if available.len() == 1 {
-            ui.label(
-                RichText::new(crate::i18n::tr("settings.language.only_english"))
-                    .color(palette.secondary_text),
-            );
-        }
-        ui.horizontal_wrapped(|ui| {
-            for tag in &available {
-                if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
-                    crate::i18n::set_language(tag);
-                }
+    let mut wrote: Option<String> = None;
+    group(
+        ui,
+        Icon::Info,
+        &crate::i18n::tr("settings.language"),
+        |ui| {
+            if available.len() == 1 {
+                ui.label(
+                    RichText::new(crate::i18n::tr("settings.language.only_english"))
+                        .color(palette.secondary_text),
+                );
             }
-        });
-        ui.add_space(SPACE_XS);
-        ui.label(
-            RichText::new(crate::i18n::tr_with(
-                "settings.language.folder",
-                &[(
-                    "path",
-                    &crate::i18n::catalog_dir()
-                        .map(|dir| crate::util::display_path(&dir))
-                        .unwrap_or_default(),
-                )],
-            ))
-            .color(palette.secondary_text),
-        );
-    });
+            ui.horizontal_wrapped(|ui| {
+                for tag in &available {
+                    if ui.selectable_label(&current == tag, tag).clicked() && &current != tag {
+                        crate::i18n::set_language(tag);
+                    }
+                }
+            });
+            ui.add_space(SPACE_XS);
+            ui.label(
+                RichText::new(crate::i18n::tr_with(
+                    "settings.language.folder",
+                    &[(
+                        "path",
+                        &crate::i18n::catalog_dir()
+                            .map(|dir| crate::util::display_path(&dir))
+                            .unwrap_or_default(),
+                    )],
+                ))
+                .color(palette.secondary_text),
+            );
+            ui.add_space(SPACE_SM);
+            // The catalogue is compiled into the binary and ships in no
+            // package, so without this an installed build has no way to
+            // obtain the file the sentence above tells you to copy.
+            if ui
+                .button(crate::i18n::tr("settings.language.write_template"))
+                .on_hover_text(crate::i18n::tr("settings.language.write_template_hint"))
+                .clicked()
+            {
+                wrote = Some(match crate::i18n::write_starter_catalogue() {
+                    Ok(path) => crate::i18n::tr_with(
+                        "settings.language.written",
+                        &[("path", &crate::util::display_path(&path))],
+                    ),
+                    Err(error) => crate::i18n::tr_with(
+                        "settings.language.write_failed",
+                        &[("error", &error.to_string())],
+                    ),
+                });
+            }
+        },
+    );
+    if let Some(message) = wrote {
+        app.status = Some(message);
+    }
 }
 
 fn draw_appearance(app: &mut GuiApp, ui: &mut egui::Ui) {
-    draw_language(ui);
+    draw_language(app, ui);
     ui.add_space(SPACE_MD);
     let mut chosen: Option<&'static str> = None;
     group(ui, Icon::Palette, "Theme", |ui| {
@@ -551,9 +580,7 @@ fn tool_row(
                         if !supported {
                             button.on_disabled_hover_text("This tool exists only on Windows.");
                         } else if app.is_busy() {
-                            button.on_disabled_hover_text(
-                                "Another background operation is already running.",
-                            );
+                            button.on_disabled_hover_text(crate::i18n::tr("status.busy"));
                         }
                     },
                 );
@@ -722,7 +749,8 @@ fn draw_cleanups(app: &mut GuiApp, ui: &mut egui::Ui) {
             ui,
             Icon::Tools,
             "No cleanups configured",
-            "A cleanup is a command of your own, run against whatever is selected.              They live in the config file; nothing is set up by default.",
+            "A cleanup is a command of your own, run against whatever is selected. \
+             They live in the config file; nothing is set up by default.",
         );
         ui.add_space(SPACE_MD);
     }
@@ -762,14 +790,18 @@ fn draw_cleanups(app: &mut GuiApp, ui: &mut egui::Ui) {
     group(ui, Icon::Info, "How they work", |ui| {
         ui.label(
             RichText::new(
-                "Each cleanup names a program and its arguments as a list.                  %p is the full path, %n the name, %d the containing folder,                  and %% a literal per cent.",
+                "Each cleanup names a program and its arguments as a list. \
+                 %p is the full path, %n the name, %d the containing folder, \
+                 and %% a literal per cent.",
             )
             .color(palette.secondary_text),
         );
         ui.add_space(SPACE_XS);
         ui.label(
             RichText::new(
-                "No shell is involved: arguments are passed as they are, so a file                  name containing spaces, quotes or semicolons is data rather than                  syntax. Cleanups ask before running unless their entry says otherwise.",
+                "No shell is involved: arguments are passed as they are, so a file \
+                 name containing spaces, quotes or semicolons is data rather than \
+                 syntax. Cleanups ask before running unless their entry says otherwise.",
             )
             .color(palette.secondary_text),
         );

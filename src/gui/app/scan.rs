@@ -293,7 +293,7 @@ impl GuiApp {
 
     fn start_scan(&mut self, roots: Vec<PathBuf>, reset_workspace: bool) {
         if self.is_busy() {
-            self.status = Some("Another background operation is already running".to_string());
+            self.status = Some(crate::i18n::tr("status.busy"));
             return;
         }
         // Remember where the user is — by name identity, not index — so
@@ -378,7 +378,10 @@ impl GuiApp {
         self.scan_progress = Some(progress);
         self.scan_rx = Some(rx);
         self.scan_resets_workspace = reset_workspace;
-        self.status = Some(format!("Scanning {display}…"));
+        self.status = Some(crate::i18n::tr_with(
+            "status.scanning_folder",
+            &[("folder", &display)],
+        ));
     }
 
     /// Puts the app in the state it is in while a scan runs, without
@@ -443,7 +446,7 @@ impl GuiApp {
     pub(in crate::gui) fn cancel_scan(&mut self) {
         if let Some(progress) = &self.scan_progress {
             progress.cancel();
-            self.status = Some("Cancelling the scan…".to_string());
+            self.status = Some(crate::i18n::tr("status.scan_cancelling"));
         }
     }
 
@@ -453,21 +456,26 @@ impl GuiApp {
 
     pub(in crate::gui) fn busy_text(&self) -> Option<String> {
         if let Some(progress) = &self.scan_progress {
-            return Some(format!(
-                "Scanning · {} files · {} folders · {}",
-                progress.files.load(Ordering::Relaxed),
-                progress.dirs.load(Ordering::Relaxed),
-                human_bytes(progress.bytes.load(Ordering::Relaxed)),
+            return Some(crate::i18n::tr_with(
+                "status.scanning",
+                &[
+                    ("files", &progress.files.load(Ordering::Relaxed).to_string()),
+                    (
+                        "folders",
+                        &progress.dirs.load(Ordering::Relaxed).to_string(),
+                    ),
+                    ("size", &human_bytes(progress.bytes.load(Ordering::Relaxed))),
+                ],
             ));
         }
         self.duplicate_rx
             .as_ref()
-            .map(|_| "Hashing duplicate candidates…".to_string())
+            .map(|_| crate::i18n::tr("status.hashing"))
             .or_else(|| {
                 self.tools
                     .active_name
                     .as_ref()
-                    .map(|name| format!("Running {name}…"))
+                    .map(|name| crate::i18n::tr_with("status.running_tool", &[("tool", name)]))
             })
     }
 
@@ -746,7 +754,7 @@ impl GuiApp {
                     // a retired tree, so it is stopped, not just ignored.
                     self.cancel_extension_worker();
                     self.duplicate_groups.clear();
-                    self.status = Some("Scan complete".to_string());
+                    self.status = Some(crate::i18n::tr("status.scan_complete"));
                 }
                 ScanMessage::Cancelled => {
                     self.restore = None;

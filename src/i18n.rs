@@ -109,6 +109,34 @@ pub fn catalog_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|dir| dir.join("rustdirstat").join("lang"))
 }
 
+/// Writes the English catalogue into [`catalog_dir`], and says where.
+///
+/// Without this the feature is unreachable in an installed build. A
+/// translation is a copy of the English catalogue with the right-hand
+/// side rewritten — but the catalogue is `include_str!`'d into the
+/// binary, and no package or release archive carries a copy of it, so the
+/// only way to obtain one was to clone the source. The settings page
+/// said "a translation is a copy of the catalogue below" while offering a
+/// folder path and no catalogue.
+///
+/// Deliberately written as `en.toml`, which is the one name
+/// [`available`] skips and [`set_language`] never reads: it is a template
+/// to be renamed, not a translation that takes effect where it lands. An
+/// existing `en.toml` is overwritten for the same reason — it is a copy
+/// of what is compiled in, so the only version of it worth having is this
+/// build's.
+pub fn write_starter_catalogue() -> std::io::Result<std::path::PathBuf> {
+    let Some(dir) = catalog_dir() else {
+        return Err(std::io::Error::other(
+            "no configuration directory could be determined",
+        ));
+    };
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("en.toml");
+    std::fs::write(&path, ENGLISH)?;
+    Ok(path)
+}
+
 /// Switches language, or back to English.
 ///
 /// A tag with no catalogue is not an error: it selects English, which is
@@ -319,6 +347,56 @@ mod catalogue_tests {
             }
         }
         keys
+    }
+
+    /// And the other direction: every key the catalogue defines is one
+    /// the code actually asks for.
+    ///
+    /// The test above catches a key the code invents and the catalogue
+    /// lacks. This catches the opposite, which is quieter and was
+    /// therefore worse: seven keys — `status.scan_complete`,
+    /// `status.scanning`, `status.busy`, and the rest of the status bar —
+    /// sat in the catalogue while the code beside them held the English
+    /// literal. Nothing was broken enough to notice. A German user saw an
+    /// English status bar under a translated menu, and a translator who
+    /// translated those lines saw no effect anywhere.
+    ///
+    /// A key is "asked for" if its quoted text appears anywhere in `src`,
+    /// not only inside a `tr(` call: the inspector passes keys as plain
+    /// arguments to its own `row`/`section` helpers, and those are real
+    /// uses.
+    #[test]
+    fn every_key_the_catalogue_defines_is_asked_for() -> anyhow::Result<()> {
+        let mut source = String::new();
+        let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                // This module quotes example keys in its own docs and
+                // tests, which would vouch for keys nothing displays.
+                if path.file_name().and_then(|name| name.to_str()) == Some("i18n.rs") {
+                    continue;
+                }
+                source.push_str(&std::fs::read_to_string(&path)?);
+            }
+        }
+        let unused: Vec<&String> = english()
+            .keys()
+            .filter(|key| !source.contains(&format!("\"{key}\"")))
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "these keys are defined in assets/lang/en.toml but nothing asks for them, \
+             which means the text they describe is hardcoded somewhere: {unused:#?}"
+        );
+        Ok(())
     }
 
     /// A translation file may be partial, but it may not be *wrong*: every

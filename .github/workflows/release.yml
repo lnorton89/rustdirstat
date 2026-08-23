@@ -261,11 +261,22 @@ jobs:
       # and SBOM are uploaded — the staging directory with the raw
       # binaries, README, and LICENSE stays inside the build job where
       # it belongs.
-      # Notarisation, again only when the credentials exist. The archive
-      # is what is submitted, because it is what a user downloads — a
-      # signed binary inside an un-notarised zip is still quarantined by
-      # Gatekeeper.
-      - name: Notarise macOS archive
+      # Notarisation, again only when the credentials exist.
+      #
+      # A notarisation ticket is issued against the *binaries* inside
+      # whatever is submitted, not against the container — so what ships
+      # and what is submitted do not have to be the same file, which is
+      # just as well: `notarytool` accepts `.zip`, `.pkg` and `.dmg` and
+      # nothing else, and the macOS release archive is a `.tar.gz` for
+      # the same reason the Linux one is. Submitting the tarball, which
+      # is what this step used to do, fails outright.
+      #
+      # So a throwaway zip of the staging directory the Package step
+      # already built goes to Apple — the same signed binaries, byte for
+      # byte, as the tarball that ships — and is deleted afterwards.
+      # `ditto -c -k` is the archiver Apple documents for this; `zip`
+      # does not preserve the extended attributes a signature lives in.
+      - name: Notarise macOS binaries
         if: runner.os == 'macOS' && env.NOTARY_KEY != ''
         env:
           NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY_BASE64 }}
@@ -278,15 +289,18 @@ jobs:
           set -euo pipefail
           key="$RUNNER_TEMP/notary.p8"
           echo "$NOTARY_KEY" | base64 --decode > "$key"
-          archive="dist/rustdirstat-${TAG}-${TARGET}.tar.gz"
-          xcrun notarytool submit "$archive" \
+          staging="dist/rustdirstat-${TAG}-${TARGET}"
+          submission="$RUNNER_TEMP/notarize.zip"
+          ditto -c -k --keepParent "$staging" "$submission"
+          xcrun notarytool submit "$submission" \
             --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
             --wait --timeout 30m
-          rm -f "$key"
-          # No stapling: `stapler` works on app bundles and disk images,
-          # not on a tarball of two command-line binaries. The ticket is
-          # published to Apple's servers by the submission above, which is
-          # what Gatekeeper checks on first launch.
+          rm -f "$key" "$submission"
+          # No stapling: `stapler` works on app bundles, disk images and
+          # installer packages, not on a tarball of two command-line
+          # binaries. The ticket is published to Apple's servers by the
+          # submission above, which is what Gatekeeper checks on first
+          # launch.
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

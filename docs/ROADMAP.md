@@ -31,6 +31,7 @@ they are its deferred list, being worked through.
 | 12 | Signing path written, waiting only on certificates | done |
 | 13 | TUI parity: hard links, a scan that shows its work, cleanups, localization | done |
 | 14 | A bug pass over the code the release did not touch | done |
+| 15 | A review of the release's own changes | done |
 | 1 | Leave egui 0.29 behind (0.36) | done |
 | 2 | A scan you can stop (cancellation) | done |
 | 3 | Windows: one handle per directory (allocation size, scan-time file id) | done |
@@ -64,8 +65,8 @@ skipped. Each says which.
 
 | Item | Why not now | Earliest |
 |---|---|---|
-| **Localization: the rest of the strings** | The mechanism ships and both front ends are on it. Migrated in the window: menus, view names, status bar, settings pages, inspector. Migrated in the terminal: the header, the footer, every pane title, the list markers, the popup titles, and the whole help screen. Still English literals: the window's guide, about, maintenance and duplicates pages; the terminal's properties popup body, its prompt hints, and the status messages `tui::app::operations` writes; and the Windows tool descriptions, which are one table shared by both. Each is a mechanical pass now that `every_key_the_code_uses_is_in_the_catalogue` guards the result. | incremental |
-| **Signed installers** (Authenticode, macOS notarization) | **The workflow is written and inert.** `release.yml` signs the Windows binaries with `signtool`, signs the macOS binaries with a hardened runtime and a timestamp, and submits the macOS archive to `notarytool` — each step gated on its secret being set, so a release with no certificates behaves exactly as it does today. What is missing is the certificates themselves: an Authenticode certificate and an Apple Developer membership are bought, are tied to an identity, and cannot live in a public repository. Add the secrets named in the workflow comments and the next release is signed. | blocked on certificates only |
+| **Localization: the rest of the strings** | The mechanism ships and both front ends are on it. Migrated in the window: menus, view names, status bar, settings pages, inspector. Migrated in the terminal: the header, the footer, every pane title, the list markers, the popup titles, and the whole help screen. Still English literals: the window's guide, about, maintenance and duplicates pages; the terminal's properties popup body, its prompt hints, and the status messages `tui::app::operations` writes; and the Windows tool descriptions, which are one table shared by both. Also still English: the nine `Category::label()` names, which both front ends show. Each is a mechanical pass now that the catalogue is guarded in both directions — `every_key_the_code_uses_is_in_the_catalogue` catches a key the code invents, and `every_key_the_catalogue_defines_is_asked_for` catches the quieter opposite, a key translated by someone and displayed by nothing. Note that `assets/lang/de.toml` is a worked example in this repository, not a shipped translation: nothing packages it, and a user starts one with the Appearance page's *Write a starter catalogue* button instead. | incremental |
+| **Signed installers** (Authenticode, macOS notarization) | **The workflow is written and inert.** `release.yml` signs the Windows binaries with `signtool`, signs the macOS binaries with a hardened runtime and a timestamp, and submits a zip of the macOS binaries to `notarytool` (a zip because that is one of the three formats the notary service accepts, and the shipped archive is a tarball) — each step gated on its secret being set, so a release with no certificates behaves exactly as it does today. What is missing is the certificates themselves: an Authenticode certificate and an Apple Developer membership are bought, are tied to an identity, and cannot live in a public repository. Add the secrets named in the workflow comments and the next release is signed. | blocked on certificates only |
 | **AppImage** | The one packaging format in the 0.3.0 plan that did not land. Building one is easy; *verifying* one is not — it bundles a GUI's runtime and only a real desktop can say whether the bundle works, which is exactly the check nothing in this project can run. The `.deb`, the `.rpm` and the Nix flake already cover the distributions an AppImage would target. | when someone can test one |
 | **Publishing to crates.io** | Decided against for 0.3.0: `cargo install rustdirstat` would work, but it would build the GUI from source on every machine that ran it — pulling the whole egui/wgpu stack and the Linux windowing headers — to produce what the release archives already ship prebuilt. The package-manager manifests are the better answer to the same want. | unscheduled |
 
@@ -80,3 +81,12 @@ skipped. Each says which.
   `\\?\` path shown to something that is not the filesystem —
   [`0.3.0_BUG_PASS.md`](0.3.0_BUG_PASS.md). That file also records what
   was read and found sound, and what was not read at all.
+- **Six defects in the release's own 10,800 lines** — a `u16` slice built
+  at an alignment the same function refused to assume, a notarisation
+  step submitting a format Apple does not accept, ten string literals
+  that lost their line continuations, seven catalogue keys nothing asked
+  for, a translation feature with no way to obtain a catalogue, and a
+  hard-link figure in the wrong unit — in the second half of
+  [`0.3.0_BUG_PASS.md`](0.3.0_BUG_PASS.md). Two of the six now have a
+  check that catches the whole class: `tests/source_hygiene.rs` and
+  `every_key_the_catalogue_defines_is_asked_for`.

@@ -123,7 +123,7 @@ impl GuiApp {
     /// same log.
     fn start_cleanup(&mut self, pending: PendingCleanup) {
         if self.is_busy() {
-            self.status = Some("Another background operation is already running".to_string());
+            self.status = Some(crate::i18n::tr("status.busy"));
             return;
         }
         let (tx, rx) = mpsc::channel();
@@ -161,7 +161,7 @@ impl GuiApp {
 
     pub(in crate::gui) fn find_duplicates(&mut self) {
         if self.is_busy() {
-            self.status = Some("Another background operation is already running".to_string());
+            self.status = Some(crate::i18n::tr("status.busy"));
             return;
         }
         self.status = Some("Finding duplicate files…".to_string());
@@ -197,7 +197,7 @@ impl GuiApp {
 
     fn start_windows_tool(&mut self, index: usize) {
         if self.is_busy() {
-            self.status = Some("Another background operation is already running".to_string());
+            self.status = Some(crate::i18n::tr("status.busy"));
             return;
         }
         let Some(tool) = crate::wintools::TOOLS.get(index) else {

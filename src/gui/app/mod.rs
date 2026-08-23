@@ -433,8 +433,8 @@ impl GuiApp {
     /// status bar has the same answer for each: say nothing. A permanent
     /// "0 B shared" on a volume without hard links is noise, and a scan
     /// that did not measure has nothing to report.
-    pub(in crate::gui) fn hard_link_bytes(&self) -> Option<u64> {
-        self.tree.hard_link_bytes.filter(|bytes| *bytes > 0)
+    pub(in crate::gui) fn hard_link_bytes(&self) -> Option<crate::model::SharedBytes> {
+        self.tree.hard_link_bytes.filter(|bytes| !bytes.is_zero())
     }
 
     pub(in crate::gui) fn open_modal(&mut self, page: ModalPage) {
