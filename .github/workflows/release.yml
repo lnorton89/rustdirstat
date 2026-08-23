@@ -484,6 +484,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.draft.outputs.tag }}
         run: |
+          # `set -e` matters more here than anywhere else in this file:
+          # without it a failed or partial `upload` still falls through to
+          # `edit --draft=false --latest`, which publishes a release
+          # missing assets and marks it the current one. Every other run
+          # block already guarded itself; this one — the step where it
+          # actually costs something — did not.
+          set -euo pipefail
           cd dist
           gh release upload "$TAG" $(find . -type f) --clobber
           gh release edit "$TAG" --draft=false --latest
