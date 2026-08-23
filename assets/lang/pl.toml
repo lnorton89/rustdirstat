@@ -454,3 +454,7 @@
 "tui.help.toggle_help" = "Pokaż lub ukryj tę pomoc"
 "tui.help.quit" = "Zakończ"
 "tui.help.mouse" = "Każdą powyższą czynność da się też wykonać myszą — kafle mapy, wiersze list, paski tytułów, nagłówek i przyciski stopki są klikalne."
+
+"page.locations.scan_options" = "Opcje skanowania"
+"page.locations.count_hard_links" = "Mierz nakładanie się twardych dowiązań"
+"page.locations.count_hard_links.blurb" = "Podaje, jaka część sumy to te same bajty pod więcej niż jedną nazwą. W systemach Unix za darmo; w Windows oznacza zapamiętanie tożsamości każdego pliku na czas skanowania, czyli kilkaset megabajtów na pełnym dysku. Zadziała przy następnym skanowaniu."

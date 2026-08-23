@@ -76,6 +76,15 @@ pub struct Config {
     /// become unreadable when one does.
     #[serde(default)]
     pub gui_theme: Option<String>,
+    /// Whether the window measures hard-link overlap while it scans.
+    ///
+    /// A scan option rather than a view option: it changes what the
+    /// scanner does, costs memory on Windows (an identity per file, a few
+    /// hundred megabytes on a full drive), and only takes effect on the
+    /// next scan. `None` means the platform default — free and on under
+    /// Unix, off under Windows.
+    #[serde(default)]
+    pub gui_count_hard_links: Option<bool>,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -128,6 +137,7 @@ fn parse(text: &str) -> Config {
         cleanups: field(&table, "cleanups").unwrap_or_default(),
         language: field(&table, "language"),
         gui_theme: field(&table, "gui_theme"),
+        gui_count_hard_links: field(&table, "gui_count_hard_links"),
     }
 }
 
@@ -159,6 +169,7 @@ impl Config {
             language: self.language.or(base.language),
             cleanups: base.cleanups,
             gui_theme: self.gui_theme.or(base.gui_theme),
+            gui_count_hard_links: self.gui_count_hard_links.or(base.gui_count_hard_links),
         }
     }
 }

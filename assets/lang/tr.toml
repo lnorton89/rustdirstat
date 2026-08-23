@@ -453,3 +453,7 @@
 "tui.help.toggle_help" = "Bu yardımı göster/gizle"
 "tui.help.quit" = "Çık"
 "tui.help.mouse" = "Yukarıdaki her işlem tıklayarak da yapılabilir — ağaç haritası kutucukları, liste satırları, başlık çubukları, üst bilgi ve alt bilgi düğmelerinin hepsi tıklanabilir."
+
+"page.locations.scan_options" = "Tarama seçenekleri"
+"page.locations.count_hard_links" = "Sabit bağlantı örtüşmesini ölç"
+"page.locations.count_hard_links.blurb" = "Toplamın ne kadarının birden fazla ad altındaki aynı baytlar olduğunu bildirir. Unix'te bedava; Windows'ta her dosyanın kimliğini tarama boyunca akılda tutmak demektir, dolu bir sürücüde birkaç yüz megabayt. Bir sonraki taramada etkili olur."

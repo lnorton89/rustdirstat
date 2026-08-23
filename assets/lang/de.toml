@@ -481,3 +481,7 @@
 "tui.help.toggle_help" = "Diese Hilfe ein-/ausblenden"
 "tui.help.quit" = "Beenden"
 "tui.help.mouse" = "Jede Aktion oben lässt sich auch anklicken — Treemap-Kacheln, Listenzeilen, Titelleisten, die Kopfzeile und die Schaltflächen der Fußzeile sind alle klickbar."
+
+"page.locations.scan_options" = "Einleseoptionen"
+"page.locations.count_hard_links" = "Hardlink-Überschneidung messen"
+"page.locations.count_hard_links.blurb" = "Gibt an, wie viel der Gesamtgröße dieselben Bytes unter mehr als einem Namen sind. Unter Unix kostenlos; unter Windows heißt es, die Identität jeder Datei für die Dauer des Einlesens zu behalten — auf einem vollen Laufwerk einige hundert Megabyte. Wirkt sich beim nächsten Einlesen aus."

@@ -322,6 +322,10 @@ impl GuiApp {
         };
         let (tx, rx) = mpsc::channel();
         let physical = self.use_physical;
+        // Copied out before the thread takes ownership: a scan runs with
+        // the options that were set when it started, not with whatever
+        // the user flips while it is running.
+        let options = self.scan_options;
         std::thread::spawn(move || {
             // The sink runs on whichever worker thread finished the
             // child. It sums the child into the summaries and hands it
@@ -355,7 +359,7 @@ impl GuiApp {
             let scanned = crate::scanner::scan_many_streaming(
                 &roots,
                 Some(worker_progress.as_ref()),
-                crate::scanner::ScanOptions::default(),
+                options,
                 &publish,
             );
             let message = match scanned {

@@ -454,3 +454,7 @@
 "tui.help.toggle_help" = "Visa eller dölj den här hjälpen"
 "tui.help.quit" = "Avsluta"
 "tui.help.mouse" = "Varje åtgärd ovan går också att klicka fram — trädkartans rutor, listornas rader, titelrader, rubriken och knapparna längst ned är alla klickbara."
+
+"page.locations.scan_options" = "Inläsningsalternativ"
+"page.locations.count_hard_links" = "Mät överlappning via hårda länkar"
+"page.locations.count_hard_links.blurb" = "Anger hur mycket av summan som är samma byte under mer än ett namn. Gratis på Unix; på Windows innebär det att varje fils identitet hålls kvar under hela inläsningen, ett par hundra megabyte på en full enhet. Slår igenom vid nästa inläsning."

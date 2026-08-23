@@ -454,3 +454,7 @@
 "tui.help.toggle_help" = "Deze help tonen of verbergen"
 "tui.help.quit" = "Afsluiten"
 "tui.help.mouse" = "Elke actie hierboven werkt ook met de muis — treemap-vlakken, lijstregels, titelbalken, de kopregel en de knoppen onderaan zijn allemaal klikbaar."
+
+"page.locations.scan_options" = "Inleesopties"
+"page.locations.count_hard_links" = "Overlap van harde links meten"
+"page.locations.count_hard_links.blurb" = "Geeft aan hoeveel van het totaal dezelfde bytes zijn onder meer dan een naam. Gratis op Unix; op Windows betekent het dat de identiteit van elk bestand de hele inlezing lang wordt onthouden, een paar honderd megabyte op een volle schijf. Werkt vanaf de volgende inlezing."

@@ -283,6 +283,14 @@ pub(in crate::gui) struct GuiApp {
     /// every frame — is file I/O inside the frame budget.
     item_facts: std::cell::RefCell<Option<(PathBuf, crate::platform::ItemFacts)>>,
     pub backdrop: Backdrop,
+    /// What the window asks the scanner for.
+    ///
+    /// Held rather than defaulted at each call site: hard-link
+    /// measurement is a real feature with a real cost, and a window that
+    /// hardcoded `ScanOptions::default()` could never turn it on under
+    /// Windows — where it is off by default — so the figure it produces
+    /// was unreachable on the platform this app is most used on.
+    pub scan_options: crate::scanner::ScanOptions,
     pub theme_id: String,
     /// Resolved from `theme_id`. Cached rather than looked up per frame
     /// so a rename of the field cannot quietly put a table lookup on a
@@ -387,6 +395,12 @@ impl GuiApp {
             properties: PropertiesWindow::from_config(&config),
             item_facts: std::cell::RefCell::new(None),
             backdrop: Backdrop::Idle,
+            scan_options: crate::scanner::ScanOptions {
+                count_hard_links: config
+                    .gui_count_hard_links
+                    .unwrap_or(crate::scanner::ScanOptions::default().count_hard_links),
+                ..crate::scanner::ScanOptions::default()
+            },
             theme_id: theme_id.clone(),
             palette: super::ui::palette_for(&theme_id),
             view: ViewOptions::from_config(&config),
@@ -497,6 +511,7 @@ impl GuiApp {
             sort: Some(self.sort),
             use_physical: Some(self.use_physical),
             gui_theme: Some(self.theme_id.clone()),
+            gui_count_hard_links: Some(self.scan_options.count_hard_links),
             language: Some(crate::i18n::language()),
             gui_properties_open: Some(self.properties.open),
             gui_properties_pos: self.properties.pos.map(|pos| vec![pos[0], pos[1]]),

@@ -419,6 +419,27 @@ fn draw_locations(app: &mut GuiApp, ui: &mut egui::Ui) {
         ui.add_space(SPACE_XS);
         ui.label(RichText::new(tr("page.locations.multi_root")).color(palette.secondary_text));
     });
+
+    // A scan option, so it lives with the page about what a scan covers
+    // rather than with the ones about how the window looks. Without it
+    // the window could never turn hard-link measurement on under
+    // Windows, where it is off by default — so the figure it produces was
+    // built, translated and unreachable on the platform this app is most
+    // used on.
+    group(ui, Icon::Info, tr("page.locations.scan_options"), |ui| {
+        let mut counting = app.scan_options.count_hard_links;
+        if ui
+            .checkbox(&mut counting, tr("page.locations.count_hard_links"))
+            .changed()
+        {
+            app.scan_options.count_hard_links = counting;
+        }
+        ui.add_space(SPACE_XS);
+        ui.label(
+            RichText::new(tr("page.locations.count_hard_links.blurb"))
+                .color(palette.secondary_text),
+        );
+    });
 }
 
 // ----------------------------------------------------------- Maintenance

@@ -453,3 +453,7 @@
 "tui.help.toggle_help" = "Zobrazit nebo skrýt tuto nápovědu"
 "tui.help.quit" = "Ukončit"
 "tui.help.mouse" = "Každou činnost výše lze provést i myší — dlaždice mapy, řádky seznamů, titulkové lišty, záhlaví i tlačítka v zápatí jsou klikací."
+
+"page.locations.scan_options" = "Volby procházení"
+"page.locations.count_hard_links" = "Měřit překryv pevných odkazů"
+"page.locations.count_hard_links.blurb" = "Uvádí, jaká část celku jsou tytéž bajty pod více než jedním jménem. Pod Unixem zdarma; ve Windows to znamená pamatovat si identitu každého souboru po celou dobu procházení, tedy několik set megabajtů na plném disku. Projeví se při příštím procházení."

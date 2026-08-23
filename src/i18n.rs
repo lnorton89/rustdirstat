@@ -55,6 +55,7 @@ const ENGLISH: &str = include_str!("../assets/lang/en.toml");
 /// here, so a translation can be corrected without waiting for a release.
 /// `every_shipped_catalogue_is_listed_here` fails the build if a file is
 /// added to `assets/lang/` and not to this table.
+///
 /// Every language here draws in the font the window bundles, and that is
 /// the constraint on which languages can be here at all: egui ships
 /// Ubuntu-Light, which covers Latin, Latin Extended and Cyrillic and has
@@ -444,6 +445,34 @@ mod catalogue_tests {
             "these keys are defined in assets/lang/en.toml but nothing asks for them, \
              which means the text they describe is hardcoded somewhere: {unused:#?}"
         );
+        Ok(())
+    }
+
+    /// Every binary applies the saved language before it prints
+    /// anything.
+    ///
+    /// A catalogue nothing selects is a catalogue nobody sees. The window
+    /// called `set_language` in `GuiApp::new`; the terminal never called
+    /// it at all, so its header, footer, panes, popups and help — every
+    /// string it had been taught to look up — came out English whatever
+    /// the config said, and so did the `--no-tui` report and the CSV's
+    /// category names.
+    ///
+    /// Checked by reading the entry points rather than by running them:
+    /// a binary's `main` is the one function a unit test cannot call.
+    #[test]
+    fn every_entry_point_applies_the_saved_language() -> anyhow::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // The terminal binary covers the TUI, the text report and the
+        // CSV export, because all three dispatch from that one `main`.
+        for entry in ["src/main.rs", "src/gui/app/mod.rs"] {
+            let text = std::fs::read_to_string(root.join(entry))?;
+            assert!(
+                text.contains("set_language("),
+                "{entry} produces text a person reads but never applies the saved \
+                 language, so every translated string in it comes out English"
+            );
+        }
         Ok(())
     }
 

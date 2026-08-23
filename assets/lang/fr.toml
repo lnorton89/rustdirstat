@@ -454,3 +454,7 @@
 "tui.help.toggle_help" = "Afficher/masquer cette aide"
 "tui.help.quit" = "Quitter"
 "tui.help.mouse" = "Toutes les actions ci-dessus fonctionnent aussi au clic — cases de la carte, lignes des listes, barres de titre, l'en-tête et les boutons du pied de page sont tous cliquables."
+
+"page.locations.scan_options" = "Options d'analyse"
+"page.locations.count_hard_links" = "Mesurer le recouvrement des liens physiques"
+"page.locations.count_hard_links.blurb" = "Indique quelle part du total correspond aux mêmes octets sous plus d'un nom. Gratuit sous Unix ; sous Windows, cela implique de retenir l'identité de chaque fichier pendant toute l'analyse, soit quelques centaines de mégaoctets sur un disque plein. Prend effet à la prochaine analyse."

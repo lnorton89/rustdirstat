@@ -478,3 +478,6 @@
 "cli.path_missing" = "path does not exist: {path}"
 "config.no_directory" = "no configuration directory could be determined"
 "scan.multi_root" = "Selected locations"
+"page.locations.scan_options" = "Scan options"
+"page.locations.count_hard_links" = "Measure hard-link overlap"
+"page.locations.count_hard_links.blurb" = "Reports how much of the total is the same bytes under more than one name. Free on Unix; on Windows it means remembering every file's identity for the length of the scan, a few hundred megabytes on a full drive. Takes effect on the next scan."

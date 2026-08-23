@@ -73,6 +73,22 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Before anything can produce a message. All three modes below print
+    // text a person reads — the terminal UI, the report, and the CSV's
+    // category names — and the window applies this in `GuiApp::new`
+    // while the terminal never applied it at all, so every string the
+    // terminal had been taught to translate still came out English.
+    //
+    // Read from the config rather than a flag: the terminal has no
+    // settings screen, and a language is a preference rather than
+    // something to retype per invocation.
+    rustdirstat::i18n::set_language(
+        rustdirstat::config::load()
+            .language
+            .as_deref()
+            .unwrap_or("en"),
+    );
+
     // Every path is checked before any of them is scanned: finding out
     // that the third argument was a typo after two drives have been
     // walked is a poor trade for one `exists` call each.

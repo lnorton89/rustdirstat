@@ -454,3 +454,7 @@
 "tui.help.toggle_help" = "Mostra o nascondi questo aiuto"
 "tui.help.quit" = "Esci"
 "tui.help.mouse" = "Tutte le azioni qui sopra funzionano anche con il mouse — i riquadri della mappa, le righe degli elenchi, le barre del titolo, l'intestazione e i pulsanti in fondo sono tutti cliccabili."
+
+"page.locations.scan_options" = "Opzioni di analisi"
+"page.locations.count_hard_links" = "Misura la sovrapposizione dei collegamenti fisici"
+"page.locations.count_hard_links.blurb" = "Indica quanta parte del totale sono gli stessi byte sotto più di un nome. Gratuito su Unix; su Windows comporta ricordare l'identità di ogni file per tutta la durata dell'analisi, qualche centinaio di megabyte su un disco pieno. Ha effetto dalla prossima analisi."
