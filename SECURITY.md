@@ -6,7 +6,7 @@ Please do **not** open a public issue for a security vulnerability. Instead,
 report it privately:
 
 - **Preferred:** use GitHub's private vulnerability reporting on the
-  [Security tab](https://github.com/lnorton89/rustdirstat/security/advisories/new).
+  [Security tab](https://github.com/freeknet/rustdirstat/security/advisories/new).
 - **By email:** [lnorton89@gmail.com](mailto:lnorton89@gmail.com). If you
   encrypt, ask for a key first; otherwise plain text is fine.
 
@@ -29,5 +29,5 @@ structures, unsafe-block misuse, or anything that would let an untrusted
 tree do something to your system beyond what the UI asks for.
 
 Everything else — bug reports, feature requests, and questions — belongs on
-the [issue tracker](https://github.com/lnorton89/rustdirstat/issues); see
+the [issue tracker](https://github.com/freeknet/rustdirstat/issues); see
 [`CONTRIBUTING.md`](CONTRIBUTING.md).

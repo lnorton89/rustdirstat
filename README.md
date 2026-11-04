@@ -4,8 +4,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml"><img
-     src="https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/freeknet/rustdirstat/actions/workflows/ci.yml"><img
+     src="https://github.com/freeknet/rustdirstat/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 A cross-platform clone of [WinDirStat](https://windirstat.net/), written in
@@ -73,15 +73,15 @@ The terminal UI, the same three coupled views over the same scanning core:
 ## Install
 
 Prebuilt archives for Linux, macOS (Intel and Apple Silicon), and Windows
-are attached to each [release](https://github.com/lnorton89/rustdirstat/releases).
+are attached to each [release](https://github.com/freeknet/rustdirstat/releases).
 Each contains both binaries and a `.sha256` companion file to verify the
 download against.
 
 ### Nix
 
 ```sh
-nix run github:lnorton89/rustdirstat            # terminal UI
-nix run github:lnorton89/rustdirstat#gui        # desktop GUI
+nix run github:freeknet/rustdirstat            # terminal UI
+nix run github:freeknet/rustdirstat#gui        # desktop GUI
 ```
 
 The flake wraps the GUI binary with the X11/Wayland/Vulkan/GL paths it
