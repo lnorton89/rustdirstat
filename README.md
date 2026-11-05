@@ -1,6 +1,5 @@
 <p align="center">
-  <img src="assets/brand/banner.png" width="720"
-       alt="RustDirStat — a WinDirStat clone in Rust, native GUI and terminal UI over one scanning core.">
+  <img src="https://raw.githubusercontent.com/freeknet/.github/main/brand/social/rustdirstat.png" alt="$ rustdirstat: A cross-platform WinDirStat clone written in Rust, with both a native desktop GUI and a terminal UI." width="100%">
 </p>
 
 <p align="center">
