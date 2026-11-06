@@ -11,7 +11,7 @@ contributing.
 
 ## Reporting bugs and requesting features
 
-Open an issue on the [issue tracker](https://github.com/lnorton89/rustdirstat/issues).
+Open an issue on the [issue tracker](https://github.com/freeknet/rustdirstat/issues).
 Security vulnerabilities are *not* reported here — see
 [`SECURITY.md`](SECURITY.md) for the private channel.
 
@@ -133,7 +133,7 @@ move a version by hand:
 - **The egui stack does not move.** `eframe`, `egui`, and `egui_extras`
   are ignored above patch, because leaving 0.29 behind is a project with
   its own branch rather than a dependency bump — CLAUDE.md has the
-  specifics, and `deny.toml` carries the four advisories that stay ignored
+  specifics, and `deny.toml` carries the seven advisories that stay ignored
   until it happens. Don't raise those three in a PR that is about
   something else.
 

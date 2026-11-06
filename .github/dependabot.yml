@@ -35,7 +35,7 @@ updates:
       # would only ever be closed unread, so it is not opened. Patch
       # releases still come through.
       #
-      # The four ignored advisories in deny.toml are the standing reminder
+      # The seven ignored advisories in deny.toml are the standing reminder
       # that this is a debt with a due date, not an oversight; revisit
       # these three entries and those four at the same time.
       - dependency-name: eframe
