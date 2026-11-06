@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion. Please search the [existing issues](https://github.com/lnorton89/rustdirstat/issues) first — it may already be proposed.
+        Thanks for the suggestion. Please search the [existing issues](https://github.com/freeknet/rustdirstat/issues) first — it may already be proposed.
 
   - type: dropdown
     id: frontend

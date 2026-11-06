@@ -6,7 +6,7 @@
 #
 # Dependabot is the other half of this: .github/dependabot.yml opens the
 # version-update PRs, and the `deny` job runs against each one. Note that
-# the egui stack is ignored above patch there for the same reason the four
+# the egui stack is ignored above patch there for the same reason the seven
 # advisories below have no fix — see the comment on those.
 
 [advisories]
@@ -15,7 +15,7 @@
 # silently-ignored footnote.
 yanked = "warn"
 
-# Four advisories with no practical fix, all in the egui 0.29 stack this
+# Seven advisories with no practical fix, all in the egui 0.29 stack this
 # crate holds at deliberately (see CLAUDE.md):
 #
 # - RUSTSEC-2026-0192: ttf-parser is unmaintained, no successor release
@@ -27,13 +27,20 @@ yanked = "warn"
 #   accessibility stack (zbus_xml via atspi). The fixed quick-xml is a
 #   breaking release, so clearing them means bumping the accesskit stack
 #   — the egui upgrade this repo is deliberately not doing yet.
+# - RUSTSEC-2026-0370/0371/0372: zvariant, zbus_names and zvariant_derive
+#   are unmaintained as standalone crates, merged into zbus 6. They are
+#   pinned by zbus 4 in the same Linux accessibility stack, so clearing
+#   them is that same accesskit bump.
 #
-# Revisit all four when egui 0.29 is left behind.
+# Revisit all seven when egui 0.29 is left behind.
 ignore = [
     "RUSTSEC-2026-0192",
     "RUSTSEC-2024-0436",
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]

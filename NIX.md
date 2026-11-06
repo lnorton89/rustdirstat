@@ -5,7 +5,7 @@
 Install `rustdirstat` into your default Nix profile:
 
 ```bash
-nix profile add github:lnorton89/rustdirstat
+nix profile add github:freeknet/rustdirstat
 ```
 
 ## Uninstall with a Nix profile
@@ -34,7 +34,7 @@ If you maintain your own Nix configuration with flakes, add `rustdirstat` as an 
     # Keep your existing inputs here.
 
     rustdirstat = {
-      url = "github:lnorton89/rustdirstat";
+      url = "github:freeknet/rustdirstat";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
