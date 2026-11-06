@@ -13,21 +13,31 @@
 # silently-ignored footnote.
 yanked = "warn"
 
-# One advisory left, and it is an unmaintained-crate notice rather than a
-# vulnerability:
+# Four advisories left, all unmaintained-crate notices rather than
+# vulnerabilities:
 #
 # - RUSTSEC-2026-0192: ttf-parser is unmaintained, no successor release
 #   (upstream points at skrifa); drawn in by ab_glyph for font shaping.
 #   Input is the OS's own fonts, not untrusted data.
+# - RUSTSEC-2026-0370/0371/0372: zvariant, zbus_names and zvariant_derive
+#   are unmaintained as standalone crates, merged into zbus 6. They come
+#   in through zbus 5 in the Linux accessibility stack (accesskit_unix),
+#   and even the newest accesskit_unix, 0.24.1, still requires zbus 5, so
+#   no egui bump clears them yet. Revisit when accesskit moves to zbus 6.
 #
-# The other three ignores this file used to carry were all consequences
+# Three other ignores this file used to carry were all consequences
 # of holding the egui stack at 0.29, and the 0.36 upgrade cleared them:
 # RUSTSEC-2024-0436 (paste, unmaintained) is no longer in the graph, and
 # RUSTSEC-2026-0194/0195 (quick-xml, reached through zbus_xml via atspi)
 # went with the accesskit bump that came along with egui. That is what
 # the upgrade was for — do not re-add an ignore without saying why the
 # advisory cannot be fixed instead.
-ignore = ["RUSTSEC-2026-0192"]
+ignore = [
+    "RUSTSEC-2026-0192",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+]
 
 [licenses]
 # MIT-led, but the GUI's font and platform stack brings in a few more

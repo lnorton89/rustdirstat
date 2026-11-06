@@ -1,11 +1,10 @@
 <p align="center">
-  <img src="assets/brand/banner.png" width="720"
-       alt="RustDirStat — a WinDirStat clone in Rust, native GUI and terminal UI over one scanning core.">
+  <img src="https://raw.githubusercontent.com/freeknet/.github/main/brand/social/rustdirstat.png" alt="$ rustdirstat: A cross-platform WinDirStat clone written in Rust, with both a native desktop GUI and a terminal UI." width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml"><img
-     src="https://github.com/lnorton89/rustdirstat/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/freeknet/rustdirstat/actions/workflows/ci.yml"><img
+     src="https://github.com/freeknet/rustdirstat/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 A cross-platform clone of [WinDirStat](https://windirstat.net/), written in
@@ -80,7 +79,7 @@ The terminal UI, the same three coupled views over the same scanning core:
 ## Install
 
 Prebuilt archives for Linux, macOS (Intel and Apple Silicon), and Windows
-are attached to each [release](https://github.com/lnorton89/rustdirstat/releases).
+are attached to each [release](https://github.com/freeknet/rustdirstat/releases).
 Each contains both binaries and a `.sha256` companion file to verify the
 download against, and every asset carries a signed build provenance
 attestation:
@@ -141,8 +140,8 @@ without complaining.
 ### Nix
 
 ```sh
-nix run github:lnorton89/rustdirstat            # terminal UI
-nix run github:lnorton89/rustdirstat#gui        # desktop GUI
+nix run github:freeknet/rustdirstat            # terminal UI
+nix run github:freeknet/rustdirstat#gui        # desktop GUI
 ```
 
 The flake wraps the GUI binary with the X11/Wayland/Vulkan/GL paths it
