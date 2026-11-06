@@ -12,6 +12,124 @@ read first. For the module map, see
 [`ARCHITECTURE.md`](ARCHITECTURE.md); the [README](../README.md) has the
 user-facing overview.
 
+## 0. The target: 120 FPS, including while a scan runs
+
+Everything in this document is in service of one number. The window is
+built to hold **120 frames per second — an 8.33 ms budget per frame —
+with a scan of a whole volume in flight**, not merely to stay responsive.
+It is stated as `theme::FRAME_BUDGET` rather than left implied, because a
+budget nothing names is a budget nothing checks.
+
+Four things deliver it, and each has a check that fails the build:
+
+| What it guarantees | Check |
+|---|---|
+| A still window does no tree-sized work at all — both caches hit | `a_still_window_rebuilds_neither_rows_nor_tiles` |
+| A frame costs what the window shows, not what the scan found | `a_frame_over_a_huge_tree_draws_only_what_fits` |
+| The median frame over a quarter-million-node tree fits the budget | `a_frame_over_a_huge_tree_fits_the_budget` |
+| ...and still fits with a real scan running underneath it | `frames_stay_inside_the_budget_while_a_scan_runs` |
+| A busy app asks for the *next* frame rather than one on a timer | `a_busy_app_asks_for_the_next_frame_immediately` |
+
+Three things about those checks are deliberate:
+
+- **Median, not mean or max.** One scheduler preemption on a shared CI
+  runner must not fail a build, and a real regression moves the middle of
+  the distribution rather than one sample.
+- **A debug build gets a documented multiple** of the budget
+  (`DEBUG_FRAME_BUDGET_FACTOR`), because tests run unoptimized and the
+  target describes the release binary. A regression that overshoots by
+  more than that factor still fails.
+- **The under-load check loops a real scan** rather than scanning once.
+  A fixture small enough to build inside a test is walked in a couple of
+  frames, which would measure almost nothing; the worker re-walks it
+  until the render loop has its samples, so every sample is taken with
+  the rayon pool, the atomics, and the allocation churn of a real walk
+  underneath it.
+
+The last row is easy to lose by accident. Until 0.3.0 the app answered a
+scan in progress with `request_repaint_after(33ms)`, which caps the window
+at 30 FPS for the whole of a scan no matter how much headroom the machine
+has — no individual frame is slow, and the target is still missed by a
+factor of four. A busy app now asks for the next frame immediately and
+lets vsync do the pacing.
+
+## 0b. What a Windows directory listing costs, and buys
+
+Since 0.3.0 the walk lists each Windows directory through its own handle
+(`platform::directory_listing`) rather than through `read_dir`. The
+listing reports, for every entry and in the same call: the name, the
+attributes, the logical size, the **allocation size**, the timestamps and
+the **file id**. That is what makes two things possible that were not
+before — physical sizes that mean what Explorer means by "size on disk",
+and hard-link identity captured at scan time rather than recovered later
+from the duplicate hasher's open handle.
+
+It is not free, and the number matters more than the argument. Measured
+on this repository's `target/` directory — 1,913 directories holding
+13,452 files, so roughly seven files per directory, which is close to the
+worst case for a per-directory cost — with a warm cache and a release
+build:
+
+| Walk | Wall clock |
+|---|---|
+| `read_dir` + per-entry metadata | ~55 ms |
+| One directory handle per directory | ~80 ms |
+
+About **13 µs per directory**, or ~45% on a tree shaped like that one.
+The overhead is per *directory*, not per file, so it shrinks against any
+directory with more than a handful of entries in it; on a drive-sized
+scan of ~1.3M directories it is on the order of fifteen seconds against a
+scan measured in minutes.
+
+Two things were tried and did not help: opening with the narrow
+`FILE_LIST_DIRECTORY` right rather than `GENERIC_READ`, and caching the
+volume serial per volume instead of asking per directory (kept anyway —
+it is a syscall per directory not made). Building each name straight from
+UTF-16 with `OsStringExt::from_wide` rather than via
+`String::from_utf16_lossy` *did*: the double conversion was most of the
+cost of the parse.
+
+One thing was removed to pay for it: the walk no longer calls
+`symlink_metadata` for each directory to learn its own timestamp, because
+the parent's listing already carried it. Only the scan root pays for that
+now, on either path.
+
+`RUSTDIRSTAT_STD_LISTING=1` forces the `read_dir` walk — for a filesystem
+where the listing path misbehaves, and for reproducing the table above.
+
+## 0c. A tree that fills in while the scan runs
+
+A scan publishes each finished top-level child instead of only handing
+over a tree at the end (`scanner::scan_streaming`), and the window
+attaches them as they arrive. A drive that takes a minute to walk shows
+its first folders in the first second.
+
+The rule this had to survive is the one this whole document is about:
+**nothing tree-sized in a draw call**, and nothing tree-sized copied per
+update either. Three things make that hold.
+
+- **The tree grows in place.** Attaching a child pushes one `Node` and
+  folds its totals in — O(1), whatever the tree already holds. There is
+  no rebuild and no clone: a partial tree of nine million nodes copied
+  even once a second would cost more than the scan.
+- **The caches learned a new key.** `RowKey` and `TreemapKey` key off the
+  tree's *address*, which does not change when a child is pushed into it,
+  so both gained a `generation` counter bumped on every mutation. Without
+  it the window would go on drawing the rows it had before the folder
+  arrived — live in memory, static on screen.
+- **Attachment is bounded per frame.** `MAX_CHILDREN_PER_FRAME` caps how
+  many arrive in one pass, because a directory with a thousand top-level
+  entries can publish faster than the window draws.
+
+Two consequences worth knowing. `Arc::get_mut` is what makes in-place
+mutation safe — it succeeds only while the window is the sole owner of
+the tree — so a frame where a background worker still holds a clone
+defers its children to the next one; they queue, they are never dropped.
+And the two whole-tree summaries (the extension rows and the largest
+files) are now accumulated child by child *on the scan thread*, because a
+streaming scan no longer has the tree to walk at the end. Same total
+work, same thread, same arrival with the finished scan.
+
 ## 1. The GUI is immediate mode: every frame rebuilds the window
 
 `gui::ui::draw` runs top to bottom on every frame. There is no retained

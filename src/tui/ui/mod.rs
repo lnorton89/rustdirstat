@@ -25,6 +25,7 @@ use super::app::{Action, App, ClickZone, DupRow};
 use super::nested::{self, TreemapItem};
 use super::theme;
 use crate::color::{self, Category};
+use crate::i18n::{tr, tr_with};
 use crate::scanner::Progress;
 use crate::stats::ExtStat;
 use crate::util::{format_modified, human_bytes, thousands};
@@ -38,16 +39,29 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub(super) fn draw_scanning(f: &mut Frame, progress: &Progress, started: Instant) {
+pub(super) fn draw_scanning(
+    f: &mut Frame,
+    progress: &Progress,
+    started: Instant,
+    found: &[(String, u64)],
+) {
     let files = progress.files.load(Ordering::Relaxed);
     let dirs = progress.dirs.load(Ordering::Relaxed);
     let bytes = progress.bytes.load(Ordering::Relaxed);
     let elapsed = started.elapsed().as_secs_f64();
 
-    progress_splash(
+    progress_splash_with(
         f,
-        format!("Scanning... {elapsed:.1}s"),
-        format!("{dirs} directories, {files} files, {}", human_bytes(bytes)),
+        tr_with("tui.scan.elapsed", &[("seconds", &format!("{elapsed:.1}"))]),
+        tr_with(
+            "tui.scan.counts",
+            &[
+                ("folders", &dirs.to_string()),
+                ("files", &files.to_string()),
+                ("size", &human_bytes(bytes)),
+            ],
+        ),
+        found,
     );
 }
 
@@ -61,18 +75,20 @@ pub(super) fn draw_duplicate_progress(
     let elapsed = started.elapsed().as_secs_f64();
 
     let status = if total > 0 {
-        format!(
-            "Hashed {} of {} candidate files",
-            thousands(hashed),
-            thousands(total)
+        tr_with(
+            "tui.duplicates.hashed",
+            &[("done", &thousands(hashed)), ("total", &thousands(total))],
         )
     } else {
-        "Finding same-size candidates...".to_string()
+        tr("tui.duplicates.prefilter")
     };
 
     progress_splash(
         f,
-        format!("Scanning for duplicates... {elapsed:.1}s"),
+        tr_with(
+            "tui.duplicates.elapsed",
+            &[("seconds", &format!("{elapsed:.1}"))],
+        ),
         status,
     );
 }
@@ -164,6 +180,15 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
 
     if let Some(idx) = app.wintools.pending {
         draw_wintool_confirm_popup(f, app, idx);
+    }
+
+    if app.cleanups.visible {
+        draw_cleanups_popup(f, app);
+    }
+
+    // Above the list, so a confirmation covers what asked for it.
+    if app.cleanups.pending.is_some() {
+        draw_cleanup_confirm_popup(f, app);
     }
 
     if app.show_help {

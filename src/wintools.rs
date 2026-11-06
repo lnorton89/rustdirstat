@@ -30,8 +30,11 @@
 //! prompt in the UI before `run` is ever called.
 
 pub struct WinTool {
-    pub name: &'static str,
-    pub description: &'static str,
+    /// Catalogue keys, not text: this table is shown by both front ends,
+    /// so it is one of the places a language setting has to reach. The
+    /// keys are literals here so the catalogue tests can see them.
+    pub name_key: &'static str,
+    pub description_key: &'static str,
     /// Whether this needs an explicit confirmation prompt before running
     /// — true for anything that isn't just launching an interactive tool
     /// with its own confirmation/undo built in.
@@ -51,6 +54,18 @@ pub struct WinTool {
     pub needs_admin: bool,
 }
 
+impl WinTool {
+    /// What the menus call this tool, in the active language.
+    pub fn name(&self) -> String {
+        crate::i18n::tr(self.name_key)
+    }
+
+    /// What it does, in the active language.
+    pub fn description(&self) -> String {
+        crate::i18n::tr(self.description_key)
+    }
+}
+
 /// What a finished tool reports back.
 ///
 /// `detail` exists because "Analyze Component Store" is a *reporting*
@@ -64,71 +79,71 @@ pub struct ToolOutput {
 
 pub const TOOLS: &[WinTool] = &[
     WinTool {
-        name: "Disk Cleanup",
-        description: "Open the built-in Disk Cleanup wizard (cleanmgr.exe).",
+        name_key: "wintool.disk_cleanup",
+        description_key: "wintool.disk_cleanup.desc",
         destructive: false,
         irreversible: false,
         needs_admin: false,
     },
     WinTool {
-        name: "Programs and Features",
-        description: "Open the \"uninstall a program\" control panel.",
+        name_key: "wintool.programs",
+        description_key: "wintool.programs.desc",
         destructive: false,
         irreversible: false,
         needs_admin: false,
     },
     WinTool {
-        name: "Defragment and Optimize Drives",
-        description: "Open the drive optimization tool (dfrgui.exe).",
+        name_key: "wintool.defragment",
+        description_key: "wintool.defragment.desc",
         destructive: false,
         irreversible: false,
         needs_admin: false,
     },
     WinTool {
-        name: "Analyze Component Store",
-        description: "DISM: report how much space the WinSxS folder could reclaim, without changing anything.",
+        name_key: "wintool.analyze_store",
+        description_key: "wintool.analyze_store.desc",
         destructive: false,
         irreversible: false,
         needs_admin: true,
     },
     WinTool {
-        name: "Clean Up Component Store",
-        description: "DISM: remove superseded component versions from WinSxS. Routine maintenance, safe to run.",
+        name_key: "wintool.clean_store",
+        description_key: "wintool.clean_store.desc",
         destructive: true,
         irreversible: false,
         needs_admin: true,
     },
     WinTool {
-        name: "Reset Base (aggressive cleanup)",
-        description: "DISM /ResetBase: also removes the ability to uninstall currently installed updates.",
-        destructive: true,
-        irreversible: true,
-        needs_admin: true,
-    },
-    WinTool {
-        name: "Check Disk",
-        description: "Open an interactive Check Disk (chkdsk) session for this volume in its own console.",
-        destructive: false,
-        irreversible: false,
-        needs_admin: false,
-    },
-    WinTool {
-        name: "Create Restore Point",
-        description: "vssadmin: create a new shadow copy (System Restore point) of this volume.",
-        destructive: false,
-        irreversible: false,
-        needs_admin: true,
-    },
-    WinTool {
-        name: "Delete All Shadow Copies",
-        description: "vssadmin: permanently remove every client-accessible shadow copy on this volume (Microsoft's own wording — system-authored copies may remain). Cannot be undone.",
+        name_key: "wintool.reset_base",
+        description_key: "wintool.reset_base.desc",
         destructive: true,
         irreversible: true,
         needs_admin: true,
     },
     WinTool {
-        name: "Empty Recycle Bin",
-        description: "Permanently empty the Recycle Bin on every drive. Cannot be undone.",
+        name_key: "wintool.chkdsk",
+        description_key: "wintool.chkdsk.desc",
+        destructive: false,
+        irreversible: false,
+        needs_admin: false,
+    },
+    WinTool {
+        name_key: "wintool.restore_point",
+        description_key: "wintool.restore_point.desc",
+        destructive: false,
+        irreversible: false,
+        needs_admin: true,
+    },
+    WinTool {
+        name_key: "wintool.delete_shadows",
+        description_key: "wintool.delete_shadows.desc",
+        destructive: true,
+        irreversible: true,
+        needs_admin: true,
+    },
+    WinTool {
+        name_key: "wintool.empty_bin",
+        description_key: "wintool.empty_bin.desc",
         destructive: true,
         irreversible: true,
         needs_admin: false,
@@ -155,17 +170,24 @@ pub fn run(index: usize, volume_path: &std::path::Path) -> Result<ToolOutput, St
             .args(args)
             .spawn()
             .map(|_| ToolOutput {
-                summary: format!("Launched {program}"),
+                summary: crate::i18n::tr_with("tool.launched", &[("program", program)]),
                 detail: String::new(),
             })
-            .map_err(|e| format!("Failed to launch {program}: {e}"))
+            .map_err(|e| {
+                crate::i18n::tr_with(
+                    "tool.launch_failed",
+                    &[("program", program), ("error", &e.to_string())],
+                )
+            })
     };
 
     let run_and_wait = |program: &str, args: &[&str]| -> Result<ToolOutput, String> {
-        let output = Command::new(program)
-            .args(args)
-            .output()
-            .map_err(|e| format!("Failed to run {program}: {e}"))?;
+        let output = Command::new(program).args(args).output().map_err(|e| {
+            crate::i18n::tr_with(
+                "tool.run_failed",
+                &[("program", program), ("error", &e.to_string())],
+            )
+        })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if output.status.success() {
@@ -173,7 +195,7 @@ pub fn run(index: usize, volume_path: &std::path::Path) -> Result<ToolOutput, St
             // and the one-line summary above it says nothing they were
             // run to find out.
             Ok(ToolOutput {
-                summary: format!("{program} completed successfully"),
+                summary: crate::i18n::tr_with("tool.completed", &[("program", program)]),
                 detail: stdout.trim().to_string(),
             })
         } else {
@@ -182,10 +204,13 @@ pub fn run(index: usize, volume_path: &std::path::Path) -> Result<ToolOutput, St
             } else {
                 stdout
             };
-            Err(format!(
-                "{program} exited with {}: {}",
-                output.status,
-                detail.trim()
+            Err(crate::i18n::tr_with(
+                "tool.exited",
+                &[
+                    ("program", program),
+                    ("status", &output.status.to_string()),
+                    ("detail", detail.trim()),
+                ],
             ))
         }
     };
@@ -224,7 +249,7 @@ pub fn run(index: usize, volume_path: &std::path::Path) -> Result<ToolOutput, St
             ],
         ),
         9 => empty_recycle_bin(),
-        _ => Err("Unknown tool".to_string()),
+        _ => Err(crate::i18n::tr("tool.unknown")),
     }
 }
 
@@ -262,19 +287,19 @@ fn empty_recycle_bin() -> Result<ToolOutput, String> {
 
     match hresult {
         S_OK => Ok(ToolOutput {
-            summary: "Recycle Bin emptied".to_string(),
+            summary: crate::i18n::tr("tool.bin_emptied"),
             detail: String::new(),
         }),
         // An already-empty bin reports `S_FALSE`, and telling someone who
         // asked for an empty Recycle Bin, and now has one, that it failed
         // is not useful.
         S_FALSE => Ok(ToolOutput {
-            summary: "Recycle Bin was already empty".to_string(),
+            summary: crate::i18n::tr("tool.bin_already_empty"),
             detail: String::new(),
         }),
-        other => Err(format!(
-            "Emptying the Recycle Bin failed (HRESULT 0x{:08X})",
-            other as u32
+        other => Err(crate::i18n::tr_with(
+            "tool.bin_failed",
+            &[("code", &format!("0x{:08X}", other as u32))],
         )),
     }
 }
@@ -286,17 +311,46 @@ const S_OK: i32 = 0;
 #[cfg(windows)]
 const S_FALSE: i32 = 1;
 
+/// The `C:` a maintenance tool wants, from whatever path the scan holds.
+///
+/// This used to hand back the first component's text, which for the
+/// canonicalized paths the app actually carries is the *prefix* —
+/// `\\?\C:`. `chkdsk \\?\C:` and `vssadmin ... /for=\\?\C:` both refuse
+/// that: the extended-length form is understood by the file APIs and by
+/// nothing else, which is the same reason `util::display_path` exists.
+/// So the drive letter is read off the prefix rather than printed with
+/// it, and the two spellings of a disk prefix — `C:\` and `\\?\C:\` —
+/// answer identically.
+///
+/// A UNC path has no drive letter at all and never will; the fallback
+/// stays `C:` because these tools have to be given something, and the
+/// tool itself is the right place for that argument to be rejected.
 #[cfg(windows)]
 fn volume_root_arg(path: &std::path::Path) -> String {
-    path.components()
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .unwrap_or_else(|| "C:".to_string())
+    use std::path::{Component, Prefix};
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                format!("{}:", char::from(letter).to_ascii_uppercase())
+            }
+            // A share, a device namespace, or a verbatim path that names
+            // no drive. None of these is a volume `chkdsk` or `vssadmin`
+            // can be pointed at, and the fallback is the same as having
+            // no prefix at all.
+            Prefix::Verbatim(_)
+            | Prefix::VerbatimUNC(..)
+            | Prefix::DeviceNS(_)
+            | Prefix::UNC(..) => "C:".to_string(),
+        },
+        // A relative path, or one that begins at the root of the current
+        // drive — neither names a volume either.
+        _ => "C:".to_string(),
+    }
 }
 
 #[cfg(not(windows))]
 pub fn run(_index: usize, _volume_path: &std::path::Path) -> Result<ToolOutput, String> {
-    Err("This tool is only available on Windows.".to_string())
+    Err(crate::i18n::tr("tool.windows_only"))
 }
 
 #[cfg(test)]
@@ -312,14 +366,47 @@ mod tests {
             assert!(
                 !tool.irreversible || tool.destructive,
                 "{} is irreversible but would run without a confirmation",
-                tool.name
+                tool.name_key
             );
         }
     }
 
+    /// A maintenance tool is given `C:`, whichever spelling the scan
+    /// carries.
+    ///
+    /// The paths this app holds are canonicalized, and on Windows that
+    /// means `\\?\C:\Users\...`. Taking the first component's text
+    /// handed `chkdsk` and `vssadmin` the whole `\\?\C:` prefix, which
+    /// neither accepts — so the two tools that take a volume failed on
+    /// every scan the app has ever produced.
+    #[cfg(windows)]
+    #[test]
+    fn a_volume_argument_is_a_drive_letter_however_the_path_is_spelled() {
+        use std::path::Path;
+        for path in [
+            r"C:\Users\someone\Documents",
+            r"\\?\C:\Users\someone\Documents",
+            r"C:\",
+            r"\\?\C:\",
+        ] {
+            assert_eq!(
+                super::volume_root_arg(Path::new(path)),
+                "C:",
+                "{path} should name the volume as C:"
+            );
+        }
+        assert_eq!(
+            super::volume_root_arg(Path::new(r"\\?\d:\games")),
+            "D:",
+            "a lowercase drive letter is still that drive"
+        );
+    }
+
     #[test]
     fn the_analyze_only_tool_changes_nothing() {
-        let analyze = TOOLS.iter().find(|t| t.name == "Analyze Component Store");
+        // By key, not by text: the text is now whatever language the
+        // catalogue is in.
+        let analyze = TOOLS.iter().find(|t| t.name_key == "wintool.analyze_store");
         assert!(analyze.is_some(), "the analyze tool should exist");
         assert!(
             analyze.is_some_and(|t| !t.destructive && !t.irreversible),

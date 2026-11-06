@@ -60,18 +60,24 @@ impl Category {
         self as usize
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Category::Archives => "Archives",
-            Category::Images => "Images",
-            Category::Video => "Video",
-            Category::Audio => "Audio",
-            Category::Documents => "Documents",
-            Category::Programs => "Programs",
-            Category::Source => "Source",
-            Category::NoExtension => "No Extension",
-            Category::Other => "Other",
-        }
+    /// What both front ends call this category, in the active language.
+    ///
+    /// Resolved here with the keys written out as literals rather than
+    /// returning a key for the caller to look up: the catalogue tests
+    /// scan the source for quoted keys, so a key that travels through a
+    /// return value is one nothing checks either direction of.
+    pub fn label(self) -> String {
+        crate::i18n::tr(match self {
+            Category::Archives => "category.archives",
+            Category::Images => "category.images",
+            Category::Video => "category.video",
+            Category::Audio => "category.audio",
+            Category::Documents => "category.documents",
+            Category::Programs => "category.programs",
+            Category::Source => "category.source",
+            Category::NoExtension => "category.no_extension",
+            Category::Other => "category.other",
+        })
     }
 
     pub fn color(self) -> Color {
@@ -290,7 +296,8 @@ mod tests {
                     let hue = extension_hue(&ext);
                     assert!(
                         !(21.0..61.0).contains(&hue),
-                        ".{ext} hashes to hue {hue}, inside the band reserved                          around the directory color"
+                        ".{ext} hashes to hue {hue}, inside the band reserved \
+                         around the directory color"
                     );
                 }
             }

@@ -13,6 +13,9 @@ use super::*;
 #[derive(PartialEq)]
 pub(in crate::gui) struct TreemapKey {
     tree: usize,
+    /// See [`super::RowKey`]: a live scan grows the tree without moving
+    /// it, so the address is not enough to invalidate the tiles.
+    generation: u64,
     zoom_path: Vec<usize>,
     rect: [i32; 4],
     physical: bool,
@@ -74,6 +77,29 @@ impl GuiApp {
     /// Rebuilds [`Self::treemap_tiles`] if the panel rect or anything the
     /// layout depends on has changed since the last frame, and otherwise
     /// leaves the existing tiles in place.
+    /// The free space of the volume currently in view, if the view is a
+    /// whole volume.
+    fn zoomed_volume_free(&self) -> Option<u64> {
+        if self.tree.is_multi_root() {
+            // Exactly one level down: `[i]` is root `i`, and anything
+            // deeper is a folder inside it.
+            if self.zoom_path.len() != 1 {
+                return None;
+            }
+            let root = self.tree.root_for(&self.zoom_path)?;
+            return root
+                .path
+                .parent()
+                .is_none()
+                .then_some(root.volume_free)
+                .flatten();
+        }
+        if !self.zoom_path.is_empty() || !self.tree.is_volume_root() {
+            return None;
+        }
+        self.tree.volume_free
+    }
+
     pub(in crate::gui) fn refresh_treemap(
         &mut self,
         x: f32,
@@ -88,15 +114,21 @@ impl GuiApp {
         } else {
             treemap_layout::MAX_TILES
         };
-        let show_free_space =
-            self.view.free_space && self.zoom_path.is_empty() && self.tree.is_volume_root();
-        let free_space = if show_free_space {
-            self.tree.volume_free
+        // Free space belongs to a volume, so it is shown exactly when
+        // the view *is* a volume: the whole tree for a single-root scan
+        // of a drive, or one root of a multi-root scan once zoomed into
+        // it. Two roots side by side have two free-space figures that
+        // cannot be added, and a subfolder has none of its own — a tile
+        // for the drive's free space beside a 200 MB folder would be the
+        // whole treemap.
+        let free_space = if self.view.free_space {
+            self.zoomed_volume_free()
         } else {
             None
         };
         let key = TreemapKey {
             tree: Arc::as_ptr(&self.tree) as usize,
+            generation: self.tree_generation,
             zoom_path: self.zoom_path.clone(),
             // Rounded to whole pixels because that is the resolution the
             // layout itself quantizes to: a sub-pixel change in the
@@ -116,6 +148,9 @@ impl GuiApp {
             return;
         }
 
+        #[cfg(test)]
+        crate::gui::ui::probes::TEST_TREEMAP_REBUILDS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut tiles = treemap_layout::build(
             self.zoom_node(),
             &treemap_layout::LayoutRequest {

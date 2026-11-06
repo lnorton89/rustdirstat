@@ -83,7 +83,7 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
         return;
     }
     ui.painter()
-        .rect_filled(rect, egui::Rounding::same(4.0), palette().app);
+        .rect_filled(rect, egui::CornerRadius::same(4), palette().app);
 
     let mut x = rect.left();
     for stat in stats {
@@ -108,8 +108,9 @@ fn draw_bar(ui: &mut egui::Ui, stats: &[ExtStat], total: u64, highlighted: Optio
     // rather than as a row of blocks that happens to be adjacent.
     ui.painter().rect_stroke(
         rect,
-        egui::Rounding::same(4.0),
+        egui::CornerRadius::same(4),
         egui::Stroke::new(1.0_f32, palette().border),
+        egui::StrokeKind::Middle,
     );
 }
 
@@ -182,9 +183,10 @@ fn category_chip(ui: &mut egui::Ui, stat: &ExtStat, total: u64, selected: bool) 
         );
         ui.painter().rect(
             rect,
-            egui::Rounding::same(6.0),
+            egui::CornerRadius::same(6),
             blend(rest, palette().hover, t),
             stroke,
+            egui::StrokeKind::Middle,
         );
 
         let icon_rect = egui::Rect::from_center_size(

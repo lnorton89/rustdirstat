@@ -168,7 +168,7 @@ fn recurse(
                 h: r.h,
                 is_dir: false,
                 depth,
-                name: "Free space".to_string(),
+                name: crate::i18n::tr("menu.treemap.free_space"),
                 category: None,
                 index_path: vec![],
                 is_free_space: true,

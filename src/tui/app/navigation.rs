@@ -26,6 +26,46 @@ impl App {
             self.refresh_ext_stats();
             return;
         }
+        // With several roots the first level is the roots themselves,
+        // and each has a real path of its own while the tree's
+        // `root_path` is the label `Selected locations`. Descending from
+        // the label built candidates like `Selected locations/Users`,
+        // which match nothing — so a rescan of a multi-root scan always
+        // landed the user back at the top, wherever they had been.
+        if !self.tree.roots.is_empty() {
+            let entry = self
+                .tree
+                .roots
+                .iter()
+                .enumerate()
+                .find(|(_, root)| target == root.path || target.starts_with(&root.path));
+            let (index, root) = match entry {
+                Some(found) => found,
+                None => {
+                    // The root itself is gone from this scan. The top is
+                    // the only place left that certainly exists.
+                    self.path_indices = Vec::new();
+                    self.selected = 0;
+                    self.refresh_ext_stats();
+                    return;
+                }
+            };
+            let Some(child) = self.tree.root.children.get(index) else {
+                self.path_indices = Vec::new();
+                self.selected = 0;
+                self.refresh_ext_stats();
+                return;
+            };
+            indices.push(index);
+            node = child;
+            current = root.path.clone();
+        }
+        if current == target {
+            self.path_indices = indices;
+            self.selected = 0;
+            self.refresh_ext_stats();
+            return;
+        }
         loop {
             let mut found = None;
             for (i, c) in node.children.iter().enumerate() {
@@ -149,5 +189,66 @@ impl App {
     pub(in crate::tui) fn navigate_to_absolute(&mut self, index_path: Vec<usize>) {
         self.path_indices.clear();
         self.navigate_to(index_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scanner::{scan_many_to_completion, ScanOptions};
+    use crate::util::scratch_dir;
+
+    /// A rescan puts the user back where they were, with several roots
+    /// scanned.
+    ///
+    /// `restore_path` descended from `tree.root_path`, which for a
+    /// multi-root tree is the label rather than a place — so every
+    /// candidate it built began `Selected locations`, matched nothing,
+    /// and the user was returned to the top of the tree however deep
+    /// they had been.
+    #[test]
+    fn a_rescan_restores_the_position_inside_one_of_several_roots() -> Result<()> {
+        let base = scratch_dir("tui", "restore_multi_root");
+        let _ = std::fs::remove_dir_all(&base);
+        let left = base.join("left");
+        let right = base.join("right");
+        std::fs::create_dir_all(left.join("inner"))?;
+        std::fs::create_dir_all(&right)?;
+        std::fs::write(left.join("inner").join("a.bin"), b"x")?;
+
+        let tree = scan_many_to_completion(&[left.clone(), right], ScanOptions::default())?;
+        let mut app = App::new(tree);
+        assert!(app.tree.is_multi_root(), "two roots make a multi-root tree");
+
+        // Taken from the tree itself, exactly as a rescan does: the
+        // browser saves `current_path()` before the scan and hands it
+        // back afterwards.
+        app.path_indices = vec![0, 0];
+        let target = app.current_path();
+        assert!(
+            target.ends_with("inner"),
+            "the fixture should have put the browser inside the left root, got {}",
+            target.display()
+        );
+        app.path_indices.clear();
+        app.restore_path(&target);
+
+        assert_eq!(
+            app.tree.path_for(&app.path_indices),
+            Some(target.clone()),
+            "the restored position should be the directory that was asked for, \
+             not the top of the tree"
+        );
+
+        // And a place that is no longer in the scan falls back to the top
+        // rather than to something else.
+        app.restore_path(&base.join("gone"));
+        assert!(
+            app.path_indices.is_empty(),
+            "a vanished root leaves the browser at the top"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+        Ok(())
     }
 }

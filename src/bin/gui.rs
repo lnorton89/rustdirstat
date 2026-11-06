@@ -32,18 +32,24 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "rustdirstat-gui", version, about)]
 struct Cli {
-    /// Directory (or file) to scan
+    /// Directories (or files) to scan. Several open as one tree, each as
+    /// a top-level entry — the same choice the Locations page offers.
     #[arg(default_value = ".")]
-    path: PathBuf,
+    paths: Vec<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if !cli.path.exists() {
-        return fail(&format!("Path does not exist:\n{}", cli.path.display()));
+    // Every path is checked before the window opens, so a typo is a
+    // dialog rather than an empty tree the user has to interpret.
+    let mut roots = Vec::with_capacity(cli.paths.len());
+    for path in &cli.paths {
+        if !path.exists() {
+            return fail(&format!("Path does not exist:\n{}", path.display()));
+        }
+        roots.push(path.canonicalize().unwrap_or_else(|_| path.clone()));
     }
-    let root = cli.path.canonicalize().unwrap_or(cli.path.clone());
-    if let Err(error) = rustdirstat::gui::run(root) {
+    if let Err(error) = rustdirstat::gui::run(roots) {
         return fail(&error.to_string());
     }
     Ok(())

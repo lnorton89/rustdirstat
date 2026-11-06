@@ -49,6 +49,41 @@ impl App {
             self.show_properties = false;
             return Ok(());
         }
+        if self.cleanups.pending.is_some() {
+            // A cleanup runs a program this app knows nothing about, so
+            // its prompt follows the same rule as the destructive ones:
+            // it offers `[Y]es` and `[N]o`, and a key it does not offer
+            // leaves it standing rather than counting as either.
+            let action = if matches!(code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                Action::ConfirmCleanup
+            } else if matches!(
+                code,
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') | KeyCode::Esc
+            ) {
+                Action::CancelCleanup
+            } else {
+                return Ok(());
+            };
+            return self.dispatch(action);
+        }
+        if self.cleanups.visible {
+            match code {
+                KeyCode::Esc | KeyCode::Char('C') => self.cleanups.visible = false,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.cleanups.selected = self.cleanups.selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.cleanups.selected + 1 < self.cleanups.list.len() {
+                        self.cleanups.selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    return self.dispatch(Action::SelectCleanup(self.cleanups.selected))
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         if self.wintools.pending.is_some() {
             // Same rule as the delete confirmation below: this dialog
             // offers `[Y]es` and `[N]o`, and a key it does not offer
@@ -166,6 +201,7 @@ impl App {
             KeyCode::Char('M') => Action::StartMove,
             KeyCode::Char('i') => Action::ToggleProperties,
             KeyCode::Char('T') => Action::ToggleWinTools,
+            KeyCode::Char('C') => Action::ToggleCleanups,
             KeyCode::Char('r') => Action::Refresh,
             KeyCode::Char('f') => Action::ToggleTopFiles,
             KeyCode::Char('e') => Action::ExportReport,

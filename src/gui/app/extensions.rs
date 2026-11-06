@@ -269,13 +269,13 @@ impl GuiApp {
             ExtensionSortMode::DescriptionAsc => self.extensions.sort_by(|a, b| {
                 a.category
                     .label()
-                    .cmp(b.category.label())
+                    .cmp(&b.category.label())
                     .then_with(|| by_extension(a, b))
             }),
             ExtensionSortMode::DescriptionDesc => self.extensions.sort_by(|a, b| {
                 b.category
                     .label()
-                    .cmp(a.category.label())
+                    .cmp(&a.category.label())
                     .then_with(|| by_extension(a, b))
             }),
             ExtensionSortMode::BytesDesc => self
@@ -354,6 +354,6 @@ impl GuiApp {
         self.search.results.clear();
         self.search.error = None;
         self.file_view = FileView::SearchResults;
-        self.status = Some("Searching…".to_string());
+        self.status = Some(crate::i18n::tr("status.searching"));
     }
 }

@@ -70,14 +70,22 @@ pub(super) fn draw_search_results(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let mut title = format!(
-        " Search: \"{}\" — {} matches",
-        app.search.query,
-        app.search.results.len()
+        " {}",
+        tr_with(
+            "tui.pane.search",
+            &[
+                ("query", &app.search.query),
+                ("matches", &app.search.results.len().to_string()),
+            ]
+        )
     );
     if app.search.truncated {
-        title.push_str(" (truncated)");
+        title.push(' ');
+        title.push_str(&tr("tui.pane.search.truncated"));
     }
-    title.push_str(" — S to close ");
+    title.push(' ');
+    title.push_str(&tr("tui.pane.search.close"));
+    title.push(' ');
     pane_list(f, app, area, items, title, Action::StartSubtreeSearch);
 
     if let Some(err) = &app.search.error {
@@ -113,10 +121,14 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
             } => {
                 group_num += 1;
                 ListItem::new(Line::from(Span::styled(
-                    format!(
-                        "Group {group_num} — {count} × {}  ({} wasted)",
-                        human_bytes(*size),
-                        human_bytes(*wasted)
+                    tr_with(
+                        "tui.duplicates.group",
+                        &[
+                            ("number", &group_num.to_string()),
+                            ("count", &count.to_string()),
+                            ("size", &human_bytes(*size)),
+                            ("wasted", &human_bytes(*wasted)),
+                        ],
                     ),
                     Style::default()
                         .fg(theme::ACCENT)
@@ -135,30 +147,40 @@ pub(super) fn draw_duplicates(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let mut title = if app.duplicates.group_count == 0 {
-        " No duplicate files found".to_string()
+        format!(" {}", tr("tui.pane.duplicates.none"))
     } else {
         format!(
-            " Duplicates: {} groups, {} wasted",
-            thousands(app.duplicates.group_count as u64),
-            human_bytes(app.duplicates.total_wasted)
+            " {}",
+            tr_with(
+                "tui.pane.duplicates",
+                &[
+                    ("groups", &thousands(app.duplicates.group_count as u64)),
+                    ("wasted", &human_bytes(app.duplicates.total_wasted)),
+                ]
+            )
         )
     };
     if app.duplicates.truncated {
-        title.push_str(" (showing largest groups)");
+        title.push(' ');
+        title.push_str(&tr("tui.pane.duplicates.truncated"));
     }
     if app.duplicates.skipped > 0 {
-        title.push_str(&format!(
-            " ({} files not checked — limit reached)",
-            thousands(app.duplicates.skipped as u64)
+        title.push(' ');
+        title.push_str(&tr_with(
+            "tui.pane.duplicates.skipped",
+            &[("count", &thousands(app.duplicates.skipped as u64))],
         ));
     }
     if app.duplicates.read_failures > 0 {
-        title.push_str(&format!(
-            " ({} files could not be read)",
-            thousands(app.duplicates.read_failures as u64)
+        title.push(' ');
+        title.push_str(&tr_with(
+            "tui.pane.duplicates.unreadable",
+            &[("count", &thousands(app.duplicates.read_failures as u64))],
         ));
     }
-    title.push_str(" — u to close ");
+    title.push(' ');
+    title.push_str(&tr("tui.pane.duplicates.close"));
+    title.push(' ');
     pane_list(f, app, area, items, title, Action::ToggleDuplicates);
 }
 
@@ -204,14 +226,18 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 ""
             };
-            let err = if node.error { " <access denied>" } else { "" };
+            let err = if node.error {
+                format!(" {}", tr("tui.list.access_denied"))
+            } else {
+                String::new()
+            };
             // A mount point kept as a zero-byte marker: without the
             // label a scan boundary reads as an inexplicably empty
             // directory.
             let boundary = if node.other_filesystem {
-                " <other filesystem>"
+                format!(" {}", tr("tui.list.other_filesystem"))
             } else {
-                ""
+                String::new()
             };
             // Only shown when the directory itself was readable but
             // something inside it wasn't — `error` above already covers
@@ -242,9 +268,14 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             if show_details {
                 let count = if node.is_dir {
                     format!(
-                        "  {} files, {} dirs",
-                        thousands(node.file_count),
-                        thousands(node.dir_count)
+                        "  {}",
+                        tr_with(
+                            "tui.list.counts",
+                            &[
+                                ("files", &thousands(node.file_count)),
+                                ("dirs", &thousands(node.dir_count)),
+                            ]
+                        )
                     )
                 } else {
                     String::new()
@@ -259,11 +290,17 @@ pub(super) fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let size_label = if phys { "physical" } else { "logical" };
+    let size_label = tr(if phys {
+        "tui.pane.files.physical"
+    } else {
+        "tui.pane.files.logical"
+    });
     let title = format!(
-        " Files — sort: {}, {} size  (s sort, p size, m details) ",
-        app.sort.label(),
-        size_label
+        " {} ",
+        tr_with(
+            "tui.pane.files",
+            &[("sort", &app.sort.label()), ("size", &size_label)]
+        )
     );
     pane_list(f, app, area, items, title, Action::CycleSort);
 }
@@ -320,6 +357,9 @@ pub(super) fn draw_top_files(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let count = app.top_files_cache.len();
-    let title = format!(" Biggest files in this subtree (top {count}) — f to close ");
+    let title = format!(
+        " {} ",
+        tr_with("tui.pane.top_files", &[("count", &count.to_string())])
+    );
     pane_list(f, app, area, items, title, Action::ToggleTopFiles);
 }
